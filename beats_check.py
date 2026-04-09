@@ -75,7 +75,7 @@ def collect_audio_files(input_folder, min_age_minutes=30):
     """Walk the input folder and return all audio file paths.
     Does not follow symlinks to prevent traversal outside the music dir.
     Skips files modified within min_age_minutes to avoid flagging files
-    being actively written by download clients or Lidarr."""
+    being actively written by download clients."""
     real_root = os.path.realpath(input_folder)
     age_threshold = time.time() - (min_age_minutes * 60)
     files = []

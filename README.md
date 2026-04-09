@@ -93,7 +93,7 @@ After deletion, `corrupt.txt` is updated to remove handled entries.
 - **Symlink boundary check** — won't traverse symlinks that point outside the music directory
 - **Graceful shutdown** — responds to SIGTERM/SIGINT, finishes in-progress files then exits cleanly
 - **Resume support** — remembers already-checked files across runs (essential for multi-hour scans)
-- **CPU throttled** — `nice(10)` + configurable `--cpus` to avoid impacting Plex playback
+- **CPU throttled** — `nice(10)` + configurable `--cpus` to avoid impacting other services
 - **10 min per-file timeout** — prevents hangs on severely corrupt files
 - **Docker HEALTHCHECK** — orchestrators can detect if the process is hung
 - **Atomic JSON writes** — crash-safe output files (no corruption on power loss)
@@ -274,7 +274,7 @@ For a 100K file library, expect ~10 MB per full scan. With daemon mode, subseque
 | **CPU** | 10-20% total with 6 workers (audio decode is light) |
 | **RAM** | Under 500MB |
 | **Disk I/O** | The bottleneck — expect 6-15 hours depending on array speed |
-| **Plex** | Unaffected (low priority + CPU cap) |
+| **Other services** | Unaffected (low priority + CPU cap) |
 
 ## Updating
 
