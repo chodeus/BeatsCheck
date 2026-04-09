@@ -157,20 +157,31 @@ def write_json_atomic(path, data):
     os.rename(tmp_path, path)
 
 
-def _idle_wait(log_dir, timeout_seconds):
-    """Sleep until timeout, shutdown, or .rescan trigger. Returns True if rescan triggered."""
+def _read_rescan_trigger(log_dir):
+    """Check for .rescan file. Returns mode override string or empty string."""
     rescan_path = os.path.join(log_dir, ".rescan")
+    if not os.path.exists(rescan_path):
+        return None
+    try:
+        with open(rescan_path, 'r') as f:
+            content = f.read().strip()
+        os.remove(rescan_path)
+    except OSError:
+        content = ""
+    return content
+
+
+def _idle_wait(log_dir, timeout_seconds):
+    """Sleep until timeout, shutdown, or .rescan trigger.
+    Returns mode override string if rescan triggered, False otherwise."""
     heartbeat_path = os.path.join(log_dir, ".heartbeat")
     deadline = time.time() + timeout_seconds if timeout_seconds else None
     while not shutdown_requested:
         _write_heartbeat(heartbeat_path)
-        if os.path.exists(rescan_path):
-            try:
-                os.remove(rescan_path)
-            except OSError:
-                pass
+        trigger = _read_rescan_trigger(log_dir)
+        if trigger is not None:
             logger.info("Rescan requested.")
-            return True
+            return trigger if trigger else True
         if deadline and time.time() >= deadline:
             return False
         time.sleep(10)
@@ -1155,20 +1166,13 @@ def _load_config():
 
 
 def _run_setup_idle(log_dir):
-    """Setup mode — sit idle until container is stopped."""
+    """Setup mode — sit idle until rescan with a mode is triggered."""
     logger.info("Setup mode — container is idle. "
-                "Change MODE to report and use rescan when ready.")
-    heartbeat_path = os.path.join(log_dir, ".heartbeat")
-    rescan_path = os.path.join(log_dir, ".rescan")
-    while not shutdown_requested:
-        if os.path.exists(rescan_path):
-            try:
-                os.remove(rescan_path)
-            except OSError:
-                pass
-            logger.info("Rescan requested — change MODE to report first.")
-        _write_heartbeat(heartbeat_path)
-        time.sleep(10)
+                "Start scanning with: rescan report")
+    result = _idle_wait(log_dir, None)
+    if isinstance(result, str) and result in ("report", "move"):
+        return result
+    return None
 
 
 def _log_lidarr_status(lidarr_url, lidarr_api_key):
@@ -1216,8 +1220,12 @@ def main():
     _log_lidarr_status(lidarr_url, lidarr_api_key)
 
     if mode == "setup":
-        _run_setup_idle(log_dir)
-        return
+        new_mode = _run_setup_idle(log_dir)
+        if new_mode:
+            mode = new_mode
+            logger.info("Mode changed to: %s", mode)
+        else:
+            return
 
     if mode == "delete":
         corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
@@ -1262,11 +1270,15 @@ def main():
             break
 
         if run_interval <= 0:
-            logger.info("Scan complete. Container is idle."
-                        " Rescan with: docker exec beatscheck touch /config/.rescan")
-            if _idle_wait(log_dir, None):
-                continue
-            break
+            logger.info("Scan complete. Container is idle. "
+                        "Rescan with: rescan [report|move]")
+            result = _idle_wait(log_dir, None)
+            if result is False:
+                break
+            if isinstance(result, str) and result in ("report", "move"):
+                mode = result
+                logger.info("Mode changed to: %s", mode)
+            continue
 
         next_run = time.strftime(
             '%Y-%m-%d %H:%M:%S',
@@ -1277,12 +1289,15 @@ def main():
             next_run, run_interval
         )
 
-        if _idle_wait(log_dir, run_interval * 3600):
-            logger.info("Rescan triggered.")
-        else:
+        result = _idle_wait(log_dir, run_interval * 3600)
+        if result is False:
             if shutdown_requested:
                 break
             logger.info("Scheduled scan starting.")
+        else:
+            if isinstance(result, str) and result in ("report", "move"):
+                mode = result
+                logger.info("Mode changed to: %s", mode)
 
 
 if __name__ == "__main__":
