@@ -1,0 +1,10 @@
+.git
+.github
+*.md
+LICENSE
+beats-check.xml
+docker-compose.yml
+.dockerignore
+.editorconfig
+.gitignore
+CLAUDE.md

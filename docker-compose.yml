@@ -1,0 +1,45 @@
+### BeatsCheck docker-compose.yml Example
+### https://github.com/chodeus/BeatsCheck
+###
+### Usage:
+###   docker compose up -d          # Start in background
+###   docker compose logs -f        # Follow logs
+###   docker exec -it beatscheck /app/delete.sh  # Interactive delete
+###
+services:
+  beatscheck:
+    image: ghcr.io/chodeus/beatscheck:latest
+    container_name: beatscheck
+    restart: unless-stopped
+    volumes:
+      ## Music library — mount read-only for safety (report mode).
+      ## Change to rw if using move or delete modes.
+      - /path/to/music:/music:ro
+      ## Persistent config: logs, corrupt.txt, tracking data
+      - /path/to/config:/config
+      ## Only needed for move mode — corrupt files quarantined here
+      # - /path/to/corrupted:/corrupted
+    environment:
+      ## Scan mode: report (default), move, or delete
+      - MODE=report
+      ## Parallel ffmpeg decode workers (2=conservative, 4=balanced, 8+=fast)
+      - WORKERS=4
+      ## Hours between scans (0=once, 168=weekly, 24=daily)
+      - RUN_INTERVAL=168
+      ## Auto-delete corrupt files after N days (0=never, 7=one week review window)
+      - DELETE_AFTER=0
+      ## Safety: abort auto-delete if more than N files flagged (0=no limit)
+      - MAX_AUTO_DELETE=50
+      ## Skip files modified within N minutes (avoids flagging active downloads)
+      - MIN_FILE_AGE=30
+      ## Log level: DEBUG, INFO, WARNING, ERROR
+      - LOG_LEVEL=INFO
+      ## Rotate log and do fresh scan when log exceeds N MB (0=never)
+      - MAX_LOG_MB=50
+      ## Container user/group IDs
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - UMASK=002
+    ## Optional: limit CPU usage to avoid impacting other services
+    # cpus: 2

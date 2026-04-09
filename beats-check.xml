@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>BeatsCheck</Name>
+  <Repository>ghcr.io/chodeus/beatscheck:latest</Repository>
+  <Registry>https://github.com/chodeus/BeatsCheck/pkgs/container/beatscheck</Registry>
+  <Network>none</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/chodeus/BeatsCheck/issues</Support>
+  <Project>https://github.com/chodeus/BeatsCheck</Project>
+  <ReadMe>https://github.com/chodeus/BeatsCheck/blob/main/README.md</ReadMe>
+  <Overview>Audio file integrity checker that decode-tests all audio files (FLAC, MP3, M4A, OGG, Opus, WAV, AAC, and more) using ffmpeg. Identifies corrupted files that cause playback errors in Plex and other media servers.[br][br]The container scans on a schedule and stays running. Default: weekly scans in report-only mode (nothing deleted).[br][br]To review results: check /config/corrupt.txt[br]To delete corrupt files: docker exec -it BeatsCheck /app/delete.sh</Overview>
+  <Category>MediaApp:Music Tools:</Category>
+  <WebUI/>
+  <TemplateURL/>
+  <Icon>https://raw.githubusercontent.com/chodeus/BeatsCheck/main/icon.png</Icon>
+  <ExtraParams>--restart unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+  <Config Name="Music Library" Target="/music" Default="" Mode="ro" Description="Path to your music library. Can be any directory — music share, slskd complete folder, etc. Mounted read-only by default. Change to rw if using move or delete modes." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/media/music</Config>
+  <Config Name="Config" Target="/config" Default="" Mode="rw" Description="Persistent storage for logs, scan results, and tracking data." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/beatscheck</Config>
+  <Config Name="Run Interval" Target="RUN_INTERVAL" Default="" Mode="" Description="Hours between scans. Container stays running between scans. Examples: 168 = weekly, 24 = daily, 12 = twice daily, 0 = scan once and exit." Type="Variable" Display="always" Required="false" Mask="false">168</Config>
+  <Config Name="Delete After" Target="DELETE_AFTER" Default="" Mode="" Description="Automatically delete corrupt files after this many days. Gives you time to review corrupt.txt before files are removed. 0 = never auto-delete (use interactive delete instead)." Type="Variable" Display="always" Required="false" Mask="false">0</Config>
+  <Config Name="Mode" Target="MODE" Default="" Mode="" Description="Scan mode. report = scan and log only, files untouched (default). move = auto-move corrupt files to quarantine folder (requires Corrupted Output path and rw music mount)." Type="Variable" Display="always" Required="false" Mask="false">report</Config>
+  <Config Name="Workers" Target="WORKERS" Default="" Mode="" Description="Parallel ffmpeg decode workers. Higher = faster scans but more CPU. 2 = conservative, 4 = balanced, 8+ = fast on high-core-count CPUs." Type="Variable" Display="advanced" Required="false" Mask="false">4</Config>
+  <Config Name="Corrupted Output" Target="/corrupted" Default="" Mode="rw" Description="Only needed for move mode. Corrupt files are moved here preserving folder structure. Leave empty if using report or delete modes." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Log Level" Target="LOG_LEVEL" Default="" Mode="" Description="Logging verbosity. INFO = normal, DEBUG = verbose (useful for troubleshooting), WARNING = quiet, ERROR = errors only." Type="Variable" Display="advanced" Required="false" Mask="false">INFO</Config>
+  <Config Name="Max Auto Delete" Target="MAX_AUTO_DELETE" Default="" Mode="" Description="Safety threshold. Auto-delete aborts if more files than this would be removed in one run. Prevents catastrophic deletion from filesystem issues. 0 = no limit." Type="Variable" Display="advanced" Required="false" Mask="false">50</Config>
+  <Config Name="Min File Age" Target="MIN_FILE_AGE" Default="" Mode="" Description="Skip files modified within this many minutes. Prevents flagging files being actively downloaded or imported by Lidarr/slskd." Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
+  <Config Name="Max Log Size" Target="MAX_LOG_MB" Default="" Mode="" Description="Rotate log when it exceeds this size (MB). Rotation triggers a fresh full rescan. 0 = never rotate." Type="Variable" Display="advanced" Required="false" Mask="false">50</Config>
+  <Config Name="PUID" Target="PUID" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+  <Config Name="UMASK" Target="UMASK" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">002</Config>
+  <Config Name="Timezone" Target="TZ" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">UTC</Config>
+  <TailscaleStateDir/>
+</Container>
