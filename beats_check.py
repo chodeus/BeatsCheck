@@ -2,6 +2,7 @@ import fcntl
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 import shutil
@@ -39,6 +40,26 @@ def format_size(bytes_val):
     return f"{bytes_val} B"
 
 
+def _clean_ffmpeg_errors(stderr):
+    """Strip ffmpeg memory addresses and internal codec references from errors."""
+    if not stderr or not stderr.strip():
+        return "Non-zero exit code"
+    # Strip [codec @ 0x...] prefixes and [aist#N:N/codec @ 0x...] wrappers
+    cleaned = re.sub(r'\[[\w:#/]+ @ 0x[0-9a-f]+\]\s*', '', stderr)
+    # Collapse duplicate whitespace and pipe separators
+    cleaned = re.sub(r'\s*\|\s*', ' | ', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Deduplicate repeated error messages
+    parts = [p.strip() for p in cleaned.split(' | ') if p.strip()]
+    seen = set()
+    unique = []
+    for p in parts:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+    return ' | '.join(unique) if unique else "Non-zero exit code"
+
+
 def check_audio_file(file_path):
     """Decode-test a single audio file. Pure function — no shared state.
     Returns (file_path, is_corrupt, reason)."""
@@ -62,10 +83,7 @@ def check_audio_file(file_path):
         return (file_path, True, "Decode timed out (>10 minutes)")
 
     if result.returncode != 0:
-        errors = result.stderr.strip().replace('\n', ' | ')
-        if len(errors) > 300:
-            errors = errors[:300] + "..."
-        reason = errors if errors else "Non-zero exit code"
+        reason = _clean_ffmpeg_errors(result.stderr)
         return (file_path, True, reason)
 
     return (file_path, False, None)
@@ -189,8 +207,10 @@ def _display_folder_files(corrupt_files, corrupt_details):
             size_str = format_size(os.path.getsize(cf))
             print(f"           {name} ({size_str})")
             if reason:
-                short = (reason[:120] + "...") if len(reason) > 120 else reason
-                print(f"             -> {short}")
+                if len(reason) > 200:
+                    cut = reason[:200].rsplit(' ', 1)[0]
+                    reason = cut + "..."
+                print(f"             -> {reason}")
         except OSError:
             print(f"           {name} (already deleted)")
 

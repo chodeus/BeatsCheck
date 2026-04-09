@@ -42,7 +42,9 @@ COPY beats_check.py /app/
 COPY entrypoint.sh /app/
 COPY delete.sh /app/
 COPY rescan.sh /app/
-RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh
+RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh && \
+    ln -s /app/delete.sh /usr/local/bin/delete && \
+    ln -s /app/rescan.sh /usr/local/bin/rescan
 
 VOLUME ["/music", "/corrupted", "/config"]
 
