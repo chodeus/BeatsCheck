@@ -10,7 +10,7 @@ FLAC, MP3, M4A, OGG, Opus, WAV, WMA, AAC, AIFF, APE, WavPack, ALAC, M4B, M4P, MP
 
 ## How It Works
 
-Each audio file is decoded end-to-end with `ffmpeg -v error -xerror -nostdin -i <file> -f null -`. The `-xerror` flag makes ffmpeg exit immediately on any decode error. Files that fail are flagged as corrupt. A clean `corrupt.txt` list is written for scripting or interactive deletion.
+Each audio file is decoded end-to-end with `ffmpeg -v error -xerror -nostdin -i <file> -map 0:a -f null -`. The `-xerror` flag makes ffmpeg exit immediately on any decode error and `-map 0:a` ensures only audio streams are tested. Files that fail are flagged as corrupt. A clean `corrupt.txt` list is written for scripting or interactive deletion.
 
 ## Modes
 
@@ -70,8 +70,8 @@ Found 5 corrupt files across 3 folders (142.5 MB)
   [1/3] /music/Artist Name/Album Name/
            track01.flac (45.2 MB)
              -> [flac @ 0x...] invalid residual | decode frame failed
-           track05.flac (0.5 KB)
-             -> File too small (0 bytes)
+           track05.flac (512 B)
+             -> File too small (512 bytes)
            (2 corrupt / 12 total files in folder)
            Action? [y/f/n/a/q]
 ```
@@ -92,10 +92,11 @@ After deletion, `corrupt.txt` is updated to remove handled entries.
 - **`-xerror` flag** — fail-fast on decode errors, no false positives from partial decodes
 - **Symlink boundary check** — won't traverse symlinks that point outside the music directory
 - **Graceful shutdown** — responds to SIGTERM/SIGINT, finishes in-progress files then exits cleanly
-- **Resume support** — remembers already-checked files across runs (essential for multi-hour scans)
+- **Resume support** — tracks already-checked files in `processed.txt` across runs (essential for multi-hour scans)
 - **CPU throttled** — `nice(10)` + configurable `--cpus` to avoid impacting other services
 - **10 min per-file timeout** — prevents hangs on severely corrupt files
-- **Docker HEALTHCHECK** — orchestrators can detect if the process is hung
+- **Docker HEALTHCHECK** — verifies process is running and heartbeat is fresh
+- **Hardlink aware** — logs link count when corrupt files have multiple hard links
 - **Atomic JSON writes** — crash-safe output files (no corruption on power loss)
 - **Auto-delete safety threshold** — aborts if too many files flagged (prevents catastrophic deletion)
 
@@ -116,7 +117,7 @@ After deletion, `corrupt.txt` is updated to remove handled entries.
 | `LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `PUID` | `99` | User ID for file ownership |
 | `PGID` | `100` | Group ID for file ownership |
-| `TZ` | `UTC` | Timezone for log timestamps |
+| `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
 
 ## Docker Usage
@@ -246,26 +247,30 @@ fi
 Requires Python 3.9+ and ffmpeg installed.
 
 ```bash
-MODE=report WORKERS=6 python3 beats_check.py /music /quarantine /log.txt
+MODE=report WORKERS=6 python3 beats_check.py /path/to/music /path/to/quarantine /path/to/config/beats_check.log
 ```
+
+The third argument is the log file path. All state files (`processed.txt`, `corrupt.txt`, etc.) are written to the same directory as the log file. Unix-only (requires `fcntl`).
 
 ## Output Files (in /config)
 
 | File | Contents |
 |------|----------|
-| `beats_check.log` | Full scan log — every file checked, errors, summary. Also serves as the resume cache. |
-| `beats_check.log.old` | Previous log after rotation |
+| `beats_check.log` | Full scan log — errors, moves, deletes, and scan summaries |
+| `beats_check.log.1` `.2` `.3` | Previous logs after rotation (last 3 kept) |
+| `processed.txt` | Resume cache — one checked file path per line. Rotated alongside the log |
 | `corrupt.txt` | One corrupt file path per line (deduplicated) — for scripting or delete mode |
 | `corrupt_details.json` | Path-to-error-reason mapping — shown during interactive delete |
 | `corrupt_tracking.json` | Path-to-first-seen timestamps — used by `DELETE_AFTER` auto-delete |
 | `summary.json` | Machine-readable scan results for notification scripts |
-| `.scanning` | Lock file (exists only during active scans) |
+| `.scanning` | Lock file (exists only during active scans, uses `flock`) |
+| `.heartbeat` | Timestamp updated per-file during scans — used by Docker healthcheck |
 
 ### Log Rotation
 
-The log file is also the resume cache — the scanner parses it to know which files were already checked. By default, when the log exceeds 50 MB (`MAX_LOG_MB=50`), it's rotated to `beats_check.log.old` and the next scan does a fresh full re-check. Set `MAX_LOG_MB=0` to disable rotation.
+When the log exceeds 50 MB (`MAX_LOG_MB=50`), it's rotated to `beats_check.log.1` (keeping up to 3 old copies). The resume cache (`processed.txt`) is rotated alongside it, so the next scan does a fresh full re-check. Set `MAX_LOG_MB=0` to disable rotation.
 
-For a 100K file library, expect ~10 MB per full scan. With daemon mode, subsequent scans only log new files so growth is slow.
+For a 100K file library, expect ~10 MB per full scan. With daemon mode, subsequent scans only log corrupt files so growth is slow.
 
 ## Performance (3TB Library)
 
