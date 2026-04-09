@@ -16,9 +16,12 @@ Each audio file is decoded end-to-end with `ffmpeg -v error -xerror -nostdin -i 
 
 | Mode | What it does | Music mount | Safe? |
 |------|-------------|-------------|-------|
-| `report` | Scan and log only, writes `corrupt.txt` | `ro` | Yes (default) |
+| `setup` | Container starts idle, no scanning (default) | `ro` | Yes |
+| `report` | Scan and log only, writes `corrupt.txt` | `ro` | Yes |
 | `delete` | Interactive — prompts per album folder to delete | **`rw`** | You choose |
 | `move` | Auto-move corrupt files to quarantine folder | **`rw`** | Destructive |
+
+You can change modes without restarting — see [Rescan](#4-rescan) below.
 
 ## Recommended Workflow
 
@@ -93,22 +96,26 @@ After deletion, `corrupt.txt` is updated to remove handled entries.
 
 ### 4. Rescan
 
-Trigger a rescan without restarting the container:
+Trigger a rescan or change modes without restarting the container:
 
 ```bash
-# Inside container console
+# Rescan with current mode
 rescan
 
-# Full rescan (clear resume cache)
-rescan --fresh
+# Change mode and scan (works from setup mode too)
+rescan report
+rescan move
 
-# Or from the host
-docker exec beatscheck rescan
+# Full rescan (clear resume cache)
+rescan --fresh report
+
+# From the host
+docker exec beatscheck rescan report
 ```
 
 ## Safety Features
 
-- **Report mode by default** — nothing is moved or deleted until you opt in
+- **Setup mode by default** — container starts idle, nothing happens until you choose a mode
 - **Read-only music mount** — kernel-enforced via Docker `:ro` flag (change to `rw` only for `delete`/`move` modes)
 - **`-xerror` flag** — fail-fast on decode errors, no false positives from partial decodes
 - **Symlink boundary check** — won't traverse symlinks that point outside the music directory
@@ -128,7 +135,7 @@ docker exec beatscheck rescan
 | `MUSIC_DIR` | `/music` | Path to music library inside container |
 | `OUTPUT_DIR` | `/corrupted` | Quarantine destination (move mode only) |
 | `CONFIG_DIR` | `/config` | Persistent directory for logs, corrupt.txt, and tracking data |
-| `MODE` | `report` | `report`, `delete`, or `move` |
+| `MODE` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
 | `WORKERS` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
 | `RUN_INTERVAL` | `0` | Hours between scans. `0` = run once and exit. `168` = weekly. `24` = daily |
 | `DELETE_AFTER` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
@@ -208,16 +215,21 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-BeatsCheck.xml \
 4. Verify paths match your setup:
    - **Music Library**: `/mnt/user/data/media/music` (or your music directory)
    - **Config**: `/mnt/user/appdata/beatscheck`
-5. Leave **Mode** as `report` and **Workers** as `4`
-6. Click **Apply**
+5. Configure your settings (paths, workers, Lidarr if needed)
+6. Click **Apply** — the container starts idle in setup mode
+7. Open the container console and type `rescan report` to start scanning
 
 ### How the Container Runs
 
+The container defaults to **setup mode** — it starts idle and waits for you to trigger a scan. This lets you configure everything before any scanning begins.
+
+**To start scanning:** run `rescan report` from the container console or set `MODE=report` and restart.
+
 **With `RUN_INTERVAL` set (e.g., 168 for weekly):**
-The container stays running permanently. It scans your library, sleeps for the interval, then scans again. Only new/changed files are checked on subsequent runs (resume support). The container shows as **running** in the Docker tab — this is the recommended setup.
+After the first scan, the container sleeps for the interval, then scans again. Only new/changed files are checked on subsequent runs (resume support).
 
 **With `RUN_INTERVAL=0` (default):**
-The container scans once and stays idle. Use `rescan` or `rescan --fresh` to trigger another scan without restarting.
+The container scans once and stays idle. Use `rescan` to trigger another scan without restarting.
 
 ### Deleting Corrupt Files
 
