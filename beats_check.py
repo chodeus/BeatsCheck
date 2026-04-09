@@ -96,7 +96,7 @@ def collect_audio_files(input_folder, min_age_minutes=30):
                 continue
             files.append(file_path)
     if skipped_young > 0:
-        logger.info(
+        logger.debug(
             "Skipped %d files modified within last %d minutes",
             skipped_young, min_age_minutes
         )
@@ -518,17 +518,14 @@ def _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
                      corrupt_list_path, all_files, total_library_size,
                      total, skipped):
     """Log the scan configuration banner."""
-    logger.info("BeatsCheck v%s", __version__)
-    logger.info("  Mode:    %s", mode)
-    logger.info("  Workers: %d", workers)
-    logger.info("  Music:   %s", input_folder)
-    logger.info("  Log:     %s", log_file)
-    logger.info("  Corrupt: %s", corrupt_list_path)
+    logger.info("BeatsCheck v%s — %s mode, %d workers", __version__, mode, workers)
+    logger.info("  Library: %d files (%s), %d to scan (%d already processed)",
+                len(all_files), format_size(total_library_size), total, skipped)
+    logger.debug("  Music:   %s", input_folder)
+    logger.debug("  Log:     %s", log_file)
+    logger.debug("  Corrupt: %s", corrupt_list_path)
     if mode == "move":
-        logger.info("  Output:  %s", output_folder)
-    logger.info("  Library: %d files (%s)",
-                len(all_files), format_size(total_library_size))
-    logger.info("  To scan: %d files (%d already processed)", total, skipped)
+        logger.debug("  Output:  %s", output_folder)
     if mode == "report":
         logger.info("  (report mode - no files will be moved)")
 
@@ -562,7 +559,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     already_processed = get_already_processed_files(log_dir)
     processed_path = os.path.join(log_dir, "processed.txt")
 
-    logger.info("Scanning for audio files...")
+    logger.debug("Scanning for audio files...")
     all_files = collect_audio_files(input_folder, min_age_minutes)
     total_library_size = _total_file_size(all_files)
 
@@ -575,7 +572,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                      total, skipped)
 
     if total == 0:
-        logger.info("Nothing to do.")
+        logger.debug("Nothing to do.")
         return 0
 
     checked = 0
@@ -941,9 +938,8 @@ def main():
                     processed = os.path.join(log_dir, "processed.txt")
                     if os.path.exists(processed):
                         _rotate_file(processed, keep=3)
-                    logger.info("Log rotated (%s > %dMB limit)",
+                    logger.info("Log rotated (%s > %dMB limit). Starting fresh full scan.",
                                 format_size(log_size), max_log_mb)
-                    logger.info("Starting fresh full scan.")
             except OSError:
                 pass
 
@@ -953,7 +949,15 @@ def main():
         if delete_after > 0:
             run_auto_delete(log_dir, log_file, delete_after, max_auto_delete)
 
-        if run_interval <= 0 or shutdown_requested:
+        if shutdown_requested:
+            break
+
+        if run_interval <= 0:
+            logger.info("Scan complete. Container is idle. Stop the container to exit.")
+            heartbeat_path = os.path.join(log_dir, ".heartbeat")
+            while not shutdown_requested:
+                _write_heartbeat(heartbeat_path)
+                time.sleep(10)
             break
 
         next_run = time.strftime(

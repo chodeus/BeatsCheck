@@ -50,10 +50,6 @@ chown "${PUID}:${PGID}" /corrupted
 
 umask "${UMASK}"
 
-# Print version
-VERSION=$(python3 -c "import re; m=re.search(r'__version__\s*=\s*\"(.+?)\"', open('/app/beats_check.py').read()); print(m.group(1) if m else 'unknown')" 2>/dev/null || echo "unknown")
-echo "BeatsCheck v${VERSION}"
-
 exec su-exec "${PUID}:${PGID}" env \
     HOME=/app \
     PYTHONUNBUFFERED=1 \
