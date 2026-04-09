@@ -50,10 +50,16 @@ cat /path/to/config/beats_check.log
 
 ### 3. Delete corrupt files
 
-Exec into the running container:
+**Important:** The music mount must be `rw` (not `ro`) for delete mode to work.
+
+From the container console or via `docker exec`:
 
 ```bash
-docker exec -it beatscheck /app/delete.sh
+# Inside container console
+delete
+
+# Or from the host
+docker exec -it beatscheck delete
 ```
 
 You'll see a menu:
@@ -69,7 +75,7 @@ Found 5 corrupt files across 3 folders (142.5 MB)
 
   [1/3] /music/Artist Name/Album Name/
            track01.flac (45.2 MB)
-             -> [flac @ 0x...] invalid residual | decode frame failed
+             -> invalid residual | decode_frame() failed | Decoding error: Invalid data found
            track05.flac (512 B)
              -> File too small (512 bytes)
            (2 corrupt / 12 total files in folder)
@@ -84,6 +90,21 @@ Interactive options:
 - `q` — quit
 
 After deletion, `corrupt.txt` is updated to remove handled entries.
+
+### 4. Rescan
+
+Trigger a rescan without restarting the container:
+
+```bash
+# Inside container console
+rescan
+
+# Full rescan (clear resume cache)
+rescan --fresh
+
+# Or from the host
+docker exec beatscheck rescan
+```
 
 ## Safety Features
 
@@ -155,8 +176,11 @@ docker run -d --restart unless-stopped \
   -e WORKERS=6 \
   ghcr.io/chodeus/beatscheck:latest
 
-# Interactive delete (into running container)
-docker exec -it beatscheck /app/delete.sh
+# Interactive delete (requires rw music mount)
+docker exec -it beatscheck delete
+
+# Trigger a rescan
+docker exec beatscheck rescan
 ```
 
 ## Installation on Unraid
@@ -191,7 +215,7 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-BeatsCheck.xml \
 The container stays running permanently. It scans your library, sleeps for the interval, then scans again. Only new/changed files are checked on subsequent runs (resume support). The container shows as **running** in the Docker tab — this is the recommended setup.
 
 **With `RUN_INTERVAL=0` (default):**
-The container scans once and exits. You'd need to manually start it or use User Scripts to schedule it.
+The container scans once and stays idle. Use `rescan` or `rescan --fresh` to trigger another scan without restarting.
 
 ### Deleting Corrupt Files
 
@@ -203,10 +227,10 @@ Set `DELETE_AFTER=7` in the container config. Corrupt files are automatically de
 
 **Option 2: Interactive delete (on demand)**
 
-While the container is running (daemon mode), open the Unraid **terminal** and type:
+Change the music mount to `rw`, then from the Unraid **terminal**:
 
 ```bash
-docker exec -it BeatsCheck /app/delete.sh
+docker exec -it BeatsCheck delete
 ```
 
 **Option 3: Manual delete from corrupt.txt**
