@@ -1,6 +1,6 @@
 # BeatsCheck
 
-Audio file integrity checker that performs a full decode test using ffmpeg. Catches the same decode errors that Plex encounters during playback — not just missing headers, but actual audio stream corruption like `Decoding error: Invalid data` and `Decode error rate exceeds maximum`.
+Audio file integrity checker that performs a full decode test using ffmpeg. Catches audio stream corruption like `Decoding error: Invalid data` and `Decode error rate exceeds maximum`.
 
 **Default mode is report-only. No files are moved or deleted until you explicitly choose to.**
 
