@@ -137,6 +137,26 @@ def write_json_atomic(path, data):
     os.rename(tmp_path, path)
 
 
+def _idle_wait(log_dir, timeout_seconds):
+    """Sleep until timeout, shutdown, or .rescan trigger. Returns True if rescan triggered."""
+    rescan_path = os.path.join(log_dir, ".rescan")
+    heartbeat_path = os.path.join(log_dir, ".heartbeat")
+    deadline = time.time() + timeout_seconds if timeout_seconds else None
+    while not shutdown_requested:
+        _write_heartbeat(heartbeat_path)
+        if os.path.exists(rescan_path):
+            try:
+                os.remove(rescan_path)
+            except OSError:
+                pass
+            logger.info("Rescan requested.")
+            return True
+        if deadline and time.time() >= deadline:
+            return False
+        time.sleep(10)
+    return False
+
+
 def _write_heartbeat(heartbeat_path):
     """Write current timestamp to heartbeat file for healthcheck."""
     try:
@@ -953,11 +973,10 @@ def main():
             break
 
         if run_interval <= 0:
-            logger.info("Scan complete. Container is idle. Stop the container to exit.")
-            heartbeat_path = os.path.join(log_dir, ".heartbeat")
-            while not shutdown_requested:
-                _write_heartbeat(heartbeat_path)
-                time.sleep(10)
+            logger.info("Scan complete. Container is idle."
+                        " Rescan with: docker exec beatscheck touch /config/.rescan")
+            if _idle_wait(log_dir, None):
+                continue
             break
 
         next_run = time.strftime(
@@ -968,20 +987,13 @@ def main():
             "Next scan at %s (%sh interval). Waiting...",
             next_run, run_interval
         )
-        logger.info("Container is idle. Stop the container to exit.")
 
-        heartbeat_path = os.path.join(log_dir, ".heartbeat")
-        sleep_until = time.time() + (run_interval * 3600)
-        while time.time() < sleep_until and not shutdown_requested:
-            _write_heartbeat(heartbeat_path)
-            time.sleep(10)
-
-        if shutdown_requested:
-            break
-
-        logger.info("=" * 60)
-        logger.info("Scheduled scan starting: %s", time.strftime('%Y-%m-%d %H:%M:%S'))
-        logger.info("=" * 60)
+        if _idle_wait(log_dir, run_interval * 3600):
+            logger.info("Rescan triggered.")
+        else:
+            if shutdown_requested:
+                break
+            logger.info("Scheduled scan starting.")
 
 
 if __name__ == "__main__":

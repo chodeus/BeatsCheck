@@ -10,6 +10,7 @@ on:
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'delete.sh'
+      - 'rescan.sh'
       - 'beats_check.py'
   pull_request:
     branches:
@@ -18,6 +19,7 @@ on:
       - 'Dockerfile'
       - 'entrypoint.sh'
       - 'delete.sh'
+      - 'rescan.sh'
       - 'beats_check.py'
   workflow_dispatch:
 

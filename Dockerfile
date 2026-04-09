@@ -41,7 +41,8 @@ WORKDIR /app
 COPY beats_check.py /app/
 COPY entrypoint.sh /app/
 COPY delete.sh /app/
-RUN chmod +x /app/entrypoint.sh /app/delete.sh
+COPY rescan.sh /app/
+RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh
 
 VOLUME ["/music", "/corrupted", "/config"]
 
