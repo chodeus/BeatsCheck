@@ -6,8 +6,11 @@ PGID=${PGID:-100}
 UMASK=${UMASK:-002}
 TZ=${TZ:-UTC}
 
-# Timezone
-if [ -n "$TZ" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
+# Timezone: if /etc/localtime is bind-mounted from host, use it as-is.
+# Otherwise set it from the TZ env var.
+if [ -f "/etc/localtime" ] && [ ! -L "/etc/localtime" ]; then
+    : # bind-mounted regular file from host
+elif [ -n "$TZ" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
     ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
     export TZ
 fi

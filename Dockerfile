@@ -47,8 +47,11 @@ VOLUME ["/music", "/corrupted", "/config"]
 
 STOPSIGNAL SIGTERM
 
-HEALTHCHECK --interval=60s --timeout=5s --start-period=10s --retries=3 \
-  CMD pgrep -f "beats_check.py" > /dev/null || exit 1
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
+  CMD pgrep -f "beats_check.py" > /dev/null && \
+      { [ ! -f /config/.heartbeat ] || \
+        [ "$(( $(date +%s) - $(cat /config/.heartbeat 2>/dev/null || echo 0) ))" -lt 660 ]; } \
+      || exit 1
 
 ENTRYPOINT ["/sbin/tini", "--", "/app/entrypoint.sh"]
 CMD []

@@ -19,6 +19,8 @@ services:
       - /path/to/config:/config
       ## Only needed for move mode — corrupt files quarantined here
       # - /path/to/corrupted:/corrupted
+      ## Auto-detect host timezone (no TZ env var needed if mounted)
+      - /etc/localtime:/etc/localtime:ro
     environment:
       ## Scan mode: report (default), move, or delete
       - MODE=report

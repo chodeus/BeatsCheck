@@ -31,4 +31,4 @@ jobs:
         run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
       - name: Style warnings
-        run: flake8 . --count --max-complexity=45 --max-line-length=127 --statistics
+        run: flake8 . --count --max-complexity=25 --max-line-length=127 --statistics

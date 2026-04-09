@@ -1,3 +1,4 @@
+import fcntl
 import json
 import logging
 import os
@@ -82,13 +83,11 @@ def collect_audio_files(input_folder, min_age_minutes=30):
     for root, _, filenames in os.walk(input_folder, followlinks=False):
         for f in sorted(filenames):
             file_path = os.path.join(root, f)
-            # Skip symlinks that point outside the music directory
             real_path = os.path.realpath(file_path)
             if not real_path.startswith(real_root + os.sep) and real_path != real_root:
                 continue
             if os.path.splitext(f)[1].lower() not in AUDIO_EXTENSIONS:
                 continue
-            # Skip files still being written (modified recently)
             try:
                 if os.path.getmtime(file_path) > age_threshold:
                     skipped_young += 1
@@ -116,19 +115,16 @@ def format_eta(seconds):
     return f"{s}s"
 
 
-LOG_PREFIX = "Checking "
-LOG_SUFFIX = "..."
-
-
-def get_already_processed_files(log_file):
-    if not os.path.exists(log_file):
+def get_already_processed_files(log_dir):
+    """Load the set of already-processed file paths from processed.txt."""
+    processed_path = os.path.join(log_dir, "processed.txt")
+    if not os.path.exists(processed_path):
         return set()
     processed = set()
-    with open(log_file, 'r', encoding='utf-8') as f:
+    with open(processed_path, 'r', encoding='utf-8') as f:
         for line in f:
-            line = line.rstrip("\n")
-            if line.startswith(LOG_PREFIX) and line.endswith(LOG_SUFFIX):
-                path = line[len(LOG_PREFIX):-len(LOG_SUFFIX)]
+            path = line.rstrip("\n")
+            if path:
                 processed.add(path)
     return processed
 
@@ -141,14 +137,108 @@ def write_json_atomic(path, data):
     os.rename(tmp_path, path)
 
 
+def _write_heartbeat(heartbeat_path):
+    """Write current timestamp to heartbeat file for healthcheck."""
+    try:
+        with open(heartbeat_path, 'w') as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
+def _rotate_file(path, keep=3):
+    """Rotate path -> path.1 -> path.2 -> ... keeping last N copies."""
+    oldest = f"{path}.{keep}"
+    if os.path.exists(oldest):
+        os.remove(oldest)
+    for i in range(keep - 1, 0, -1):
+        src = f"{path}.{i}"
+        dst = f"{path}.{i + 1}"
+        if os.path.exists(src):
+            shutil.move(src, dst)
+    if os.path.exists(path):
+        shutil.move(path, f"{path}.1")
+
+
+def _display_folder_files(corrupt_files, corrupt_details):
+    """Display corrupt files in a folder with reasons and sizes."""
+    for cf in corrupt_files:
+        name = os.path.basename(cf)
+        reason = corrupt_details.get(cf, "")
+        try:
+            size_str = format_size(os.path.getsize(cf))
+            print(f"           {name} ({size_str})")
+            if reason:
+                short = (reason[:120] + "...") if len(reason) > 120 else reason
+                print(f"             -> {short}")
+        except OSError:
+            print(f"           {name} (already deleted)")
+
+
+def _handle_folder_action(choice, folder, existing, log):
+    """Execute a delete action on a folder. Returns (folders_del, files_del, skipped)."""
+    if choice == 'y' and os.path.isdir(folder):
+        try:
+            shutil.rmtree(folder)
+            log.write(f"DELETED FOLDER: {folder} ({len(existing)} corrupt files)\n")
+            print("           -> Folder deleted\n")
+            return (1, len(existing), 0)
+        except OSError as e:
+            print(f"           ERROR: {e}\n")
+            log.write(f"ERROR deleting folder {folder}: {e}\n")
+            return (0, 0, 0)
+    elif choice == 'f':
+        deleted = 0
+        for cf in existing:
+            try:
+                os.remove(cf)
+                deleted += 1
+                log.write(f"DELETED FILE: {cf}\n")
+            except OSError as e:
+                print(f"           ERROR deleting {os.path.basename(cf)}: {e}")
+                log.write(f"ERROR deleting {cf}: {e}\n")
+        print(f"           -> {len(existing)} corrupt files deleted\n")
+        return (0, deleted, 0)
+    else:
+        log.write(f"SKIPPED: {folder}\n")
+        print()
+        return (0, 0, 1)
+
+
+def _load_corrupt_file_list(corrupt_list_path, log_dir):
+    """Load and deduplicate corrupt files, group by folder."""
+    with open(corrupt_list_path, 'r', encoding='utf-8') as f:
+        all_paths = [line.strip() for line in f if line.strip()]
+
+    details_path = os.path.join(log_dir, "corrupt_details.json")
+    corrupt_details = {}
+    if os.path.exists(details_path):
+        with open(details_path, 'r', encoding='utf-8') as f:
+            corrupt_details = json.load(f)
+
+    seen = set()
+    files = []
+    for fp in all_paths:
+        if fp not in seen:
+            seen.add(fp)
+            files.append(fp)
+
+    folders = {}
+    for fp in files:
+        folder = os.path.dirname(fp)
+        if folder not in folders:
+            folders[folder] = []
+        folders[folder].append(fp)
+
+    return files, folders, corrupt_details
+
+
 def run_delete_mode(corrupt_list_path, log_file, log_dir):
     """Interactive delete mode. Groups corrupt files by album folder and prompts."""
-    # Wait for any active scan to finish
     lock_path = os.path.join(log_dir, ".scanning")
     if os.path.exists(lock_path):
         logger.info("A scan is currently running. Waiting for it to finish...")
-        while os.path.exists(lock_path) and not shutdown_requested:
-            time.sleep(5)
+        _wait_for_scan_lock(log_dir)
         if shutdown_requested:
             return
         logger.info("Scan finished. Starting delete mode.")
@@ -158,40 +248,15 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
         logger.info("Run a scan first with MODE=report")
         sys.exit(1)
 
-    with open(corrupt_list_path, 'r', encoding='utf-8') as f:
-        all_paths = [line.strip() for line in f if line.strip()]
+    files, folders, corrupt_details = _load_corrupt_file_list(
+        corrupt_list_path, log_dir)
 
-    if not all_paths:
+    if not files:
         logger.info("corrupt.txt is empty — no corrupt files found.")
         return
 
-    # Load corruption reasons
-    details_path = os.path.join(log_dir, "corrupt_details.json")
-    corrupt_details = {}
-    if os.path.exists(details_path):
-        with open(details_path, 'r', encoding='utf-8') as f:
-            corrupt_details = json.load(f)
-
-    # Deduplicate while preserving order
-    seen = set()
-    files = []
-    for fp in all_paths:
-        if fp not in seen:
-            seen.add(fp)
-            files.append(fp)
-
-    # Group by parent folder (album directory)
-    folders = {}
-    for fp in files:
-        folder = os.path.dirname(fp)
-        if folder not in folders:
-            folders[folder] = []
-        folders[folder].append(fp)
-
     total_files = len(files)
     total_folders = len(folders)
-
-    # Calculate total size of existing corrupt files
     total_corrupt_size = 0
     for f in files:
         try:
@@ -199,7 +264,8 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
         except OSError:
             pass
 
-    print(f"Found {total_files} corrupt files across {total_folders} folders ({format_size(total_corrupt_size)})\n")
+    print(f"Found {total_files} corrupt files across "
+          f"{total_folders} folders ({format_size(total_corrupt_size)})\n")
 
     try:
         action = input(
@@ -209,21 +275,26 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
             "  Choice: "
         ).strip().lower()
     except EOFError:
-        print("\nNo input available. Run with: docker exec -it BeatsCheck /app/delete.sh")
+        print("\nNo input available. Run with: "
+              "docker exec -it BeatsCheck /app/delete.sh")
         return
 
     if action == 'q':
         return
-
     if action == 'a':
         run_mass_delete(files, log_file, log_dir)
         return
-
     if action != 'i':
         print("Invalid choice.")
         return
 
-    # Interactive mode — go through each folder
+    _run_interactive_delete(folders, total_folders, corrupt_details,
+                            log_file, files, corrupt_list_path)
+
+
+def _run_interactive_delete(folders, total_folders, corrupt_details,
+                            log_file, files, corrupt_list_path):
+    """Interactive per-folder delete loop."""
     print("\nFor each folder:")
     print("  [y] delete entire folder (album)    [f] delete corrupt files only")
     print("  [n] skip                             [a] delete all remaining folders")
@@ -237,11 +308,11 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
 
     with open(log_file, 'a', encoding='utf-8') as log:
         log.write(f"\n{'='*60}\n")
-        log.write(f"Interactive delete started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log.write(f"Interactive delete started: "
+                  f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         log.write(f"{'='*60}\n")
 
         for i, (folder, corrupt_files) in enumerate(folders.items(), 1):
-            # Check which files still exist
             existing = [f for f in corrupt_files if os.path.exists(f)]
             gone = len(corrupt_files) - len(existing)
             if gone:
@@ -252,30 +323,16 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
                 log.write(f"MISSING FOLDER: {folder}\n")
                 continue
 
-            # Show folder and its corrupt files with reasons
             print(f"  [{i}/{total_folders}] {folder}/")
-            for cf in corrupt_files:
-                name = os.path.basename(cf)
-                reason = corrupt_details.get(cf, "")
-                try:
-                    size = os.path.getsize(cf)
-                    size_str = format_size(size)
-                    print(f"           {name} ({size_str})")
-                    if reason:
-                        # Shorten for display
-                        short = reason[:120] + "..." if len(reason) > 120 else reason
-                        print(f"             -> {short}")
-                except OSError:
-                    print(f"           {name} (already deleted)")
+            _display_folder_files(corrupt_files, corrupt_details)
 
-            # Count total files in folder (not just corrupt ones)
             try:
                 entries = os.listdir(folder)
                 total_in_folder = sum(
                     1 for e in entries
-                    if os.path.isfile(os.path.join(folder, e))
-                )
-                print(f"           ({len(existing)} corrupt / {total_in_folder} total files in folder)")
+                    if os.path.isfile(os.path.join(folder, e)))
+                print(f"           ({len(existing)} corrupt / "
+                      f"{total_in_folder} total files in folder)")
             except OSError:
                 pass
 
@@ -283,7 +340,8 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
                 choice = 'y'
             else:
                 try:
-                    choice = input("           Action? [y/f/n/a/q] ").strip().lower()
+                    choice = input(
+                        "           Action? [y/f/n/a/q] ").strip().lower()
                 except EOFError:
                     print("\nNo input available. Run with: docker run -it ...")
                     break
@@ -291,38 +349,14 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
             if choice == 'q':
                 print("\nQuitting.")
                 break
-            elif choice == 'a':
+            if choice == 'a':
                 delete_all = True
                 choice = 'y'
 
-            if choice == 'y' and os.path.isdir(folder):
-                # Delete entire folder
-                try:
-                    shutil.rmtree(folder)
-                    folders_deleted += 1
-                    files_deleted += len(existing)
-                    log.write(f"DELETED FOLDER: {folder} ({len(existing)} corrupt files)\n")
-                    print("           -> Folder deleted\n")
-                except OSError as e:
-                    print(f"           ERROR: {e}\n")
-                    log.write(f"ERROR deleting folder {folder}: {e}\n")
-
-            elif choice == 'f':
-                # Delete only the corrupt files
-                for cf in existing:
-                    try:
-                        os.remove(cf)
-                        files_deleted += 1
-                        log.write(f"DELETED FILE: {cf}\n")
-                    except OSError as e:
-                        print(f"           ERROR deleting {os.path.basename(cf)}: {e}")
-                        log.write(f"ERROR deleting {cf}: {e}\n")
-                print(f"           -> {len(existing)} corrupt files deleted\n")
-
-            else:
-                skipped_folders += 1
-                log.write(f"SKIPPED: {folder}\n")
-                print()
+            fd, fid, sk = _handle_folder_action(choice, folder, existing, log)
+            folders_deleted += fd
+            files_deleted += fid
+            skipped_folders += sk
 
         summary = (
             f"\nDelete summary:\n"
@@ -334,7 +368,6 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir):
         print(summary)
         log.write(summary)
 
-    # Update corrupt.txt — remove entries for deleted/missing files
     remaining = [f for f in files if os.path.exists(f)]
     with open(corrupt_list_path, 'w', encoding='utf-8') as f:
         for fp in remaining:
@@ -404,47 +437,87 @@ def run_mass_delete(files, log_file, log_dir):
         print("corrupt.txt cleared.")
 
 
+def _acquire_scan_lock(log_dir):
+    """Acquire an exclusive file lock for scanning. Returns the lock fd."""
+    lock_path = os.path.join(log_dir, ".scanning")
+    lf = open(lock_path, 'w')
+    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    lf.write(str(os.getpid()))
+    lf.flush()
+    return lf
+
+
+def _wait_for_scan_lock(log_dir):
+    """Block until the scan lock is available, then release immediately."""
+    lock_path = os.path.join(log_dir, ".scanning")
+    if not os.path.exists(lock_path):
+        return
+    try:
+        with open(lock_path, 'r') as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+    except OSError:
+        pass
+
+
 def run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
              min_age_minutes=30):
     """Scan mode: decode-test all audio files with parallel workers."""
     corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
-    lock_path = os.path.join(log_dir, ".scanning")
 
-    # Create lock file so delete mode knows a scan is in progress
-    with open(lock_path, 'w') as lf:
-        lf.write(str(os.getpid()))
-
+    lock_fd = _acquire_scan_lock(log_dir)
     try:
         return _run_scan_inner(input_folder, output_folder, log_file, log_dir,
-                               mode, workers, corrupt_list_path, min_age_minutes)
+                               mode, workers, corrupt_list_path,
+                               min_age_minutes)
     finally:
-        # Always remove lock file when scan ends
         try:
-            os.remove(lock_path)
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
+            os.remove(os.path.join(log_dir, ".scanning"))
         except OSError:
             pass
 
 
-def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
-                    mode, workers, corrupt_list_path, min_age_minutes):
-    """Inner scan logic."""
-    # Resume support
-    already_processed = get_already_processed_files(log_file)
+def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
+                         corrupt_log, log, existing_corrupt, corrupt_details):
+    logger.info("CORRUPT: %s", file_path)
+    logger.info("         %s", reason)
 
-    # Collect all audio files and calculate total size
-    logger.info("Scanning for audio files...")
-    all_files = collect_audio_files(input_folder, min_age_minutes)
-    total_library_size = 0
-    for f in all_files:
+    try:
+        nlinks = os.stat(file_path).st_nlink
+        if nlinks > 1:
+            logger.info("         hardlinked (%d links) — "
+                        "other links share the same data", nlinks)
+    except OSError:
+        pass
+
+    if file_path not in existing_corrupt:
+        corrupt_log.write(file_path + "\n")
+        corrupt_log.flush()
+        existing_corrupt.add(file_path)
+    corrupt_details[file_path] = reason
+
+    if mode == "move":
+        rel = os.path.relpath(os.path.dirname(file_path), input_folder)
+        dest_dir = os.path.join(output_folder, rel)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, os.path.basename(file_path))
         try:
-            total_library_size += os.path.getsize(f)
-        except OSError:
-            pass
+            shutil.move(file_path, dest)
+            log.write(f"File moved: {file_path} -> {dest}\n")
+            log.flush()
+            logger.info("         moved -> %s", dest)
+            corrupt_details[dest] = reason
+        except (OSError, shutil.Error) as e:
+            log.write(f"ERROR: Failed to move {file_path}: {e}\n")
+            log.flush()
+            logger.error("         ERROR: failed to move: %s", e)
 
-    files_to_check = [f for f in all_files if f not in already_processed]
-    skipped = len(all_files) - len(files_to_check)
-    total = len(files_to_check)
 
+def _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
+                     corrupt_list_path, all_files, total_library_size,
+                     total, skipped):
+    """Log the scan configuration banner."""
     logger.info("BeatsCheck v%s", __version__)
     logger.info("  Mode:    %s", mode)
     logger.info("  Workers: %d", workers)
@@ -453,40 +526,75 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     logger.info("  Corrupt: %s", corrupt_list_path)
     if mode == "move":
         logger.info("  Output:  %s", output_folder)
-    logger.info("  Library: %d files (%s)", len(all_files), format_size(total_library_size))
+    logger.info("  Library: %d files (%s)",
+                len(all_files), format_size(total_library_size))
     logger.info("  To scan: %d files (%d already processed)", total, skipped)
     if mode == "report":
         logger.info("  (report mode - no files will be moved)")
 
+
+def _load_existing_corrupt(corrupt_list_path):
+    """Load existing corrupt paths to deduplicate appends."""
+    existing = set()
+    if os.path.exists(corrupt_list_path):
+        with open(corrupt_list_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                path = line.strip()
+                if path:
+                    existing.add(path)
+    return existing
+
+
+def _total_file_size(files):
+    """Sum file sizes, ignoring missing files."""
+    total = 0
+    for f in files:
+        try:
+            total += os.path.getsize(f)
+        except OSError:
+            pass
+    return total
+
+
+def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
+                    mode, workers, corrupt_list_path, min_age_minutes):
+    """Inner scan logic."""
+    already_processed = get_already_processed_files(log_dir)
+    processed_path = os.path.join(log_dir, "processed.txt")
+
+    logger.info("Scanning for audio files...")
+    all_files = collect_audio_files(input_folder, min_age_minutes)
+    total_library_size = _total_file_size(all_files)
+
+    files_to_check = [f for f in all_files if f not in already_processed]
+    skipped = len(all_files) - len(files_to_check)
+    total = len(files_to_check)
+
+    _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
+                     corrupt_list_path, all_files, total_library_size,
+                     total, skipped)
+
     if total == 0:
         logger.info("Nothing to do.")
-        return
+        return 0
 
     checked = 0
     corrupted = 0
     corrupt_size = 0
     start_time = time.time()
 
-    # Load existing corruption details (reasons from previous scans)
     details_path = os.path.join(log_dir, "corrupt_details.json")
     corrupt_details = {}
     if os.path.exists(details_path):
         with open(details_path, 'r', encoding='utf-8') as f:
             corrupt_details = json.load(f)
 
-    # Load existing corrupt paths to deduplicate appends
-    existing_corrupt = set()
-    if os.path.exists(corrupt_list_path):
-        with open(corrupt_list_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                path = line.strip()
-                if path:
-                    existing_corrupt.add(path)
+    existing_corrupt = _load_existing_corrupt(corrupt_list_path)
 
-    # Keep log files open for the duration of the scan to avoid
-    # opening/closing per file (100K+ files would thrash the filesystem)
+    heartbeat_path = os.path.join(log_dir, ".heartbeat")
     with open(log_file, 'a', encoding='utf-8') as log, \
-         open(corrupt_list_path, 'a', encoding='utf-8') as corrupt_log:
+         open(corrupt_list_path, 'a', encoding='utf-8') as corrupt_log, \
+         open(processed_path, 'a', encoding='utf-8') as processed_log:
 
         log.write(f"\n{'='*60}\n")
         log.write(f"Scan started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
@@ -496,78 +604,80 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
         log.write(f"{'='*60}\n")
         log.flush()
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(check_audio_file, f): f for f in files_to_check}
+        batch_size = 1000
+        file_iter = iter(files_to_check)
+        active_futures = {}
 
-            for future in as_completed(futures):
+        def _submit_batch():
+            for _ in range(batch_size):
+                f = next(file_iter, None)
+                if f is None:
+                    break
+                fut = pool.submit(check_audio_file, f)
+                active_futures[fut] = f
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            _submit_batch()
+
+            while active_futures:
                 if shutdown_requested:
                     pool.shutdown(wait=True, cancel_futures=True)
                     break
 
-                try:
-                    file_path, is_corrupt, reason = future.result()
-                except Exception as e:
-                    file_path = futures[future]
-                    logger.error("Unexpected error checking %s: %s", file_path, e)
-                    log.write(f"ERROR: {file_path} - {e}\n")
-                    log.flush()
-                    checked += 1
-                    continue
+                done = set()
+                for future in as_completed(active_futures, timeout=None):
+                    done.add(future)
 
-                checked += 1
-
-                # Log every file checked (for resume support)
-                log.write(f"Checking {file_path}...\n")
-                if is_corrupt:
-                    log.write(f"CORRUPT: {file_path} - {reason}\n")
-                log.flush()
-
-                if is_corrupt:
-                    corrupted += 1
                     try:
-                        corrupt_size += os.path.getsize(file_path)
-                    except OSError:
-                        pass
-                    logger.info("CORRUPT: %s", file_path)
-                    logger.info("         %s", reason)
+                        file_path, is_corrupt, reason = future.result()
+                    except Exception as e:
+                        file_path = active_futures[future]
+                        logger.error("Unexpected error checking %s: %s",
+                                     file_path, e)
+                        log.write(f"ERROR: {file_path} - {e}\n")
+                        log.flush()
+                        checked += 1
+                        continue
 
-                    # Only append if not already in corrupt.txt
-                    if file_path not in existing_corrupt:
-                        corrupt_log.write(file_path + "\n")
-                        corrupt_log.flush()
-                        existing_corrupt.add(file_path)
-                    corrupt_details[file_path] = reason
+                    checked += 1
 
-                    # Quarantine if in move mode
-                    if mode == "move":
-                        relative_path = os.path.relpath(
-                            os.path.dirname(file_path), input_folder
-                        )
-                        dest_dir = os.path.join(output_folder, relative_path)
-                        os.makedirs(dest_dir, exist_ok=True)
-                        dest = os.path.join(dest_dir, os.path.basename(file_path))
+                    processed_log.write(file_path + "\n")
+                    if is_corrupt:
+                        log.write(f"CORRUPT: {file_path} - {reason}\n")
+                    processed_log.flush()
+                    log.flush()
+
+                    if is_corrupt:
+                        corrupted += 1
                         try:
-                            shutil.move(file_path, dest)
-                            log.write(f"File moved: {file_path} -> {dest}\n")
-                            log.flush()
-                            logger.info("         moved -> %s", dest)
-                        except (OSError, shutil.Error) as e:
-                            log.write(f"ERROR: Failed to move {file_path}: {e}\n")
-                            log.flush()
-                            logger.error("         ERROR: failed to move: %s", e)
+                            corrupt_size += os.path.getsize(file_path)
+                        except OSError:
+                            pass
+                        _handle_corrupt_file(
+                            file_path, reason, mode, input_folder,
+                            output_folder, corrupt_log, log,
+                            existing_corrupt, corrupt_details)
 
-                # Progress every 100 files or at the end
-                if checked % 100 == 0 or checked == total:
-                    elapsed = time.time() - start_time
-                    rate = checked / elapsed if elapsed > 0 else 0
-                    eta = (total - checked) / rate if rate > 0 else 0
-                    pct = checked * 100 // total
-                    logger.info(
-                        "[%d%%] %d/%d checked, %d corrupt, ETA %s",
-                        pct, checked, total, corrupted, format_eta(eta)
-                    )
+                    _write_heartbeat(heartbeat_path)
 
-        # Summary
+                    if checked % 100 == 0 or checked == total:
+                        elapsed = time.time() - start_time
+                        rate = checked / elapsed if elapsed > 0 else 0
+                        eta = (total - checked) / rate if rate > 0 else 0
+                        pct = checked * 100 // total
+                        logger.info(
+                            "[%d%%] %d/%d checked, %d corrupt, ETA %s",
+                            pct, checked, total, corrupted,
+                            format_eta(eta))
+
+                    if shutdown_requested:
+                        break
+
+                for fut in done:
+                    del active_futures[fut]
+                if not shutdown_requested:
+                    _submit_batch()
+
         elapsed = time.time() - start_time
         summary = (
             f"\n{'='*60}\n"
@@ -582,12 +692,14 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
         log.write(summary)
         log.flush()
 
-    # Save corruption details (reasons) for delete mode display
-    # Remove entries for files that no longer exist
-    corrupt_details = {p: r for p, r in corrupt_details.items() if os.path.exists(p)}
+    output_real = os.path.realpath(output_folder) if output_folder else ""
+    corrupt_details = {
+        p: r for p, r in corrupt_details.items()
+        if os.path.exists(p) or (output_real and
+                                 os.path.realpath(p).startswith(output_real))
+    }
     write_json_atomic(details_path, corrupt_details)
 
-    # Write machine-readable summary for notification scripts
     summary_path = os.path.join(log_dir, "summary.json")
     summary_data = {
         "version": __version__,
@@ -617,13 +729,11 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
     tracking_path = os.path.join(log_dir, "corrupt_tracking.json")
     corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
 
-    # Load or create tracking data (maps file path -> first-seen ISO timestamp)
     tracking = {}
     if os.path.exists(tracking_path):
         with open(tracking_path, 'r', encoding='utf-8') as f:
             tracking = json.load(f)
 
-    # Add any new entries from corrupt.txt
     now = time.strftime('%Y-%m-%dT%H:%M:%S')
     if os.path.exists(corrupt_list_path):
         with open(corrupt_list_path, 'r', encoding='utf-8') as f:
@@ -632,15 +742,12 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
                 if path and path not in tracking:
                     tracking[path] = now
 
-    # Remove entries for files that no longer exist
     tracking = {p: t for p, t in tracking.items() if os.path.exists(p)}
 
     if not tracking:
-        # Save clean tracking file
         write_json_atomic(tracking_path, tracking)
         return
 
-    # Find files older than threshold
     threshold = time.time() - (delete_after_days * 86400)
     to_delete = []
     to_keep = []
@@ -656,15 +763,12 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
             to_keep.append(path)
 
     if not to_delete:
-        # Save updated tracking
         write_json_atomic(tracking_path, tracking)
         if to_keep:
             logger.info("%d corrupt files still within %d-day review window",
                         len(to_keep), delete_after_days)
         return
 
-    # Safety threshold — abort if too many files would be deleted
-    # (could indicate a filesystem issue or misconfigured scanner)
     if max_deletes > 0 and len(to_delete) > max_deletes:
         logger.warning(
             "Auto-delete aborted — %d files exceed safety threshold of %d",
@@ -677,7 +781,6 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
                 f"AUTO-DELETE ABORTED: {len(to_delete)} files exceed "
                 f"threshold of {max_deletes}\n"
             )
-        # Still save tracking so timestamps aren't lost
         write_json_atomic(tracking_path, tracking)
         return
 
@@ -696,13 +799,11 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
             except OSError as e:
                 log.write(f"ERROR auto-deleting {path}: {e}\n")
                 logger.error("  ERROR: %s - %s", path, e)
-                # Keep in tracking so timestamp is preserved (don't reset countdown)
 
     logger.info("  %d/%d files deleted", deleted, len(to_delete))
     if to_keep:
         logger.info("  %d files still within review window", len(to_keep))
 
-    # Save updated tracking and corrupt.txt
     write_json_atomic(tracking_path, tracking)
     with open(corrupt_list_path, 'w', encoding='utf-8') as f:
         for path in tracking:
@@ -713,11 +814,9 @@ def setup_logging(log_level, log_file):
     """Configure logging with console and file handlers."""
     level = getattr(logging, log_level.upper(), logging.INFO)
 
-    # Root logger setup
     root = logging.getLogger()
     root.setLevel(level)
 
-    # Console handler
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(level)
     console_fmt = logging.Formatter(
@@ -728,16 +827,29 @@ def setup_logging(log_level, log_file):
     root.addHandler(console)
 
 
-def main():
-    signal.signal(signal.SIGTERM, handle_shutdown)
-    signal.signal(signal.SIGINT, handle_shutdown)
-
+def _parse_env_int(name, default, label=None):
+    """Parse an integer environment variable, exit on error."""
     try:
-        os.nice(10)
-    except OSError:
-        pass
+        val = int(os.environ.get(name, str(default)))
+        return val
+    except ValueError:
+        print(f"Invalid {name} value. Must be an integer"
+              f"{' (' + label + ')' if label else ''}.")
+        sys.exit(1)
 
-    # Config: env vars (Docker/Unraid) or CLI args (standalone)
+
+def _parse_env_float(name, default, label=None):
+    """Parse a float environment variable, exit on error."""
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        print(f"Invalid {name} value. Must be a number"
+              f"{' (' + label + ')' if label else ''}.")
+        sys.exit(1)
+
+
+def _load_config():
+    """Load configuration from CLI args or environment variables."""
     if len(sys.argv) == 4:
         input_folder = sys.argv[1].rstrip("/")
         output_folder = sys.argv[2].rstrip("/")
@@ -750,54 +862,56 @@ def main():
         log_file = os.path.join(log_dir, "beats_check.log")
 
     mode = os.environ.get("MODE", "report").lower()
-    log_level = os.environ.get("LOG_LEVEL", "INFO")
-
-    try:
-        workers = int(os.environ.get("WORKERS", "4"))
-        if workers < 1:
-            raise ValueError
-    except ValueError:
-        print("Invalid WORKERS value. Must be a positive integer.")
-        sys.exit(1)
-
-    try:
-        run_interval = float(os.environ.get("RUN_INTERVAL", "0"))
-    except ValueError:
-        print("Invalid RUN_INTERVAL value. Must be a number (hours).")
-        sys.exit(1)
-
-    try:
-        delete_after = float(os.environ.get("DELETE_AFTER", "0"))
-    except ValueError:
-        print("Invalid DELETE_AFTER value. Must be a number (days).")
-        sys.exit(1)
-
-    try:
-        max_auto_delete = int(os.environ.get("MAX_AUTO_DELETE", "50"))
-    except ValueError:
-        print("Invalid MAX_AUTO_DELETE value. Must be an integer.")
-        sys.exit(1)
-
-    try:
-        min_age_minutes = int(os.environ.get("MIN_FILE_AGE", "30"))
-    except ValueError:
-        print("Invalid MIN_FILE_AGE value. Must be an integer (minutes).")
-        sys.exit(1)
-
-    try:
-        max_log_mb = int(os.environ.get("MAX_LOG_MB", "50"))
-    except ValueError:
-        print("Invalid MAX_LOG_MB value. Must be an integer (MB).")
-        sys.exit(1)
-
     if mode not in ("report", "move", "delete"):
         print(f"Invalid MODE '{mode}'. Must be: report, move, delete")
         sys.exit(1)
 
+    workers = _parse_env_int("WORKERS", 4)
+    if workers < 1:
+        print("Invalid WORKERS value. Must be a positive integer.")
+        sys.exit(1)
+
+    return {
+        "input_folder": input_folder,
+        "output_folder": output_folder,
+        "log_dir": log_dir,
+        "log_file": log_file,
+        "mode": mode,
+        "log_level": os.environ.get("LOG_LEVEL", "INFO"),
+        "workers": workers,
+        "run_interval": _parse_env_float("RUN_INTERVAL", 0, "hours"),
+        "delete_after": _parse_env_float("DELETE_AFTER", 0, "days"),
+        "max_auto_delete": _parse_env_int("MAX_AUTO_DELETE", 50),
+        "min_age_minutes": _parse_env_int("MIN_FILE_AGE", 30, "minutes"),
+        "max_log_mb": _parse_env_int("MAX_LOG_MB", 50, "MB"),
+    }
+
+
+def main():
+    signal.signal(signal.SIGTERM, handle_shutdown)
+    signal.signal(signal.SIGINT, handle_shutdown)
+
+    try:
+        os.nice(10)
+    except OSError:
+        pass
+
+    cfg = _load_config()
+    input_folder = cfg["input_folder"]
+    output_folder = cfg["output_folder"]
+    log_dir = cfg["log_dir"]
+    log_file = cfg["log_file"]
+    mode = cfg["mode"]
+    workers = cfg["workers"]
+    run_interval = cfg["run_interval"]
+    delete_after = cfg["delete_after"]
+    max_auto_delete = cfg["max_auto_delete"]
+    min_age_minutes = cfg["min_age_minutes"]
+    max_log_mb = cfg["max_log_mb"]
+
     os.makedirs(log_dir, exist_ok=True)
 
-    # Set up logging after log_dir exists
-    setup_logging(log_level, log_file)
+    setup_logging(cfg["log_level"], log_file)
 
     logger.info("BeatsCheck v%s starting", __version__)
 
@@ -812,26 +926,23 @@ def main():
 
     if mode == "move":
         if not output_folder or output_folder == "/corrupted":
-            # Check if the volume was actually mounted
             if not os.path.isdir("/corrupted"):
                 logger.error("Move mode requires the Corrupted Output path to be configured.")
                 logger.error("Set the OUTPUT_DIR variable or mount a volume to /corrupted.")
                 sys.exit(1)
         os.makedirs(output_folder, exist_ok=True)
 
-    # Run scan (once or on a schedule)
     while True:
-        # Rotate log if it's too large (resume cache is in the log,
-        # so rotating means the next scan re-checks everything)
         if max_log_mb > 0 and os.path.exists(log_file):
             try:
                 log_size = os.path.getsize(log_file)
                 if log_size > max_log_mb * 1024 * 1024:
-                    rotated = log_file + ".old"
-                    shutil.move(log_file, rotated)
+                    _rotate_file(log_file, keep=3)
+                    processed = os.path.join(log_dir, "processed.txt")
+                    if os.path.exists(processed):
+                        _rotate_file(processed, keep=3)
                     logger.info("Log rotated (%s > %dMB limit)",
                                 format_size(log_size), max_log_mb)
-                    logger.info("Previous log saved as %s", rotated)
                     logger.info("Starting fresh full scan.")
             except OSError:
                 pass
@@ -839,7 +950,6 @@ def main():
         run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
                  min_age_minutes)
 
-        # Auto-delete corrupt files older than threshold
         if delete_after > 0:
             run_auto_delete(log_dir, log_file, delete_after, max_auto_delete)
 
@@ -856,9 +966,10 @@ def main():
         )
         logger.info("Container is idle. Stop the container to exit.")
 
-        # Sleep in small increments to respond to shutdown signals
+        heartbeat_path = os.path.join(log_dir, ".heartbeat")
         sleep_until = time.time() + (run_interval * 3600)
         while time.time() < sleep_until and not shutdown_requested:
+            _write_heartbeat(heartbeat_path)
             time.sleep(10)
 
         if shutdown_requested:
