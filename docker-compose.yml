@@ -4,7 +4,8 @@
 ### Usage:
 ###   docker compose up -d          # Start in background
 ###   docker compose logs -f        # Follow logs
-###   docker exec -it beatscheck /app/delete.sh  # Interactive delete
+###   docker exec -it beatscheck delete           # Interactive delete
+###   docker exec beatscheck rescan               # Trigger rescan
 ###
 services:
   beatscheck:
@@ -43,5 +44,9 @@ services:
       - PGID=1000
       - TZ=America/New_York
       - UMASK=002
+      ## Lidarr integration (optional): auto-delete via Lidarr API
+      ## Lidarr handles file deletion + database cleanup + re-download
+      # - LIDARR_URL=http://lidarr:8686
+      # - LIDARR_API_KEY=your-api-key-here
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2

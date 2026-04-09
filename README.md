@@ -140,6 +140,8 @@ docker exec beatscheck rescan
 | `PGID` | `100` | Group ID for file ownership |
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
+| `LIDARR_URL` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
+| `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
 
 ## Docker Usage
 
@@ -304,6 +306,34 @@ For a 100K file library, expect ~10 MB per full scan. With daemon mode, subseque
 | **RAM** | Under 500MB |
 | **Disk I/O** | The bottleneck — expect 6-15 hours depending on array speed |
 | **Other services** | Unaffected (low priority + CPU cap) |
+
+## Lidarr Integration
+
+When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck uses the Lidarr API to delete corrupt files instead of deleting them directly. This means Lidarr cleans its own database records, marks albums as missing, and can automatically re-download replacements.
+
+**How it works with `DELETE_AFTER`:**
+
+1. Scan finds corrupt files → added to `corrupt.txt` with first-seen timestamp
+2. After the `DELETE_AFTER` threshold (e.g. 7 days), auto-delete runs
+3. BeatsCheck maps each corrupt file to a Lidarr artist and track file via the API
+4. If **all tracks in an album** are corrupt → deletes the entire album via Lidarr
+5. If **some tracks** are corrupt → deletes only those track files via Lidarr
+6. Files **not tracked by Lidarr** → deleted directly from disk
+7. Triggers a Lidarr artist refresh so changes are detected immediately
+
+**Security:**
+- API key is sent only via HTTP header, never in URLs or logs
+- Lidarr URL is masked in all log output
+- Supports Docker secrets (`/run/secrets/lidarr_api_key`)
+- HTTP redirects are blocked to prevent credential leaking
+- All API calls have explicit timeouts
+
+```yaml
+environment:
+  - DELETE_AFTER=7
+  - LIDARR_URL=http://lidarr:8686
+  - LIDARR_API_KEY=your-api-key-here
+```
 
 ## Updating
 

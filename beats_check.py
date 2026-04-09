@@ -8,6 +8,8 @@ import sys
 import shutil
 import signal
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 __version__ = "2.0.0"
@@ -196,6 +198,214 @@ def _rotate_file(path, keep=3):
             shutil.move(src, dst)
     if os.path.exists(path):
         shutil.move(path, f"{path}.1")
+
+
+# ---------------------------------------------------------------------------
+# Lidarr API integration
+# ---------------------------------------------------------------------------
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Block redirects to prevent API key leaking to a redirected host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            newurl, code, "Redirect blocked for security", headers, fp)
+
+
+def _lidarr_request(url, api_key, method="GET", data=None, timeout=30):
+    """Make an authenticated request to the Lidarr API."""
+    headers = {
+        "X-Api-Key": api_key,
+        "Content-Type": "application/json",
+    }
+    body = json.dumps(data).encode("utf-8") if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    # Extract just the API path for logging (never log the full URL or host)
+    api_path = url.split("/api/", 1)[-1] if "/api/" in url else "?"
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        logger.error("Lidarr API %s /api/%s -> HTTP %d",
+                     method, api_path, e.code)
+        return None
+    except (urllib.error.URLError, OSError) as e:
+        logger.error("Lidarr API connection failed (%s /api/%s)",
+                     method, api_path)
+        logger.debug("Lidarr connection error detail: %s", e)
+        return None
+
+
+def _load_lidarr_api_key():
+    """Load Lidarr API key from env var or Docker secret. Never log it."""
+    key = os.environ.get("LIDARR_API_KEY", "")
+    if not key:
+        secret_path = "/run/secrets/lidarr_api_key"
+        if os.path.exists(secret_path):
+            with open(secret_path, 'r') as f:
+                key = f.read().strip()
+    return key
+
+
+def _lidarr_get_artists(base_url, api_key):
+    """Fetch all artists. Returns list of {id, path} dicts."""
+    result = _lidarr_request(f"{base_url}/api/v1/artist", api_key)
+    if result is None:
+        return []
+    return [{"id": a["id"], "path": a["path"]} for a in result]
+
+
+def _lidarr_get_trackfiles(base_url, api_key, artist_id):
+    """Fetch all track files for an artist."""
+    url = f"{base_url}/api/v1/trackfile?artistId={artist_id}"
+    result = _lidarr_request(url, api_key)
+    if result is None:
+        return []
+    return [{"id": tf["id"], "path": tf["path"],
+             "albumId": tf.get("albumId", 0)} for tf in result]
+
+
+def _lidarr_get_album_trackfiles(base_url, api_key, album_id):
+    """Fetch all track files for an album."""
+    url = f"{base_url}/api/v1/trackfile?albumId={album_id}"
+    result = _lidarr_request(url, api_key)
+    if result is None:
+        return []
+    return [{"id": tf["id"], "path": tf["path"],
+             "albumId": tf.get("albumId", 0)} for tf in result]
+
+
+def _lidarr_delete_album(base_url, api_key, album_id):
+    """Delete an album via Lidarr API (removes files + DB records)."""
+    url = f"{base_url}/api/v1/album/{album_id}?deleteFiles=true"
+    return _lidarr_request(url, api_key, method="DELETE")
+
+
+def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
+    """Bulk delete track files via Lidarr API."""
+    url = f"{base_url}/api/v1/trackfile/bulk"
+    data = {"trackFileIds": track_file_ids}
+    return _lidarr_request(url, api_key, method="DELETE", data=data)
+
+
+def _lidarr_refresh_artists(base_url, api_key, artist_ids):
+    """Trigger a rescan for the given artists."""
+    url = f"{base_url}/api/v1/command"
+    data = {"name": "RefreshArtist", "artistIds": list(artist_ids)}
+    return _lidarr_request(url, api_key, method="POST", data=data)
+
+
+def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
+    """Delete corrupt files via Lidarr API. Falls back to os.remove for
+    files not tracked by Lidarr. Returns count of files deleted."""
+    artists = _lidarr_get_artists(base_url, api_key)
+    if not artists:
+        logger.warning("Lidarr: could not fetch artists, "
+                       "falling back to direct deletion")
+        return None
+
+    # Map corrupt file paths to artist IDs by matching path prefixes
+    path_to_artist = {}
+    for corrupt_path in corrupt_paths:
+        for artist in artists:
+            artist_path = artist["path"].rstrip("/")
+            if corrupt_path.startswith(artist_path + "/"):
+                path_to_artist[corrupt_path] = artist["id"]
+                break
+
+    lidarr_paths = set(path_to_artist.keys())
+    non_lidarr_paths = [p for p in corrupt_paths if p not in lidarr_paths]
+
+    # Fetch track files for each affected artist and map paths to IDs
+    affected_artist_ids = set(path_to_artist.values())
+    path_to_trackfile = {}
+    trackfile_to_album = {}
+    for artist_id in affected_artist_ids:
+        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist_id)
+        for tf in trackfiles:
+            path_to_trackfile[tf["path"]] = tf["id"]
+            trackfile_to_album[tf["id"]] = tf["albumId"]
+
+    # Group corrupt files by album to decide album-level vs track-level delete
+    album_corrupt_ids = {}
+    unmatched_lidarr = []
+    for corrupt_path in lidarr_paths:
+        tf_id = path_to_trackfile.get(corrupt_path)
+        if tf_id is None:
+            unmatched_lidarr.append(corrupt_path)
+            continue
+        album_id = trackfile_to_album.get(tf_id, 0)
+        if album_id not in album_corrupt_ids:
+            album_corrupt_ids[album_id] = []
+        album_corrupt_ids[album_id].append(tf_id)
+
+    deleted = 0
+    albums_deleted = []
+    tracks_to_delete = []
+
+    with open(log_file, 'a', encoding='utf-8') as log:
+        # For each album, check if ALL tracks are corrupt → album delete
+        for album_id, corrupt_tf_ids in album_corrupt_ids.items():
+            if album_id == 0:
+                tracks_to_delete.extend(corrupt_tf_ids)
+                continue
+            all_album_tfs = _lidarr_get_album_trackfiles(
+                base_url, api_key, album_id)
+            all_album_tf_ids = {tf["id"] for tf in all_album_tfs}
+            corrupt_set = set(corrupt_tf_ids)
+
+            if corrupt_set >= all_album_tf_ids and len(all_album_tf_ids) > 0:
+                result = _lidarr_delete_album(base_url, api_key, album_id)
+                if result is not None:
+                    deleted += len(corrupt_tf_ids)
+                    albums_deleted.append(album_id)
+                    logger.info("  Lidarr: deleted album %d "
+                                "(%d corrupt files)", album_id,
+                                len(corrupt_tf_ids))
+                    log.write(f"LIDARR ALBUM DELETE: album {album_id} "
+                              f"({len(corrupt_tf_ids)} files)\n")
+                else:
+                    tracks_to_delete.extend(corrupt_tf_ids)
+            else:
+                tracks_to_delete.extend(corrupt_tf_ids)
+
+        # Bulk delete individual corrupt tracks
+        if tracks_to_delete:
+            result = _lidarr_delete_trackfiles_bulk(
+                base_url, api_key, tracks_to_delete)
+            if result is not None:
+                deleted += len(tracks_to_delete)
+                logger.info("  Lidarr: deleted %d individual track files",
+                            len(tracks_to_delete))
+                log.write(f"LIDARR TRACK DELETE: "
+                          f"{len(tracks_to_delete)} files\n")
+            else:
+                logger.error("  Lidarr: bulk track delete failed, "
+                             "falling back to direct deletion")
+                for tf_path in lidarr_paths:
+                    if path_to_trackfile.get(tf_path) in tracks_to_delete:
+                        non_lidarr_paths.append(tf_path)
+
+        # Direct delete for files not in Lidarr
+        for path in non_lidarr_paths + unmatched_lidarr:
+            try:
+                os.remove(path)
+                deleted += 1
+                log.write(f"DIRECT DELETE (not in Lidarr): {path}\n")
+                logger.info("  Deleted (not in Lidarr): %s", path)
+            except OSError as e:
+                log.write(f"ERROR deleting {path}: {e}\n")
+                logger.error("  ERROR: %s - %s", path, e)
+
+        # Refresh affected artists so Lidarr detects changes
+        if affected_artist_ids:
+            _lidarr_refresh_artists(
+                base_url, api_key, list(affected_artist_ids))
+            logger.info("  Lidarr: triggered refresh for %d artists",
+                        len(affected_artist_ids))
+
+    return deleted
 
 
 def _display_folder_files(corrupt_files, corrupt_details):
@@ -760,7 +970,8 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     return corrupted
 
 
-def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
+def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
+                    lidarr_url=None, lidarr_api_key=None):
     """Auto-delete corrupt files that have been known for longer than DELETE_AFTER days.
     Aborts if more than max_deletes files would be removed (safety threshold)."""
     tracking_path = os.path.join(log_dir, "corrupt_tracking.json")
@@ -824,18 +1035,35 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50):
     logger.info("Auto-deleting %d corrupt files (older than %d days):",
                 len(to_delete), delete_after_days)
     deleted = 0
-    with open(log_file, 'a', encoding='utf-8') as log:
-        log.write(f"\nAuto-delete ({delete_after_days}d threshold): {len(to_delete)} files\n")
-        for path in to_delete:
-            try:
-                os.remove(path)
-                deleted += 1
-                del tracking[path]
-                log.write(f"AUTO-DELETED: {path}\n")
-                logger.info("  Deleted: %s", path)
-            except OSError as e:
-                log.write(f"ERROR auto-deleting {path}: {e}\n")
-                logger.error("  ERROR: %s - %s", path, e)
+
+    if lidarr_url and lidarr_api_key:
+        logger.info("  Using Lidarr API for deletion")
+        result = _lidarr_delete_corrupt(
+            lidarr_url, lidarr_api_key, to_delete, log_file)
+        if result is not None:
+            deleted = result
+            for path in to_delete:
+                if not os.path.exists(path):
+                    tracking.pop(path, None)
+        else:
+            logger.warning("  Lidarr integration failed, "
+                           "falling back to direct deletion")
+            lidarr_url = None
+
+    if not lidarr_url or not lidarr_api_key:
+        with open(log_file, 'a', encoding='utf-8') as log:
+            log.write(f"\nAuto-delete ({delete_after_days}d threshold): "
+                      f"{len(to_delete)} files\n")
+            for path in to_delete:
+                try:
+                    os.remove(path)
+                    deleted += 1
+                    tracking.pop(path, None)
+                    log.write(f"AUTO-DELETED: {path}\n")
+                    logger.info("  Deleted: %s", path)
+                except OSError as e:
+                    log.write(f"ERROR auto-deleting {path}: {e}\n")
+                    logger.error("  ERROR: %s - %s", path, e)
 
     logger.info("  %d/%d files deleted", deleted, len(to_delete))
     if to_keep:
@@ -921,6 +1149,8 @@ def _load_config():
         "max_auto_delete": _parse_env_int("MAX_AUTO_DELETE", 50),
         "min_age_minutes": _parse_env_int("MIN_FILE_AGE", 30, "minutes"),
         "max_log_mb": _parse_env_int("MAX_LOG_MB", 50, "MB"),
+        "lidarr_url": os.environ.get("LIDARR_URL", "").rstrip("/"),
+        "lidarr_api_key": _load_lidarr_api_key(),
     }
 
 
@@ -945,12 +1175,25 @@ def main():
     max_auto_delete = cfg["max_auto_delete"]
     min_age_minutes = cfg["min_age_minutes"]
     max_log_mb = cfg["max_log_mb"]
+    lidarr_url = cfg["lidarr_url"]
+    lidarr_api_key = cfg["lidarr_api_key"]
 
     os.makedirs(log_dir, exist_ok=True)
 
     setup_logging(cfg["log_level"], log_file)
 
     logger.info("BeatsCheck v%s starting", __version__)
+    if lidarr_url and not lidarr_url.startswith(("http://", "https://")):
+        logger.error("LIDARR_URL must start with http:// or https://")
+        sys.exit(1)
+
+    if lidarr_url and lidarr_api_key:
+        logger.info("  Lidarr integration: enabled")
+        logger.debug("  Lidarr URL: %s", re.sub(
+            r'://.*@', '://****@',
+            re.sub(r'(https?://)(.+)', r'\1****', lidarr_url)))
+    elif lidarr_url:
+        logger.warning("  Lidarr URL set but API key missing — disabled")
 
     if mode == "delete":
         corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
@@ -987,7 +1230,9 @@ def main():
                  min_age_minutes)
 
         if delete_after > 0:
-            run_auto_delete(log_dir, log_file, delete_after, max_auto_delete)
+            run_auto_delete(
+                log_dir, log_file, delete_after, max_auto_delete,
+                lidarr_url, lidarr_api_key)
 
         if shutdown_requested:
             break
