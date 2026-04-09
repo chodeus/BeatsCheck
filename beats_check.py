@@ -1126,9 +1126,9 @@ def _load_config():
         log_dir = os.environ.get("CONFIG_DIR", "/config").rstrip("/")
         log_file = os.path.join(log_dir, "beats_check.log")
 
-    mode = os.environ.get("MODE", "report").lower()
-    if mode not in ("report", "move", "delete"):
-        print(f"Invalid MODE '{mode}'. Must be: report, move, delete")
+    mode = (os.environ.get("MODE") or "setup").lower()
+    if mode not in ("report", "move", "delete", "setup"):
+        print(f"Invalid MODE '{mode}'. Must be: report, move, delete, setup")
         sys.exit(1)
 
     workers = _parse_env_int("WORKERS", 4)
@@ -1152,6 +1152,36 @@ def _load_config():
         "lidarr_url": os.environ.get("LIDARR_URL", "").rstrip("/"),
         "lidarr_api_key": _load_lidarr_api_key(),
     }
+
+
+def _run_setup_idle(log_dir):
+    """Setup mode — sit idle until container is stopped."""
+    logger.info("Setup mode — container is idle. "
+                "Change MODE to report and use rescan when ready.")
+    heartbeat_path = os.path.join(log_dir, ".heartbeat")
+    rescan_path = os.path.join(log_dir, ".rescan")
+    while not shutdown_requested:
+        if os.path.exists(rescan_path):
+            try:
+                os.remove(rescan_path)
+            except OSError:
+                pass
+            logger.info("Rescan requested — change MODE to report first.")
+        _write_heartbeat(heartbeat_path)
+        time.sleep(10)
+
+
+def _log_lidarr_status(lidarr_url, lidarr_api_key):
+    """Log Lidarr integration status without exposing credentials."""
+    if lidarr_url and not lidarr_url.startswith(("http://", "https://")):
+        logger.error("LIDARR_URL must start with http:// or https://")
+        sys.exit(1)
+    if lidarr_url and lidarr_api_key:
+        logger.info("  Lidarr integration: enabled")
+        masked = re.sub(r'(https?://)(.+)', r'\1****', lidarr_url)
+        logger.debug("  Lidarr URL: %s", masked)
+    elif lidarr_url:
+        logger.warning("  Lidarr URL set but API key missing — disabled")
 
 
 def main():
@@ -1183,17 +1213,11 @@ def main():
     setup_logging(cfg["log_level"], log_file)
 
     logger.info("BeatsCheck v%s starting", __version__)
-    if lidarr_url and not lidarr_url.startswith(("http://", "https://")):
-        logger.error("LIDARR_URL must start with http:// or https://")
-        sys.exit(1)
+    _log_lidarr_status(lidarr_url, lidarr_api_key)
 
-    if lidarr_url and lidarr_api_key:
-        logger.info("  Lidarr integration: enabled")
-        logger.debug("  Lidarr URL: %s", re.sub(
-            r'://.*@', '://****@',
-            re.sub(r'(https?://)(.+)', r'\1****', lidarr_url)))
-    elif lidarr_url:
-        logger.warning("  Lidarr URL set but API key missing — disabled")
+    if mode == "setup":
+        _run_setup_idle(log_dir)
+        return
 
     if mode == "delete":
         corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
