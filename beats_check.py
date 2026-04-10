@@ -34,6 +34,42 @@ def handle_shutdown(signum, frame):
     logger.info("Shutdown requested, finishing in-progress files...")
 
 
+def _get_host_mount_path(container_path):
+    """Resolve the host path for a container mount point by reading
+    /proc/self/mountinfo. Returns the host path or None."""
+    real = os.path.realpath(container_path)
+    try:
+        with open("/proc/self/mountinfo", "r") as f:
+            best = None
+            for line in f:
+                parts = line.split()
+                if len(parts) < 5:
+                    continue
+                mount_point = parts[4]
+                # Find the mount root (host path) after the " - " separator
+                try:
+                    sep = parts.index("-")
+                    if sep + 2 < len(parts):
+                        mount_source = parts[sep + 2]
+                        mount_root = parts[3]
+                except (ValueError, IndexError):
+                    continue
+                if real == mount_point or real.startswith(mount_point + "/"):
+                    # Prefer the longest (most specific) mount point
+                    if best is None or len(mount_point) > len(best[0]):
+                        best = (mount_point, mount_source, mount_root)
+            if best:
+                mount_point, source, root = best
+                # Construct full host path
+                rel = real[len(mount_point):].lstrip("/")
+                if root and root != "/":
+                    return os.path.join(source, root.lstrip("/"), rel)
+                return os.path.join(source, rel) if rel else source
+    except OSError:
+        pass
+    return None
+
+
 def format_size(bytes_val):
     if bytes_val >= 1024 ** 4:
         return f"{bytes_val / 1024 ** 4:.1f} TB"
@@ -318,7 +354,11 @@ def _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
     logger.info("BeatsCheck v%s — %s mode, %d workers", __version__, mode, workers)
     logger.info("  Library: %d files (%s), %d to scan (%d already processed)",
                 len(all_files), format_size(total_library_size), total, skipped)
-    logger.debug("  Music:   %s", input_folder)
+    host_path = _get_host_mount_path(input_folder)
+    if host_path:
+        logger.debug("  Music:   %s (host: %s)", input_folder, host_path)
+    else:
+        logger.debug("  Music:   %s", input_folder)
     logger.debug("  Log:     %s", log_file)
     logger.debug("  Corrupt: %s", corrupt_list_path)
     if mode == "move":
