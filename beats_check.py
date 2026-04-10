@@ -330,7 +330,7 @@ def collect_audio_files(input_folder, min_age_minutes=30):
 def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
                          corrupt_log, log, existing_corrupt, corrupt_details):
     logger.info("CORRUPT: %s", file_path)
-    logger.info("         %s", reason)
+    logger.debug("         %s", reason)
 
     try:
         nlinks = os.stat(file_path).st_nlink
