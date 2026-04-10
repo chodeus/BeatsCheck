@@ -240,8 +240,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def _read_body(self):
-        length = int(self.headers.get('Content-Length', 0))
-        if length == 0:
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+        except (ValueError, TypeError):
+            return {}
+        if length <= 0:
             return {}
         try:
             return json.loads(self.rfile.read(length))
@@ -266,13 +269,16 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response({"files": files, "count": len(files)})
 
         elif self.path.startswith('/api/log'):
-            # Parse ?lines=N
+            # Parse ?lines=N with bounds checking
             lines = 200
             if '?' in self.path:
-                params = dict(p.split('=', 1) for p in
-                              self.path.split('?', 1)[1].split('&')
-                              if '=' in p)
-                lines = int(params.get('lines', 200))
+                try:
+                    params = dict(p.split('=', 1) for p in
+                                  self.path.split('?', 1)[1].split('&')
+                                  if '=' in p)
+                    lines = max(1, min(int(params.get('lines', 200)), 10000))
+                except (ValueError, TypeError):
+                    lines = 200
             text = _read_log_tail(config_dir, lines)
             self._json_response({"log": text})
 
@@ -325,7 +331,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             if not files:
                 self._json_response({"error": "no files specified"}, 400)
                 return
-            # Security: only allow deleting files listed in corrupt.txt
+            # Single read of corrupt.txt — used for validation and update
             corrupt_path = os.path.join(config_dir, "corrupt.txt")
             allowed = set()
             if os.path.isfile(corrupt_path):
@@ -341,6 +347,10 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                     errors.append({"path": fp, "error": "not in corrupt list"})
                     continue
                 try:
+                    # Reject symlinks to prevent targeting files outside library
+                    if os.path.islink(fp):
+                        errors.append({"path": fp, "error": "symlink rejected"})
+                        continue
                     real = os.path.realpath(fp)
                     if os.path.isfile(real):
                         os.remove(real)
@@ -349,13 +359,10 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                         errors.append({"path": fp, "error": "not found"})
                 except OSError as e:
                     errors.append({"path": fp, "error": str(e)})
-            # Update corrupt.txt
-            corrupt_path = os.path.join(config_dir, "corrupt.txt")
-            if os.path.isfile(corrupt_path):
+            # Update corrupt.txt from the same set we validated against
+            if deleted:
+                remaining = sorted(allowed - set(deleted))
                 try:
-                    with open(corrupt_path, 'r') as f:
-                        remaining = [l.strip() for l in f
-                                     if l.strip() and l.strip() not in deleted]
                     with open(corrupt_path, 'w') as f:
                         for p in remaining:
                             f.write(p + '\n')

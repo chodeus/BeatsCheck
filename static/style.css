@@ -263,8 +263,6 @@ thead th {
   letter-spacing: .03em;
   color: var(--text-muted);
   border-bottom: 2px solid var(--border);
-  position: sticky;
-  top: 0;
   background: var(--bg);
 }
 tbody td {

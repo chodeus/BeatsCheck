@@ -37,6 +37,10 @@ async function api(path, opts = {}) {
       headers: { 'Content-Type': 'application/json' },
       ...opts,
     });
+    if (!res.ok) {
+      console.error('API error:', res.status, res.statusText);
+      return null;
+    }
     return await res.json();
   } catch (e) {
     console.error('API error:', e);
@@ -319,7 +323,7 @@ function renderConfigForm(values) {
     }
     input.id = 'cfg-' + item.key;
     input.name = item.key;
-    input.value = values[item.key] || '';
+    input.value = item.key in values ? values[item.key] : '';
     group.appendChild(input);
     container.appendChild(group);
   });
@@ -334,7 +338,10 @@ async function saveConfig(e) {
     config[key] = val;
   }
   const status = document.getElementById('config-status');
+  const submitBtn = form.querySelector('[type="submit"]');
+  submitBtn.disabled = true;
   const res = await apiPost('config', { config });
+  submitBtn.disabled = false;
   if (res && res.ok) {
     status.textContent = 'Saved!';
     status.className = 'form-status';
@@ -369,7 +376,11 @@ function stopLogPoll() {
 
 // --- Rescan ---
 async function triggerRescan(mode, fresh) {
+  // Disable all rescan buttons during request
+  const btns = document.querySelectorAll('.action-bar .btn');
+  btns.forEach(b => b.disabled = true);
   const res = await apiPost('rescan', { mode, fresh });
+  btns.forEach(b => b.disabled = false);
   if (res && res.ok) {
     showToast('Rescan triggered (' + mode + (fresh ? ', fresh' : '') + ')', 'success');
     setTimeout(refreshDashboard, 1000);
