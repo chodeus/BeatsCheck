@@ -132,6 +132,20 @@ docker exec beatscheck rescan report
 
 ## Configuration
 
+### Config File (Recommended for Lidarr API Key)
+
+On first run, BeatsCheck creates a config file at `/config/beatscheck.conf` with all options documented and commented out. Edit this file to set any values — especially the Lidarr API key, which stays out of `docker inspect` when stored here.
+
+```conf
+## Lidarr API key (Settings > General in Lidarr).
+## Storing the key here keeps it out of 'docker inspect' output.
+lidarr_api_key = "your-api-key-here"
+```
+
+Environment variables override the config file, which overrides defaults.
+
+### Environment Variables
+
 | Env Var | Default | Description |
 |---------|---------|-------------|
 | `MUSIC_DIR` | `/music` | Path to music library inside container |
@@ -150,7 +164,7 @@ docker exec beatscheck rescan report
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
 | `LIDARR_URL` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
-| `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
+| `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Recommended: use config file instead. Also reads from `/run/secrets/lidarr_api_key` |
 | `LIDARR_SEARCH` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
 | `LIDARR_BLOCKLIST` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
 
@@ -360,17 +374,17 @@ All Lidarr API operations are fail-safe:
 **Security:**
 - API key is sent only via HTTP header, never in URLs or logs
 - Lidarr URL is masked in all log output
-- Supports Docker secrets (`/run/secrets/lidarr_api_key`)
+- Config file support — store the API key in `/config/beatscheck.conf` to keep it out of `docker inspect` and process listings
+- Also supports Docker secrets (`/run/secrets/lidarr_api_key`)
 - HTTP redirects are blocked to prevent credential leaking
 - All API calls have explicit timeouts
 
-```yaml
-environment:
-  - DELETE_AFTER=7
-  - LIDARR_URL=http://lidarr:8686
-  - LIDARR_API_KEY=your-api-key-here
-  - LIDARR_SEARCH=true
-  - LIDARR_BLOCKLIST=true
+```conf
+## /config/beatscheck.conf — API key stays off the command line
+lidarr_url = "http://lidarr:8686"
+lidarr_api_key = "your-api-key-here"
+lidarr_search = true
+lidarr_blocklist = true
 ```
 
 ## Updating

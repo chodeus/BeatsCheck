@@ -46,6 +46,8 @@ services:
       - UMASK=002
       ## Lidarr integration (optional): auto-delete via Lidarr API
       ## Lidarr handles file deletion + database cleanup + re-download
+      ## Recommended: set these in /config/beatscheck.conf instead of here
+      ## so the API key doesn't appear in 'docker inspect' output.
       # - LIDARR_URL=http://lidarr:8686
       # - LIDARR_API_KEY=your-api-key-here
       ## Queue album search after auto-delete so Lidarr re-downloads (default: false)

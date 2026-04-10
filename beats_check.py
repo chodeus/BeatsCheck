@@ -1829,6 +1829,116 @@ def setup_logging(log_level):
     root.addHandler(console)
 
 
+_DEFAULT_CONFIG = """\
+#######################################################
+##       BeatsCheck Configuration File               ##
+#######################################################
+##  All values below show defaults. Uncomment and    ##
+##  edit only what you need to change.               ##
+##  Environment variables override config file.      ##
+##  https://github.com/chodeus/BeatsCheck            ##
+#######################################################
+
+## Scan mode: setup (idle), report (log only), move (quarantine), delete
+# mode = "report"
+
+## Parallel ffmpeg decode workers (2=conservative, 4=balanced, 8+=fast)
+# workers = 4
+
+## Hours between scans (0=once, 168=weekly, 24=daily)
+# run_interval = 168
+
+## Auto-delete corrupt files after N days (0=never)
+# delete_after = 0
+
+## Safety: abort auto-delete if more than N files flagged (0=no limit)
+# max_auto_delete = 50
+
+## Skip files modified within N minutes (avoids flagging active downloads)
+# min_file_age = 30
+
+## Log level: DEBUG, INFO, WARNING, ERROR
+# log_level = "INFO"
+
+## Rotate log when log exceeds N MB (0=never)
+# max_log_mb = 50
+
+##----- Lidarr Integration (optional) ----------------
+## When configured, BeatsCheck uses the Lidarr API to
+## delete corrupt files so Lidarr can clean its database
+## and optionally re-download.
+
+## Lidarr instance URL
+# lidarr_url = "http://lidarr:8686"
+
+## Lidarr API key (Settings > General in Lidarr).
+## Storing the key here keeps it out of 'docker inspect' output.
+# lidarr_api_key = ""
+
+## Queue album search after auto-delete so Lidarr re-downloads (5/hour)
+# lidarr_search = false
+
+## Blocklist corrupt release so Lidarr won't re-download the same copy
+# lidarr_blocklist = false
+"""
+
+# Maps config-file keys (lowercase) to environment variable names.
+_CONFIG_KEY_MAP = {
+    'mode': 'MODE',
+    'workers': 'WORKERS',
+    'run_interval': 'RUN_INTERVAL',
+    'delete_after': 'DELETE_AFTER',
+    'max_auto_delete': 'MAX_AUTO_DELETE',
+    'min_file_age': 'MIN_FILE_AGE',
+    'log_level': 'LOG_LEVEL',
+    'max_log_mb': 'MAX_LOG_MB',
+    'lidarr_url': 'LIDARR_URL',
+    'lidarr_api_key': 'LIDARR_API_KEY',
+    'lidarr_search': 'LIDARR_SEARCH',
+    'lidarr_blocklist': 'LIDARR_BLOCKLIST',
+}
+
+
+def _write_default_config(config_dir):
+    """Write the default beatscheck.conf template if it doesn't exist."""
+    path = os.path.join(config_dir, "beatscheck.conf")
+    if os.path.exists(path):
+        return
+    try:
+        with open(path, 'w') as f:
+            f.write(_DEFAULT_CONFIG)
+    except OSError:
+        pass
+
+
+def _apply_config_file(config_dir):
+    """Load beatscheck.conf and set env vars for any values not already
+    set in the environment.  This gives env vars priority over the file."""
+    path = os.path.join(config_dir, "beatscheck.conf")
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                key = key.strip().lower()
+                value = value.strip()
+                # Strip surrounding quotes
+                if (len(value) >= 2 and value[0] == value[-1]
+                        and value[0] in ('"', "'")):
+                    value = value[1:-1]
+                env_name = _CONFIG_KEY_MAP.get(key)
+                if env_name and env_name not in os.environ:
+                    os.environ[env_name] = value
+    except OSError:
+        pass
+
+
 def _parse_env_int(name, default, label=None):
     """Parse an integer environment variable, exit on error."""
     try:
@@ -1857,7 +1967,10 @@ def _parse_env_bool(name, default=False):
 
 
 def _load_config():
-    """Load configuration from CLI args or environment variables."""
+    """Load configuration from CLI args, config file, or environment.
+
+    Priority: env vars > beatscheck.conf > defaults.
+    """
     if len(sys.argv) == 4:
         input_folder = sys.argv[1].rstrip("/")
         output_folder = sys.argv[2].rstrip("/")
@@ -1868,6 +1981,11 @@ def _load_config():
         output_folder = os.environ.get("OUTPUT_DIR", "/corrupted").rstrip("/")
         log_dir = os.environ.get("CONFIG_DIR", "/config").rstrip("/")
         log_file = os.path.join(log_dir, "beats_check.log")
+
+    # Write default config template on first run, then load values.
+    # Config file values fill in for any env vars not already set.
+    _write_default_config(log_dir)
+    _apply_config_file(log_dir)
 
     mode = (os.environ.get("MODE") or "setup").lower()
     if mode not in ("report", "move", "delete", "setup"):
