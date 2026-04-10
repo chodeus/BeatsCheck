@@ -737,7 +737,8 @@ def _handle_files_delete_lidarr(file_paths, log, corrupt_details,
                 print(f"           -> [{i}/{total}] Deleted "
                       f"{len(tf_ids)} trackfiles — waiting "
                       f"for Lidarr search")
-                _lidarr_wait_for_search(lidarr_url, lidarr_api_key)
+                _lidarr_wait_for_search(
+                    lidarr_url, lidarr_api_key, album_id)
                 print(f"           -> [{i}/{total}] Search complete")
             else:
                 print(f"           -> [{i}/{total}] Deleted "
@@ -864,7 +865,10 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
                   f"track files ({len(album_ids)} albums)")
             if has_monitored:
                 print("           -> Waiting for Lidarr search")
-                _lidarr_wait_for_search(lidarr_url, lidarr_api_key)
+                # Pass first monitored album for download check
+                first_aid = next(iter(album_ids), None)
+                _lidarr_wait_for_search(
+                    lidarr_url, lidarr_api_key, first_aid)
                 print("           -> Search complete")
         else:
             print("           -> ERROR: Lidarr bulk delete failed. "
@@ -1491,10 +1495,12 @@ def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
     return _lidarr_request(url, api_key, method="DELETE", data=data)
 
 
-def _lidarr_wait_for_search(base_url, api_key, log_dir=None):
+def _lidarr_wait_for_search(base_url, api_key, album_id=None,
+                            log_dir=None):
     """Wait for any active AlbumSearch commands in Lidarr to complete.
     Called after each album deletion so Lidarr finishes searching
-    before the next album is deleted. Polls every 10s, 5 min timeout."""
+    before the next album is deleted. Polls every 10s, 5 min timeout.
+    If album_id is provided, checks whether Lidarr grabbed a replacement."""
     heartbeat_path = os.path.join(log_dir, ".heartbeat") if log_dir else None
     timeout = time.time() + 300
     while time.time() < timeout and not shutdown_requested:
@@ -1507,6 +1513,15 @@ def _lidarr_wait_for_search(base_url, api_key, log_dir=None):
                   and c.get("status", "").lower()
                   in ("queued", "started")]
         if not active:
+            # Check if Lidarr found a replacement
+            if album_id:
+                tfs = _lidarr_get_trackfiles_by_album(
+                    base_url, api_key, album_id)
+                if tfs:
+                    logger.debug("    Lidarr: re-download grabbed "
+                                 "(%d trackfiles)", len(tfs))
+                else:
+                    logger.debug("    Lidarr: no replacement found")
             return
         if heartbeat_path:
             _write_heartbeat(heartbeat_path)
@@ -1577,10 +1592,9 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                 monitored = album.get("monitored", True) if album else True
                 if monitored:
                     logger.info("%s: deleted %d trackfiles — "
-                                "waiting for Lidarr search",
-                                prefix, len(tf_ids))
+                                "waiting for search", prefix, len(tf_ids))
                     _lidarr_wait_for_search(
-                        base_url, api_key, log_dir)
+                        base_url, api_key, album_id, log_dir)
                     logger.info("%s: search complete", prefix)
                 else:
                     logger.info("%s: deleted %d trackfiles "
