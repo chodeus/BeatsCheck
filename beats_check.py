@@ -1,13 +1,15 @@
+import concurrent.futures
 import fcntl
 import json
 import logging
 import os
 import re
-import subprocess
-import sys
 import shutil
 import signal
+import subprocess
+import sys
 import time
+import types
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +25,8 @@ AUDIO_EXTENSIONS = {
 shutdown_requested = False
 logger = logging.getLogger("beatscheck")
 
+
+# --- Utilities ---
 
 def handle_shutdown(signum, frame):
     global shutdown_requested
@@ -41,6 +45,150 @@ def format_size(bytes_val):
         return f"{bytes_val / 1024:.1f} KB"
     return f"{bytes_val} B"
 
+
+def format_eta(seconds):
+    if seconds < 0:
+        return "unknown"
+    h, remainder = divmod(int(seconds), 3600)
+    m, s = divmod(remainder, 60)
+    if h > 0:
+        return f"{h}h{m:02d}m"
+    if m > 0:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+# --- File I/O ---
+
+def write_json_atomic(path, data):
+    """Write JSON data atomically using a temp file + rename."""
+    tmp_path = path + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2)
+    os.rename(tmp_path, path)
+
+
+def _load_json(path, default=None):
+    """Load a JSON file, returning default if missing or invalid."""
+    if default is None:
+        default = {}
+    if not os.path.exists(path):
+        return default
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, ValueError):
+        logger.warning("Corrupt JSON file %s — using defaults", path)
+        return default
+
+
+def _load_lines_as_set(path):
+    """Load a text file as a set of non-empty stripped lines."""
+    if not os.path.exists(path):
+        return set()
+    with open(path, 'r', encoding='utf-8') as f:
+        return {line.strip() for line in f if line.strip()}
+
+
+def _rotate_file(path, keep=3):
+    """Rotate path -> path.1 -> path.2 -> ... keeping last N copies."""
+    oldest = f"{path}.{keep}"
+    if os.path.exists(oldest):
+        os.remove(oldest)
+    for i in range(keep - 1, 0, -1):
+        src = f"{path}.{i}"
+        dst = f"{path}.{i + 1}"
+        if os.path.exists(src):
+            shutil.move(src, dst)
+    if os.path.exists(path):
+        shutil.move(path, f"{path}.1")
+
+
+def _total_file_size(files):
+    """Sum file sizes, ignoring missing files."""
+    total = 0
+    for f in files:
+        try:
+            total += os.path.getsize(f)
+        except OSError:
+            pass
+    return total
+
+
+# --- Heartbeat & idle ---
+
+def _write_heartbeat(heartbeat_path):
+    """Write current timestamp to heartbeat file for healthcheck."""
+    try:
+        with open(heartbeat_path, 'w') as f:
+            f.write(str(int(time.time())))
+    except OSError:
+        pass
+
+
+def _read_rescan_trigger(log_dir):
+    """Check for .rescan file. Returns mode override string or empty string."""
+    rescan_path = os.path.join(log_dir, ".rescan")
+    if not os.path.exists(rescan_path):
+        return None
+    try:
+        with open(rescan_path, 'r') as f:
+            content = f.read().strip()
+        os.remove(rescan_path)
+    except OSError:
+        content = ""
+    return content
+
+
+def _idle_wait(log_dir, timeout_seconds, lidarr_url=None, lidarr_api_key=None):
+    """Sleep until timeout, shutdown, or .rescan trigger.
+    Drains the Lidarr search queue during idle (max 5/hour).
+    Returns mode override string if rescan triggered, False otherwise."""
+    heartbeat_path = os.path.join(log_dir, ".heartbeat")
+    deadline = time.time() + timeout_seconds if timeout_seconds is not None else None
+    last_search_time = 0
+    while not shutdown_requested:
+        _write_heartbeat(heartbeat_path)
+        trigger = _read_rescan_trigger(log_dir)
+        if trigger is not None:
+            logger.info("Rescan requested.")
+            return trigger if trigger else True
+        if deadline and time.time() >= deadline:
+            return False
+        # Drain search queue: 1 album every 720s (5/hour)
+        if (lidarr_url and lidarr_api_key
+                and time.time() - last_search_time >= 720):
+            if _search_queue_drain_one(log_dir, lidarr_url, lidarr_api_key):
+                last_search_time = time.time()
+        time.sleep(30)
+    return False
+
+
+# --- Scan lock ---
+
+def _acquire_scan_lock(log_dir):
+    """Acquire an exclusive file lock for scanning. Returns the lock fd."""
+    lock_path = os.path.join(log_dir, ".scanning")
+    lf = open(lock_path, 'w')
+    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    lf.write(str(os.getpid()))
+    lf.flush()
+    return lf
+
+
+def _wait_for_scan_lock(log_dir):
+    """Block until the scan lock is available, then release immediately."""
+    lock_path = os.path.join(log_dir, ".scanning")
+    if not os.path.exists(lock_path):
+        return
+    try:
+        with open(lock_path, 'r') as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+    except OSError:
+        pass
+
+
+# --- Scanning ---
 
 def _clean_ffmpeg_errors(stderr):
     """Strip ffmpeg memory addresses and internal codec references from errors."""
@@ -123,301 +271,255 @@ def collect_audio_files(input_folder, min_age_minutes=30):
     return files
 
 
-def format_eta(seconds):
-    if seconds < 0:
-        return "unknown"
-    h, remainder = divmod(int(seconds), 3600)
-    m, s = divmod(remainder, 60)
-    if h > 0:
-        return f"{h}h{m:02d}m"
-    if m > 0:
-        return f"{m}m{s:02d}s"
-    return f"{s}s"
+def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
+                         corrupt_log, log, existing_corrupt, corrupt_details):
+    logger.info("CORRUPT: %s", file_path)
+    logger.info("         %s", reason)
 
-
-def get_already_processed_files(log_dir):
-    """Load the set of already-processed file paths from processed.txt."""
-    processed_path = os.path.join(log_dir, "processed.txt")
-    if not os.path.exists(processed_path):
-        return set()
-    processed = set()
-    with open(processed_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            path = line.rstrip("\n")
-            if path:
-                processed.add(path)
-    return processed
-
-
-def write_json_atomic(path, data):
-    """Write JSON data atomically using a temp file + rename."""
-    tmp_path = path + ".tmp"
-    with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
-    os.rename(tmp_path, path)
-
-
-def _read_rescan_trigger(log_dir):
-    """Check for .rescan file. Returns mode override string or empty string."""
-    rescan_path = os.path.join(log_dir, ".rescan")
-    if not os.path.exists(rescan_path):
-        return None
     try:
-        with open(rescan_path, 'r') as f:
-            content = f.read().strip()
-        os.remove(rescan_path)
-    except OSError:
-        content = ""
-    return content
-
-
-def _idle_wait(log_dir, timeout_seconds):
-    """Sleep until timeout, shutdown, or .rescan trigger.
-    Returns mode override string if rescan triggered, False otherwise."""
-    heartbeat_path = os.path.join(log_dir, ".heartbeat")
-    deadline = time.time() + timeout_seconds if timeout_seconds else None
-    while not shutdown_requested:
-        _write_heartbeat(heartbeat_path)
-        trigger = _read_rescan_trigger(log_dir)
-        if trigger is not None:
-            logger.info("Rescan requested.")
-            return trigger if trigger else True
-        if deadline and time.time() >= deadline:
-            return False
-        time.sleep(10)
-    return False
-
-
-def _write_heartbeat(heartbeat_path):
-    """Write current timestamp to heartbeat file for healthcheck."""
-    try:
-        with open(heartbeat_path, 'w') as f:
-            f.write(str(int(time.time())))
+        nlinks = os.stat(file_path).st_nlink
+        if nlinks > 1:
+            logger.info("         hardlinked (%d links) — "
+                        "other links share the same data", nlinks)
     except OSError:
         pass
 
+    if file_path not in existing_corrupt:
+        corrupt_log.write(file_path + "\n")
+        corrupt_log.flush()
+        existing_corrupt.add(file_path)
+    corrupt_details[file_path] = reason
 
-def _rotate_file(path, keep=3):
-    """Rotate path -> path.1 -> path.2 -> ... keeping last N copies."""
-    oldest = f"{path}.{keep}"
-    if os.path.exists(oldest):
-        os.remove(oldest)
-    for i in range(keep - 1, 0, -1):
-        src = f"{path}.{i}"
-        dst = f"{path}.{i + 1}"
-        if os.path.exists(src):
-            shutil.move(src, dst)
-    if os.path.exists(path):
-        shutil.move(path, f"{path}.1")
-
-
-# ---------------------------------------------------------------------------
-# Lidarr API integration
-# ---------------------------------------------------------------------------
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Block redirects to prevent API key leaking to a redirected host."""
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        raise urllib.error.HTTPError(
-            newurl, code, "Redirect blocked for security", headers, fp)
+    if mode == "move":
+        rel = os.path.relpath(os.path.dirname(file_path), input_folder)
+        dest_dir = os.path.join(output_folder, rel)
+        os.makedirs(dest_dir, exist_ok=True)
+        dest = os.path.join(dest_dir, os.path.basename(file_path))
+        try:
+            shutil.move(file_path, dest)
+            log.write(f"File moved: {file_path} -> {dest}\n")
+            log.flush()
+            logger.info("         moved -> %s", dest)
+            corrupt_details[dest] = reason
+        except (OSError, shutil.Error) as e:
+            log.write(f"ERROR: Failed to move {file_path}: {e}\n")
+            log.flush()
+            logger.error("         ERROR: failed to move: %s", e)
 
 
-def _lidarr_request(url, api_key, method="GET", data=None, timeout=30):
-    """Make an authenticated request to the Lidarr API."""
-    headers = {
-        "X-Api-Key": api_key,
-        "Content-Type": "application/json",
+def _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
+                     corrupt_list_path, all_files, total_library_size,
+                     total, skipped):
+    """Log the scan configuration banner."""
+    logger.info("BeatsCheck v%s — %s mode, %d workers", __version__, mode, workers)
+    logger.info("  Library: %d files (%s), %d to scan (%d already processed)",
+                len(all_files), format_size(total_library_size), total, skipped)
+    logger.debug("  Music:   %s", input_folder)
+    logger.debug("  Log:     %s", log_file)
+    logger.debug("  Corrupt: %s", corrupt_list_path)
+    if mode == "move":
+        logger.debug("  Output:  %s", output_folder)
+    if mode == "report":
+        logger.info("  (report mode - no files will be moved)")
+
+
+def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
+                   output_folder, scan_stats):
+    """Post-scan cleanup: update state files and write summary."""
+    details_path = os.path.join(log_dir, "corrupt_details.json")
+
+    # Prune corrupt_details to existing files + moved files in output dir
+    output_real = os.path.realpath(output_folder) if output_folder else ""
+    corrupt_details = {
+        p: r for p, r in corrupt_details.items()
+        if os.path.exists(p) or (output_real and
+                                 os.path.realpath(p).startswith(output_real))
     }
-    body = json.dumps(data).encode("utf-8") if data else None
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    opener = urllib.request.build_opener(_NoRedirectHandler)
-    # Extract just the API path for logging (never log the full URL or host)
-    api_path = url.split("/api/", 1)[-1] if "/api/" in url else "?"
-    try:
-        with opener.open(req, timeout=timeout) as resp:
-            raw = resp.read()
-            return json.loads(raw) if raw else {}
-    except urllib.error.HTTPError as e:
-        logger.error("Lidarr API %s /api/%s -> HTTP %d",
-                     method, api_path, e.code)
-        return None
-    except (urllib.error.URLError, OSError) as e:
-        logger.error("Lidarr API connection failed (%s /api/%s)",
-                     method, api_path)
-        logger.debug("Lidarr connection error detail: %s", e)
-        return None
+    write_json_atomic(details_path, corrupt_details)
+
+    # Clean stale entries from corrupt.txt (e.g. files moved in move mode)
+    current_corrupt = _load_lines_as_set(corrupt_list_path)
+    live_corrupt = [p for p in current_corrupt if os.path.exists(p)]
+    with open(corrupt_list_path, 'w', encoding='utf-8') as f:
+        for p in live_corrupt:
+            f.write(p + "\n")
+
+    # Write machine-readable summary
+    summary_path = os.path.join(log_dir, "summary.json")
+    write_json_atomic(summary_path, scan_stats)
+
+    if scan_stats["corrupted"] > 0:
+        logger.info("Corrupt file list: %s", corrupt_list_path)
+        logger.info("Review with: cat %s", corrupt_list_path)
 
 
-def _load_lidarr_api_key():
-    """Load Lidarr API key from env var or Docker secret. Never log it."""
-    key = os.environ.get("LIDARR_API_KEY", "")
-    if not key:
-        secret_path = "/run/secrets/lidarr_api_key"
-        if os.path.exists(secret_path):
-            with open(secret_path, 'r') as f:
-                key = f.read().strip()
-    return key
+def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
+                    mode, workers, corrupt_list_path, min_age_minutes):
+    """Inner scan logic."""
+    already_processed = _load_lines_as_set(os.path.join(log_dir, "processed.txt"))
+    processed_path = os.path.join(log_dir, "processed.txt")
 
+    logger.debug("Scanning for audio files...")
+    all_files = collect_audio_files(input_folder, min_age_minutes)
+    total_library_size = _total_file_size(all_files)
 
-def _lidarr_get_artists(base_url, api_key):
-    """Fetch all artists. Returns list of {id, path} dicts."""
-    result = _lidarr_request(f"{base_url}/api/v1/artist", api_key)
-    if result is None:
-        return []
-    return [{"id": a["id"], "path": a["path"]} for a in result]
+    files_to_check = [f for f in all_files if f not in already_processed]
+    skipped = len(all_files) - len(files_to_check)
+    total = len(files_to_check)
 
+    _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
+                     corrupt_list_path, all_files, total_library_size,
+                     total, skipped)
 
-def _lidarr_get_trackfiles(base_url, api_key, artist_id):
-    """Fetch all track files for an artist."""
-    url = f"{base_url}/api/v1/trackfile?artistId={artist_id}"
-    result = _lidarr_request(url, api_key)
-    if result is None:
-        return []
-    return [{"id": tf["id"], "path": tf["path"],
-             "albumId": tf.get("albumId", 0)} for tf in result]
+    if total == 0:
+        logger.debug("Nothing to do.")
+        return 0
 
+    checked = 0
+    corrupted = 0
+    corrupt_size = 0
+    start_time = time.time()
 
-def _lidarr_get_album_trackfiles(base_url, api_key, album_id):
-    """Fetch all track files for an album."""
-    url = f"{base_url}/api/v1/trackfile?albumId={album_id}"
-    result = _lidarr_request(url, api_key)
-    if result is None:
-        return []
-    return [{"id": tf["id"], "path": tf["path"],
-             "albumId": tf.get("albumId", 0)} for tf in result]
+    corrupt_details = _load_json(
+        os.path.join(log_dir, "corrupt_details.json"))
+    existing_corrupt = _load_lines_as_set(corrupt_list_path)
 
+    heartbeat_path = os.path.join(log_dir, ".heartbeat")
+    with open(log_file, 'a', encoding='utf-8') as log, \
+         open(corrupt_list_path, 'a', encoding='utf-8') as corrupt_log, \
+         open(processed_path, 'a', encoding='utf-8') as processed_log:
 
-def _lidarr_delete_album(base_url, api_key, album_id):
-    """Delete an album via Lidarr API (removes files + DB records)."""
-    url = f"{base_url}/api/v1/album/{album_id}?deleteFiles=true"
-    return _lidarr_request(url, api_key, method="DELETE")
+        log.write(f"\n{'='*60}\n")
+        log.write(f"Scan started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        log.write(f"Mode: {mode} | Workers: {workers}\n")
+        log.write(f"Library: {len(all_files)} files ({format_size(total_library_size)})\n")
+        log.write(f"Files to check: {total} (skipped {skipped} already processed)\n")
+        log.write(f"{'='*60}\n")
+        log.flush()
 
+        max_pending = workers * 4
+        pending = {}
 
-def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
-    """Bulk delete track files via Lidarr API."""
-    url = f"{base_url}/api/v1/trackfile/bulk"
-    data = {"trackFileIds": track_file_ids}
-    return _lidarr_request(url, api_key, method="DELETE", data=data)
-
-
-def _lidarr_refresh_artists(base_url, api_key, artist_ids):
-    """Trigger a rescan for the given artists."""
-    url = f"{base_url}/api/v1/command"
-    data = {"name": "RefreshArtist", "artistIds": list(artist_ids)}
-    return _lidarr_request(url, api_key, method="POST", data=data)
-
-
-def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
-    """Delete corrupt files via Lidarr API. Falls back to os.remove for
-    files not tracked by Lidarr. Returns count of files deleted."""
-    artists = _lidarr_get_artists(base_url, api_key)
-    if not artists:
-        logger.warning("Lidarr: could not fetch artists, "
-                       "falling back to direct deletion")
-        return None
-
-    # Map corrupt file paths to artist IDs by matching path prefixes
-    path_to_artist = {}
-    for corrupt_path in corrupt_paths:
-        for artist in artists:
-            artist_path = artist["path"].rstrip("/")
-            if corrupt_path.startswith(artist_path + "/"):
-                path_to_artist[corrupt_path] = artist["id"]
-                break
-
-    lidarr_paths = set(path_to_artist.keys())
-    non_lidarr_paths = [p for p in corrupt_paths if p not in lidarr_paths]
-
-    # Fetch track files for each affected artist and map paths to IDs
-    affected_artist_ids = set(path_to_artist.values())
-    path_to_trackfile = {}
-    trackfile_to_album = {}
-    for artist_id in affected_artist_ids:
-        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist_id)
-        for tf in trackfiles:
-            path_to_trackfile[tf["path"]] = tf["id"]
-            trackfile_to_album[tf["id"]] = tf["albumId"]
-
-    # Group corrupt files by album to decide album-level vs track-level delete
-    album_corrupt_ids = {}
-    unmatched_lidarr = []
-    for corrupt_path in lidarr_paths:
-        tf_id = path_to_trackfile.get(corrupt_path)
-        if tf_id is None:
-            unmatched_lidarr.append(corrupt_path)
-            continue
-        album_id = trackfile_to_album.get(tf_id, 0)
-        if album_id not in album_corrupt_ids:
-            album_corrupt_ids[album_id] = []
-        album_corrupt_ids[album_id].append(tf_id)
-
-    deleted = 0
-    albums_deleted = []
-    tracks_to_delete = []
-
-    with open(log_file, 'a', encoding='utf-8') as log:
-        # For each album, check if ALL tracks are corrupt → album delete
-        for album_id, corrupt_tf_ids in album_corrupt_ids.items():
-            if album_id == 0:
-                tracks_to_delete.extend(corrupt_tf_ids)
-                continue
-            all_album_tfs = _lidarr_get_album_trackfiles(
-                base_url, api_key, album_id)
-            all_album_tf_ids = {tf["id"] for tf in all_album_tfs}
-            corrupt_set = set(corrupt_tf_ids)
-
-            if corrupt_set >= all_album_tf_ids and len(all_album_tf_ids) > 0:
-                result = _lidarr_delete_album(base_url, api_key, album_id)
-                if result is not None:
-                    deleted += len(corrupt_tf_ids)
-                    albums_deleted.append(album_id)
-                    logger.info("  Lidarr: deleted album %d "
-                                "(%d corrupt files)", album_id,
-                                len(corrupt_tf_ids))
-                    log.write(f"LIDARR ALBUM DELETE: album {album_id} "
-                              f"({len(corrupt_tf_ids)} files)\n")
-                else:
-                    tracks_to_delete.extend(corrupt_tf_ids)
-            else:
-                tracks_to_delete.extend(corrupt_tf_ids)
-
-        # Bulk delete individual corrupt tracks
-        if tracks_to_delete:
-            result = _lidarr_delete_trackfiles_bulk(
-                base_url, api_key, tracks_to_delete)
-            if result is not None:
-                deleted += len(tracks_to_delete)
-                logger.info("  Lidarr: deleted %d individual track files",
-                            len(tracks_to_delete))
-                log.write(f"LIDARR TRACK DELETE: "
-                          f"{len(tracks_to_delete)} files\n")
-            else:
-                logger.error("  Lidarr: bulk track delete failed, "
-                             "falling back to direct deletion")
-                for tf_path in lidarr_paths:
-                    if path_to_trackfile.get(tf_path) in tracks_to_delete:
-                        non_lidarr_paths.append(tf_path)
-
-        # Direct delete for files not in Lidarr
-        for path in non_lidarr_paths + unmatched_lidarr:
+        def _process_future(future):
+            nonlocal checked, corrupted, corrupt_size
+            file_path = pending.pop(future)
             try:
-                os.remove(path)
-                deleted += 1
-                log.write(f"DIRECT DELETE (not in Lidarr): {path}\n")
-                logger.info("  Deleted (not in Lidarr): %s", path)
-            except OSError as e:
-                log.write(f"ERROR deleting {path}: {e}\n")
-                logger.error("  ERROR: %s - %s", path, e)
+                file_path, is_corrupt, reason = future.result()
+            except Exception as e:
+                logger.error("Unexpected error checking %s: %s",
+                             file_path, e)
+                log.write(f"ERROR: {file_path} - {e}\n")
+                log.flush()
+                checked += 1
+                return
 
-        # Refresh affected artists so Lidarr detects changes
-        if affected_artist_ids:
-            _lidarr_refresh_artists(
-                base_url, api_key, list(affected_artist_ids))
-            logger.info("  Lidarr: triggered refresh for %d artists",
-                        len(affected_artist_ids))
+            checked += 1
 
-    return deleted
+            processed_log.write(file_path + "\n")
+            if is_corrupt:
+                log.write(f"CORRUPT: {file_path} - {reason}\n")
+            processed_log.flush()
+            log.flush()
 
+            if is_corrupt:
+                corrupted += 1
+                try:
+                    corrupt_size += os.path.getsize(file_path)
+                except OSError:
+                    pass
+                _handle_corrupt_file(
+                    file_path, reason, mode, input_folder,
+                    output_folder, corrupt_log, log,
+                    existing_corrupt, corrupt_details)
+
+            _write_heartbeat(heartbeat_path)
+
+            if checked % 100 == 0 or checked == total:
+                elapsed = time.time() - start_time
+                rate = checked / elapsed if elapsed > 0 else 0
+                eta = (total - checked) / rate if rate > 0 else 0
+                pct = checked * 100 // total
+                logger.info(
+                    "[%d%%] %d/%d checked, %d corrupt, ETA %s",
+                    pct, checked, total, corrupted,
+                    format_eta(eta))
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for f in files_to_check:
+                if shutdown_requested:
+                    break
+                pending[pool.submit(check_audio_file, f)] = f
+                # Drain completed futures to bound memory usage
+                while len(pending) >= max_pending:
+                    done, _ = concurrent.futures.wait(
+                        pending, return_when=concurrent.futures.FIRST_COMPLETED)
+                    for fut in done:
+                        _process_future(fut)
+                    if shutdown_requested:
+                        break
+
+            if shutdown_requested:
+                pool.shutdown(wait=True, cancel_futures=True)
+            else:
+                # Drain remaining futures
+                for future in as_completed(pending.copy()):
+                    if shutdown_requested:
+                        pool.shutdown(wait=True, cancel_futures=True)
+                        break
+                    _process_future(future)
+
+        elapsed = time.time() - start_time
+        summary = (
+            f"\n{'='*60}\n"
+            f"Scan finished: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+            f"Duration: {format_eta(elapsed)}\n"
+            f"Library: {len(all_files)} files ({format_size(total_library_size)})\n"
+            f"Files checked: {checked}\n"
+            f"Corrupted: {corrupted} ({format_size(corrupt_size)})\n"
+            f"{'='*60}\n"
+        )
+        logger.info(summary.strip())
+        log.write(summary)
+        log.flush()
+
+    _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
+                   output_folder, {
+                       "version": __version__,
+                       "finished": time.strftime('%Y-%m-%d %H:%M:%S'),
+                       "duration": format_eta(elapsed),
+                       "library_files": len(all_files),
+                       "library_size": total_library_size,
+                       "library_size_human": format_size(total_library_size),
+                       "files_checked": checked,
+                       "corrupted": corrupted,
+                       "corrupt_size": corrupt_size,
+                       "corrupt_size_human": format_size(corrupt_size),
+                       "mode": mode,
+                   })
+
+    return corrupted
+
+
+def run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
+             min_age_minutes=30):
+    """Scan mode: decode-test all audio files with parallel workers."""
+    corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
+
+    lock_fd = _acquire_scan_lock(log_dir)
+    try:
+        return _run_scan_inner(input_folder, output_folder, log_file, log_dir,
+                               mode, workers, corrupt_list_path,
+                               min_age_minutes)
+    finally:
+        try:
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+            lock_fd.close()
+            os.remove(os.path.join(log_dir, ".scanning"))
+        except OSError:
+            pass
+
+
+# --- Delete mode ---
 
 def _display_folder_files(corrupt_files, corrupt_details):
     """Display corrupt files in a folder with reasons and sizes."""
@@ -458,7 +560,7 @@ def _handle_folder_action(choice, folder, existing, log):
             except OSError as e:
                 print(f"           ERROR deleting {os.path.basename(cf)}: {e}")
                 log.write(f"ERROR deleting {cf}: {e}\n")
-        print(f"           -> {len(existing)} corrupt files deleted\n")
+        print(f"           -> {deleted} corrupt files deleted\n")
         return (0, deleted, 0)
     else:
         log.write(f"SKIPPED: {folder}\n")
@@ -471,11 +573,7 @@ def _load_corrupt_file_list(corrupt_list_path, log_dir):
     with open(corrupt_list_path, 'r', encoding='utf-8') as f:
         all_paths = [line.strip() for line in f if line.strip()]
 
-    details_path = os.path.join(log_dir, "corrupt_details.json")
-    corrupt_details = {}
-    if os.path.exists(details_path):
-        with open(details_path, 'r', encoding='utf-8') as f:
-            corrupt_details = json.load(f)
+    corrupt_details = _load_json(os.path.join(log_dir, "corrupt_details.json"))
 
     seen = set()
     files = []
@@ -492,65 +590,6 @@ def _load_corrupt_file_list(corrupt_list_path, log_dir):
         folders[folder].append(fp)
 
     return files, folders, corrupt_details
-
-
-def run_delete_mode(corrupt_list_path, log_file, log_dir):
-    """Interactive delete mode. Groups corrupt files by album folder and prompts."""
-    lock_path = os.path.join(log_dir, ".scanning")
-    if os.path.exists(lock_path):
-        logger.info("A scan is currently running. Waiting for it to finish...")
-        _wait_for_scan_lock(log_dir)
-        if shutdown_requested:
-            return
-        logger.info("Scan finished. Starting delete mode.")
-
-    if not os.path.exists(corrupt_list_path):
-        logger.error("No corrupt file list found at %s", corrupt_list_path)
-        logger.info("Run a scan first with MODE=report")
-        sys.exit(1)
-
-    files, folders, corrupt_details = _load_corrupt_file_list(
-        corrupt_list_path, log_dir)
-
-    if not files:
-        logger.info("corrupt.txt is empty — no corrupt files found.")
-        return
-
-    total_files = len(files)
-    total_folders = len(folders)
-    total_corrupt_size = 0
-    for f in files:
-        try:
-            total_corrupt_size += os.path.getsize(f)
-        except OSError:
-            pass
-
-    print(f"Found {total_files} corrupt files across "
-          f"{total_folders} folders ({format_size(total_corrupt_size)})\n")
-
-    try:
-        action = input(
-            "  [a] delete ALL corrupt files now\n"
-            "  [i] interactive (decide per folder)\n"
-            "  [q] quit\n\n"
-            "  Choice: "
-        ).strip().lower()
-    except EOFError:
-        print("\nNo input available. Run with: "
-              "docker exec -it BeatsCheck /app/delete.sh")
-        return
-
-    if action == 'q':
-        return
-    if action == 'a':
-        run_mass_delete(files, log_file, log_dir)
-        return
-    if action != 'i':
-        print("Invalid choice.")
-        return
-
-    _run_interactive_delete(folders, total_folders, corrupt_details,
-                            log_file, files, corrupt_list_path)
 
 
 def _run_interactive_delete(folders, total_folders, corrupt_details,
@@ -698,308 +737,113 @@ def run_mass_delete(files, log_file, log_dir):
         print("corrupt.txt cleared.")
 
 
-def _acquire_scan_lock(log_dir):
-    """Acquire an exclusive file lock for scanning. Returns the lock fd."""
-    lock_path = os.path.join(log_dir, ".scanning")
-    lf = open(lock_path, 'w')
-    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-    lf.write(str(os.getpid()))
-    lf.flush()
-    return lf
-
-
-def _wait_for_scan_lock(log_dir):
-    """Block until the scan lock is available, then release immediately."""
-    lock_path = os.path.join(log_dir, ".scanning")
-    if not os.path.exists(lock_path):
+def _prompt_lidarr_search(deleted_paths, log_dir, lidarr_url, lidarr_api_key):
+    """After interactive delete, offer to queue Lidarr searches.
+    Interactive delete uses os.remove (not Lidarr API), so we need
+    RefreshArtist to make Lidarr notice the missing files."""
+    if not lidarr_url or not lidarr_api_key or not deleted_paths:
+        return
+    album_ids, artist_ids = _lidarr_resolve_ids(
+        lidarr_url, lidarr_api_key, deleted_paths)
+    if not album_ids:
         return
     try:
-        with open(lock_path, 'r') as lf:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
-    except OSError:
-        pass
+        answer = input(
+            f"\n  Queue Lidarr search for {len(album_ids)} "
+            f"deleted albums? [y/n] "
+        ).strip().lower()
+    except EOFError:
+        return
+    if answer == 'y':
+        # Refresh artists so Lidarr detects the direct filesystem deletes
+        if artist_ids:
+            _lidarr_refresh_artists(lidarr_url, lidarr_api_key, artist_ids)
+            logger.info("  Lidarr: refreshed %d artists", len(artist_ids))
+        _search_queue_add(log_dir, album_ids)
 
 
-def run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
-             min_age_minutes=30):
-    """Scan mode: decode-test all audio files with parallel workers."""
-    corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
+def run_delete_mode(corrupt_list_path, log_file, log_dir,
+                    lidarr_url=None, lidarr_api_key=None):
+    """Interactive delete mode. Groups corrupt files by album folder and prompts."""
+    lock_path = os.path.join(log_dir, ".scanning")
+    if os.path.exists(lock_path):
+        logger.info("A scan is currently running. Waiting for it to finish...")
+        _wait_for_scan_lock(log_dir)
+        if shutdown_requested:
+            return
+        logger.info("Scan finished. Starting delete mode.")
 
-    lock_fd = _acquire_scan_lock(log_dir)
-    try:
-        return _run_scan_inner(input_folder, output_folder, log_file, log_dir,
-                               mode, workers, corrupt_list_path,
-                               min_age_minutes)
-    finally:
-        try:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-            lock_fd.close()
-            os.remove(os.path.join(log_dir, ".scanning"))
-        except OSError:
-            pass
+    if not os.path.exists(corrupt_list_path):
+        logger.error("No corrupt file list found at %s", corrupt_list_path)
+        logger.info("Run a scan first with MODE=report")
+        sys.exit(1)
 
+    files, folders, corrupt_details = _load_corrupt_file_list(
+        corrupt_list_path, log_dir)
 
-def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
-                         corrupt_log, log, existing_corrupt, corrupt_details):
-    logger.info("CORRUPT: %s", file_path)
-    logger.info("         %s", reason)
+    if not files:
+        logger.info("corrupt.txt is empty — no corrupt files found.")
+        return
 
-    try:
-        nlinks = os.stat(file_path).st_nlink
-        if nlinks > 1:
-            logger.info("         hardlinked (%d links) — "
-                        "other links share the same data", nlinks)
-    except OSError:
-        pass
-
-    if file_path not in existing_corrupt:
-        corrupt_log.write(file_path + "\n")
-        corrupt_log.flush()
-        existing_corrupt.add(file_path)
-    corrupt_details[file_path] = reason
-
-    if mode == "move":
-        rel = os.path.relpath(os.path.dirname(file_path), input_folder)
-        dest_dir = os.path.join(output_folder, rel)
-        os.makedirs(dest_dir, exist_ok=True)
-        dest = os.path.join(dest_dir, os.path.basename(file_path))
-        try:
-            shutil.move(file_path, dest)
-            log.write(f"File moved: {file_path} -> {dest}\n")
-            log.flush()
-            logger.info("         moved -> %s", dest)
-            corrupt_details[dest] = reason
-        except (OSError, shutil.Error) as e:
-            log.write(f"ERROR: Failed to move {file_path}: {e}\n")
-            log.flush()
-            logger.error("         ERROR: failed to move: %s", e)
-
-
-def _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
-                     corrupt_list_path, all_files, total_library_size,
-                     total, skipped):
-    """Log the scan configuration banner."""
-    logger.info("BeatsCheck v%s — %s mode, %d workers", __version__, mode, workers)
-    logger.info("  Library: %d files (%s), %d to scan (%d already processed)",
-                len(all_files), format_size(total_library_size), total, skipped)
-    logger.debug("  Music:   %s", input_folder)
-    logger.debug("  Log:     %s", log_file)
-    logger.debug("  Corrupt: %s", corrupt_list_path)
-    if mode == "move":
-        logger.debug("  Output:  %s", output_folder)
-    if mode == "report":
-        logger.info("  (report mode - no files will be moved)")
-
-
-def _load_existing_corrupt(corrupt_list_path):
-    """Load existing corrupt paths to deduplicate appends."""
-    existing = set()
-    if os.path.exists(corrupt_list_path):
-        with open(corrupt_list_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                path = line.strip()
-                if path:
-                    existing.add(path)
-    return existing
-
-
-def _total_file_size(files):
-    """Sum file sizes, ignoring missing files."""
-    total = 0
+    total_files = len(files)
+    total_folders = len(folders)
+    total_corrupt_size = 0
     for f in files:
         try:
-            total += os.path.getsize(f)
+            total_corrupt_size += os.path.getsize(f)
         except OSError:
             pass
-    return total
+
+    print(f"Found {total_files} corrupt files across "
+          f"{total_folders} folders ({format_size(total_corrupt_size)})\n")
+
+    try:
+        action = input(
+            "  [a] delete ALL corrupt files now\n"
+            "  [i] interactive (decide per folder)\n"
+            "  [q] quit\n\n"
+            "  Choice: "
+        ).strip().lower()
+    except EOFError:
+        print("\nNo input available. Run with: "
+              "docker exec -it BeatsCheck /app/delete.sh")
+        return
+
+    if action == 'q':
+        return
+    if action == 'a':
+        run_mass_delete(files, log_file, log_dir)
+        deleted_paths = [f for f in files if not os.path.exists(f)]
+        _prompt_lidarr_search(deleted_paths, log_dir,
+                              lidarr_url, lidarr_api_key)
+        return
+    if action != 'i':
+        print("Invalid choice.")
+        return
+
+    _run_interactive_delete(folders, total_folders, corrupt_details,
+                            log_file, files, corrupt_list_path)
+    deleted_paths = [f for f in files if not os.path.exists(f)]
+    _prompt_lidarr_search(deleted_paths, log_dir,
+                          lidarr_url, lidarr_api_key)
 
 
-def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
-                    mode, workers, corrupt_list_path, min_age_minutes):
-    """Inner scan logic."""
-    already_processed = get_already_processed_files(log_dir)
-    processed_path = os.path.join(log_dir, "processed.txt")
-
-    logger.debug("Scanning for audio files...")
-    all_files = collect_audio_files(input_folder, min_age_minutes)
-    total_library_size = _total_file_size(all_files)
-
-    files_to_check = [f for f in all_files if f not in already_processed]
-    skipped = len(all_files) - len(files_to_check)
-    total = len(files_to_check)
-
-    _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
-                     corrupt_list_path, all_files, total_library_size,
-                     total, skipped)
-
-    if total == 0:
-        logger.debug("Nothing to do.")
-        return 0
-
-    checked = 0
-    corrupted = 0
-    corrupt_size = 0
-    start_time = time.time()
-
-    details_path = os.path.join(log_dir, "corrupt_details.json")
-    corrupt_details = {}
-    if os.path.exists(details_path):
-        with open(details_path, 'r', encoding='utf-8') as f:
-            corrupt_details = json.load(f)
-
-    existing_corrupt = _load_existing_corrupt(corrupt_list_path)
-
-    heartbeat_path = os.path.join(log_dir, ".heartbeat")
-    with open(log_file, 'a', encoding='utf-8') as log, \
-         open(corrupt_list_path, 'a', encoding='utf-8') as corrupt_log, \
-         open(processed_path, 'a', encoding='utf-8') as processed_log:
-
-        log.write(f"\n{'='*60}\n")
-        log.write(f"Scan started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        log.write(f"Mode: {mode} | Workers: {workers}\n")
-        log.write(f"Library: {len(all_files)} files ({format_size(total_library_size)})\n")
-        log.write(f"Files to check: {total} (skipped {skipped} already processed)\n")
-        log.write(f"{'='*60}\n")
-        log.flush()
-
-        batch_size = 1000
-        file_iter = iter(files_to_check)
-        active_futures = {}
-
-        def _submit_batch():
-            for _ in range(batch_size):
-                f = next(file_iter, None)
-                if f is None:
-                    break
-                fut = pool.submit(check_audio_file, f)
-                active_futures[fut] = f
-
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            _submit_batch()
-
-            while active_futures:
-                if shutdown_requested:
-                    pool.shutdown(wait=True, cancel_futures=True)
-                    break
-
-                done = set()
-                for future in as_completed(active_futures, timeout=None):
-                    done.add(future)
-
-                    try:
-                        file_path, is_corrupt, reason = future.result()
-                    except Exception as e:
-                        file_path = active_futures[future]
-                        logger.error("Unexpected error checking %s: %s",
-                                     file_path, e)
-                        log.write(f"ERROR: {file_path} - {e}\n")
-                        log.flush()
-                        checked += 1
-                        continue
-
-                    checked += 1
-
-                    processed_log.write(file_path + "\n")
-                    if is_corrupt:
-                        log.write(f"CORRUPT: {file_path} - {reason}\n")
-                    processed_log.flush()
-                    log.flush()
-
-                    if is_corrupt:
-                        corrupted += 1
-                        try:
-                            corrupt_size += os.path.getsize(file_path)
-                        except OSError:
-                            pass
-                        _handle_corrupt_file(
-                            file_path, reason, mode, input_folder,
-                            output_folder, corrupt_log, log,
-                            existing_corrupt, corrupt_details)
-
-                    _write_heartbeat(heartbeat_path)
-
-                    if checked % 100 == 0 or checked == total:
-                        elapsed = time.time() - start_time
-                        rate = checked / elapsed if elapsed > 0 else 0
-                        eta = (total - checked) / rate if rate > 0 else 0
-                        pct = checked * 100 // total
-                        logger.info(
-                            "[%d%%] %d/%d checked, %d corrupt, ETA %s",
-                            pct, checked, total, corrupted,
-                            format_eta(eta))
-
-                    if shutdown_requested:
-                        break
-
-                for fut in done:
-                    del active_futures[fut]
-                if not shutdown_requested:
-                    _submit_batch()
-
-        elapsed = time.time() - start_time
-        summary = (
-            f"\n{'='*60}\n"
-            f"Scan finished: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"Duration: {format_eta(elapsed)}\n"
-            f"Library: {len(all_files)} files ({format_size(total_library_size)})\n"
-            f"Files checked: {checked}\n"
-            f"Corrupted: {corrupted} ({format_size(corrupt_size)})\n"
-            f"{'='*60}\n"
-        )
-        logger.info(summary.strip())
-        log.write(summary)
-        log.flush()
-
-    output_real = os.path.realpath(output_folder) if output_folder else ""
-    corrupt_details = {
-        p: r for p, r in corrupt_details.items()
-        if os.path.exists(p) or (output_real and
-                                 os.path.realpath(p).startswith(output_real))
-    }
-    write_json_atomic(details_path, corrupt_details)
-
-    summary_path = os.path.join(log_dir, "summary.json")
-    summary_data = {
-        "version": __version__,
-        "finished": time.strftime('%Y-%m-%d %H:%M:%S'),
-        "duration": format_eta(elapsed),
-        "library_files": len(all_files),
-        "library_size": total_library_size,
-        "library_size_human": format_size(total_library_size),
-        "files_checked": checked,
-        "corrupted": corrupted,
-        "corrupt_size": corrupt_size,
-        "corrupt_size_human": format_size(corrupt_size),
-        "mode": mode,
-    }
-    write_json_atomic(summary_path, summary_data)
-
-    if corrupted > 0:
-        logger.info("Corrupt file list: %s", corrupt_list_path)
-        logger.info("Review with: cat %s", corrupt_list_path)
-
-    return corrupted
-
+# --- Auto-delete ---
 
 def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
-                    lidarr_url=None, lidarr_api_key=None):
+                    lidarr_url=None, lidarr_api_key=None,
+                    lidarr_search=False):
     """Auto-delete corrupt files that have been known for longer than DELETE_AFTER days.
     Aborts if more than max_deletes files would be removed (safety threshold)."""
     tracking_path = os.path.join(log_dir, "corrupt_tracking.json")
     corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
 
-    tracking = {}
-    if os.path.exists(tracking_path):
-        with open(tracking_path, 'r', encoding='utf-8') as f:
-            tracking = json.load(f)
+    tracking = _load_json(tracking_path)
 
     now = time.strftime('%Y-%m-%dT%H:%M:%S')
-    if os.path.exists(corrupt_list_path):
-        with open(corrupt_list_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                path = line.strip()
-                if path and path not in tracking:
-                    tracking[path] = now
+    for path in _load_lines_as_set(corrupt_list_path):
+        if path not in tracking:
+            tracking[path] = now
 
     tracking = {p: t for p, t in tracking.items() if os.path.exists(p)}
 
@@ -1046,26 +890,31 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
     logger.info("Auto-deleting %d corrupt files (older than %d days):",
                 len(to_delete), delete_after_days)
     deleted = 0
+    direct_delete_paths = []
 
     if lidarr_url and lidarr_api_key:
         logger.info("  Using Lidarr API for deletion")
         result = _lidarr_delete_corrupt(
             lidarr_url, lidarr_api_key, to_delete, log_file)
         if result is not None:
-            deleted = result
+            deleted, album_ids = result
             for path in to_delete:
                 if not os.path.exists(path):
                     tracking.pop(path, None)
+            if lidarr_search and album_ids:
+                _search_queue_add(log_dir, album_ids)
         else:
             logger.warning("  Lidarr integration failed, "
                            "falling back to direct deletion")
-            lidarr_url = None
+            direct_delete_paths = to_delete
+    else:
+        direct_delete_paths = to_delete
 
-    if not lidarr_url or not lidarr_api_key:
+    if direct_delete_paths:
         with open(log_file, 'a', encoding='utf-8') as log:
             log.write(f"\nAuto-delete ({delete_after_days}d threshold): "
-                      f"{len(to_delete)} files\n")
-            for path in to_delete:
+                      f"{len(direct_delete_paths)} files\n")
+            for path in direct_delete_paths:
                 try:
                     os.remove(path)
                     deleted += 1
@@ -1085,6 +934,317 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
         for path in tracking:
             f.write(path + "\n")
 
+
+# --- Lidarr ---
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Block redirects to prevent API key leaking to a redirected host."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(
+            newurl, code, "Redirect blocked for security", headers, fp)
+
+
+def _lidarr_request(url, api_key, method="GET", data=None, timeout=30):
+    """Make an authenticated request to the Lidarr API."""
+    headers = {
+        "X-Api-Key": api_key,
+        "Content-Type": "application/json",
+    }
+    body = json.dumps(data).encode("utf-8") if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    # Extract just the API path for logging (never log the full URL or host)
+    api_path = url.split("/api/", 1)[-1] if "/api/" in url else "?"
+    try:
+        with opener.open(req, timeout=timeout) as resp:
+            raw = resp.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        logger.error("Lidarr API %s /api/%s -> HTTP %d",
+                     method, api_path, e.code)
+        return None
+    except (urllib.error.URLError, OSError) as e:
+        logger.error("Lidarr API connection failed (%s /api/%s)",
+                     method, api_path)
+        logger.debug("Lidarr connection error detail: %s", e)
+        return None
+
+
+def _load_lidarr_api_key():
+    """Load Lidarr API key from env var or Docker secret. Never log it."""
+    key = os.environ.get("LIDARR_API_KEY", "")
+    if not key:
+        secret_path = "/run/secrets/lidarr_api_key"
+        if os.path.exists(secret_path):
+            with open(secret_path, 'r') as f:
+                key = f.read().strip()
+    return key
+
+
+def _lidarr_get_artists(base_url, api_key):
+    """Fetch all artists. Returns list of {id, path} dicts."""
+    result = _lidarr_request(f"{base_url}/api/v1/artist", api_key)
+    if result is None:
+        return []
+    return [{"id": a["id"], "path": a["path"]} for a in result]
+
+
+def _lidarr_get_trackfiles(base_url, api_key, artist_id):
+    """Fetch all track files for an artist."""
+    url = f"{base_url}/api/v1/trackfile?artistId={artist_id}"
+    result = _lidarr_request(url, api_key)
+    if result is None:
+        return []
+    return [{"id": tf["id"], "path": tf["path"],
+             "albumId": tf.get("albumId", 0)} for tf in result]
+
+
+def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
+    """Bulk delete track files via Lidarr API."""
+    url = f"{base_url}/api/v1/trackfile/bulk"
+    data = {"trackFileIds": track_file_ids}
+    return _lidarr_request(url, api_key, method="DELETE", data=data)
+
+
+def _lidarr_refresh_artists(base_url, api_key, artist_ids):
+    """Trigger a rescan for the given artists."""
+    url = f"{base_url}/api/v1/command"
+    data = {"name": "RefreshArtist", "artistIds": list(artist_ids)}
+    return _lidarr_request(url, api_key, method="POST", data=data)
+
+
+def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
+    """Delete corrupt files via Lidarr API using trackfile bulk delete.
+    Keeps albums monitored so they show as 'missing' and can be re-downloaded.
+    Falls back to os.remove for files not tracked by Lidarr.
+    Returns (deleted_count, affected_album_ids)."""
+    artists = _lidarr_get_artists(base_url, api_key)
+    if not artists:
+        logger.warning("Lidarr: could not fetch artists, "
+                       "falling back to direct deletion")
+        return None
+
+    # Map corrupt file paths to artist IDs by matching path prefixes
+    path_to_artist = {}
+    for corrupt_path in corrupt_paths:
+        for artist in artists:
+            artist_path = artist["path"].rstrip("/")
+            if corrupt_path.startswith(artist_path + "/"):
+                path_to_artist[corrupt_path] = artist["id"]
+                break
+
+    lidarr_paths = set(path_to_artist.keys())
+    non_lidarr_paths = [p for p in corrupt_paths if p not in lidarr_paths]
+
+    # Fetch track files for each affected artist and map paths to IDs
+    affected_artist_ids = set(path_to_artist.values())
+    path_to_trackfile = {}
+    trackfile_to_album = {}
+    for artist_id in affected_artist_ids:
+        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist_id)
+        for tf in trackfiles:
+            path_to_trackfile[tf["path"]] = tf["id"]
+            trackfile_to_album[tf["id"]] = tf["albumId"]
+
+    # Collect trackfile IDs to delete and paths not found in Lidarr
+    tf_ids_to_delete = []
+    for corrupt_path in lidarr_paths:
+        tf_id = path_to_trackfile.get(corrupt_path)
+        if tf_id is not None:
+            tf_ids_to_delete.append(tf_id)
+        else:
+            non_lidarr_paths.append(corrupt_path)
+
+    deleted = 0
+    affected_albums = set()
+
+    with open(log_file, 'a', encoding='utf-8') as log:
+        # Bulk delete trackfiles — keeps albums monitored (shows as missing)
+        if tf_ids_to_delete:
+            result = _lidarr_delete_trackfiles_bulk(
+                base_url, api_key, tf_ids_to_delete)
+            if result is not None:
+                deleted += len(tf_ids_to_delete)
+                for tf_id in tf_ids_to_delete:
+                    aid = trackfile_to_album.get(tf_id, 0)
+                    if aid:
+                        affected_albums.add(aid)
+                logger.info("  Lidarr: deleted %d track files "
+                            "(%d albums affected)",
+                            len(tf_ids_to_delete), len(affected_albums))
+                log.write(f"LIDARR DELETE: {len(tf_ids_to_delete)} "
+                          f"track files ({len(affected_albums)} albums)\n")
+            else:
+                logger.error("  Lidarr: bulk delete failed, "
+                             "falling back to direct deletion")
+                for tf_path in lidarr_paths:
+                    if path_to_trackfile.get(tf_path) in tf_ids_to_delete:
+                        non_lidarr_paths.append(tf_path)
+
+        # Direct delete for files not in Lidarr
+        direct_deleted = False
+        for path in non_lidarr_paths:
+            try:
+                os.remove(path)
+                deleted += 1
+                direct_deleted = True
+                log.write(f"DIRECT DELETE (not in Lidarr): {path}\n")
+                logger.info("  Deleted (not in Lidarr): %s", path)
+            except OSError as e:
+                log.write(f"ERROR deleting {path}: {e}\n")
+                logger.error("  ERROR: %s - %s", path, e)
+
+        # RefreshArtist only needed for direct deletes (Lidarr API deletes
+        # already update the database, but direct os.remove leaves Lidarr
+        # unaware of the missing files)
+        if direct_deleted and affected_artist_ids:
+            _lidarr_refresh_artists(
+                base_url, api_key, list(affected_artist_ids))
+            logger.info("  Lidarr: triggered refresh for %d artists",
+                        len(affected_artist_ids))
+
+    return (deleted, list(affected_albums))
+
+
+def _log_lidarr_status(lidarr_url, lidarr_api_key, lidarr_search):
+    """Log Lidarr integration status without exposing credentials."""
+    if lidarr_url and not lidarr_url.startswith(("http://", "https://")):
+        logger.error("LIDARR_URL must start with http:// or https://")
+        sys.exit(1)
+    if lidarr_url and lidarr_api_key:
+        logger.info("  Lidarr integration: enabled")
+        if lidarr_search:
+            logger.info("  Lidarr search: enabled (5/hour)")
+        masked = re.sub(r'(https?://)(.+)', r'\1****', lidarr_url)
+        logger.debug("  Lidarr URL: %s", masked)
+    elif lidarr_url:
+        logger.warning("  Lidarr URL set but API key missing — disabled")
+
+
+def _lidarr_resolve_ids(base_url, api_key, file_paths):
+    """Map file paths to Lidarr album and artist IDs.
+    Returns (album_ids, artist_ids) — both as lists."""
+    artists = _lidarr_get_artists(base_url, api_key)
+    if not artists:
+        return [], []
+
+    # Map paths to artist IDs
+    path_to_artist = {}
+    for fp in file_paths:
+        for artist in artists:
+            artist_path = artist["path"].rstrip("/")
+            if fp.startswith(artist_path + "/"):
+                path_to_artist[fp] = artist["id"]
+                break
+
+    artist_ids = list(set(path_to_artist.values()))
+
+    # Fetch track files for affected artists, collect album IDs
+    album_ids = set()
+    for artist_id in artist_ids:
+        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist_id)
+        for tf in trackfiles:
+            if tf["path"] in path_to_artist and tf.get("albumId"):
+                album_ids.add(tf["albumId"])
+
+    return list(album_ids), artist_ids
+
+
+def _search_queue_path(log_dir):
+    return os.path.join(log_dir, "search_queue.json")
+
+
+def _search_queue_add(log_dir, album_ids):
+    """Append album IDs to the search queue, deduplicating."""
+    path = _search_queue_path(log_dir)
+    queue = _load_json(path, default=[])
+    existing = set(queue)
+    added = 0
+    for aid in album_ids:
+        if aid not in existing:
+            queue.append(aid)
+            existing.add(aid)
+            added += 1
+    if added:
+        write_json_atomic(path, queue)
+        logger.info("  Queued Lidarr search for %d albums "
+                    "(%d total in queue)", added, len(queue))
+
+
+def _search_queue_drain_one(log_dir, base_url, api_key):
+    """Process one album from the search queue. Sends AlbumSearch command,
+    polls until complete. Returns True if a search was attempted."""
+    path = _search_queue_path(log_dir)
+    queue = _load_json(path, default=[])
+    if not queue:
+        return False
+
+    album_id = queue[0]
+    logger.info("  Lidarr search: album %d (%d in queue)", album_id,
+                len(queue))
+
+    # Trigger the search
+    result = _lidarr_request(
+        f"{base_url}/api/v1/command", api_key, method="POST",
+        data={"name": "AlbumSearch", "albumIds": [album_id]})
+
+    if result is None:
+        logger.warning("  Lidarr search: failed to start for album %d",
+                       album_id)
+        return True  # attempted but failed — don't remove, retry next cycle
+
+    command_id = result.get("id")
+    if not command_id:
+        logger.warning("  Lidarr search: no command ID returned for album %d",
+                       album_id)
+        queue.pop(0)
+        write_json_atomic(path, queue)
+        return True
+
+    # Poll until complete (30s intervals, 10 min timeout)
+    # Write heartbeat during poll to prevent healthcheck failure
+    heartbeat_path = os.path.join(log_dir, ".heartbeat")
+    poll_failures = 0
+    timeout = time.time() + 600
+    while time.time() < timeout and not shutdown_requested:
+        time.sleep(30)
+        _write_heartbeat(heartbeat_path)
+        status = _lidarr_request(
+            f"{base_url}/api/v1/command/{command_id}", api_key)
+        if status is None:
+            poll_failures += 1
+            # Command may have been cleaned from DB (5 min retention)
+            if poll_failures >= 3:
+                logger.warning("  Lidarr search: lost track of command "
+                               "for album %d, assuming complete", album_id)
+                queue.pop(0)
+                write_json_atomic(path, queue)
+                return True
+            continue
+        poll_failures = 0
+        state = status.get("status", "").lower()
+        if state == "completed":
+            queue.pop(0)
+            write_json_atomic(path, queue)
+            logger.info("  Lidarr search: album %d complete "
+                        "(%d remaining)", album_id, len(queue))
+            return True
+        if state in ("failed", "aborted", "cancelled", "orphaned"):
+            queue.pop(0)
+            write_json_atomic(path, queue)
+            logger.warning("  Lidarr search: album %d %s "
+                           "(%d remaining)", album_id, state, len(queue))
+            return True
+
+    if shutdown_requested:
+        logger.info("  Lidarr search: interrupted by shutdown")
+    else:
+        logger.warning("  Lidarr search: album %d timed out, "
+                       "keeping in queue", album_id)
+    return True
+
+
+# --- Config ---
 
 def setup_logging(log_level, log_file):
     """Configure logging with console and file handlers."""
@@ -1124,6 +1284,12 @@ def _parse_env_float(name, default, label=None):
         sys.exit(1)
 
 
+def _parse_env_bool(name, default=False):
+    """Parse a boolean environment variable (true/false/1/0/yes/no)."""
+    val = os.environ.get(name, str(default)).lower().strip()
+    return val in ("true", "1", "yes")
+
+
 def _load_config():
     """Load configuration from CLI args or environment variables."""
     if len(sys.argv) == 4:
@@ -1147,46 +1313,39 @@ def _load_config():
         print("Invalid WORKERS value. Must be a positive integer.")
         sys.exit(1)
 
-    return {
-        "input_folder": input_folder,
-        "output_folder": output_folder,
-        "log_dir": log_dir,
-        "log_file": log_file,
-        "mode": mode,
-        "log_level": os.environ.get("LOG_LEVEL", "INFO"),
-        "workers": workers,
-        "run_interval": _parse_env_float("RUN_INTERVAL", 0, "hours"),
-        "delete_after": _parse_env_float("DELETE_AFTER", 0, "days"),
-        "max_auto_delete": _parse_env_int("MAX_AUTO_DELETE", 50),
-        "min_age_minutes": _parse_env_int("MIN_FILE_AGE", 30, "minutes"),
-        "max_log_mb": _parse_env_int("MAX_LOG_MB", 50, "MB"),
-        "lidarr_url": os.environ.get("LIDARR_URL", "").rstrip("/"),
-        "lidarr_api_key": _load_lidarr_api_key(),
-    }
+    return types.SimpleNamespace(
+        input_folder=input_folder,
+        output_folder=output_folder,
+        log_dir=log_dir,
+        log_file=log_file,
+        mode=mode,
+        log_level=os.environ.get("LOG_LEVEL", "INFO"),
+        workers=workers,
+        run_interval=_parse_env_float("RUN_INTERVAL", 0, "hours"),
+        delete_after=_parse_env_float("DELETE_AFTER", 0, "days"),
+        max_auto_delete=_parse_env_int("MAX_AUTO_DELETE", 50),
+        min_age_minutes=_parse_env_int("MIN_FILE_AGE", 30, "minutes"),
+        max_log_mb=_parse_env_int("MAX_LOG_MB", 50, "MB"),
+        lidarr_url=os.environ.get("LIDARR_URL", "").rstrip("/"),
+        lidarr_api_key=_load_lidarr_api_key(),
+        lidarr_search=_parse_env_bool("LIDARR_SEARCH", False),
+    )
 
 
 def _run_setup_idle(log_dir):
-    """Setup mode — sit idle until rescan with a mode is triggered."""
+    """Setup mode — sit idle until rescan with a mode is triggered.
+    Bare 'rescan' (no mode) defaults to report."""
     logger.info("Setup mode — container is idle. "
                 "Start scanning with: rescan report")
     result = _idle_wait(log_dir, None)
     if isinstance(result, str) and result in ("report", "move"):
         return result
+    if result is True:
+        return "report"
     return None
 
 
-def _log_lidarr_status(lidarr_url, lidarr_api_key):
-    """Log Lidarr integration status without exposing credentials."""
-    if lidarr_url and not lidarr_url.startswith(("http://", "https://")):
-        logger.error("LIDARR_URL must start with http:// or https://")
-        sys.exit(1)
-    if lidarr_url and lidarr_api_key:
-        logger.info("  Lidarr integration: enabled")
-        masked = re.sub(r'(https?://)(.+)', r'\1****', lidarr_url)
-        logger.debug("  Lidarr URL: %s", masked)
-    elif lidarr_url:
-        logger.warning("  Lidarr URL set but API key missing — disabled")
-
+# --- Main ---
 
 def main():
     signal.signal(signal.SIGTERM, handle_shutdown)
@@ -1198,106 +1357,101 @@ def main():
         pass
 
     cfg = _load_config()
-    input_folder = cfg["input_folder"]
-    output_folder = cfg["output_folder"]
-    log_dir = cfg["log_dir"]
-    log_file = cfg["log_file"]
-    mode = cfg["mode"]
-    workers = cfg["workers"]
-    run_interval = cfg["run_interval"]
-    delete_after = cfg["delete_after"]
-    max_auto_delete = cfg["max_auto_delete"]
-    min_age_minutes = cfg["min_age_minutes"]
-    max_log_mb = cfg["max_log_mb"]
-    lidarr_url = cfg["lidarr_url"]
-    lidarr_api_key = cfg["lidarr_api_key"]
 
-    os.makedirs(log_dir, exist_ok=True)
+    os.makedirs(cfg.log_dir, exist_ok=True)
 
-    setup_logging(cfg["log_level"], log_file)
+    setup_logging(cfg.log_level, cfg.log_file)
 
     logger.info("BeatsCheck v%s starting", __version__)
-    _log_lidarr_status(lidarr_url, lidarr_api_key)
+    _log_lidarr_status(cfg.lidarr_url, cfg.lidarr_api_key, cfg.lidarr_search)
 
-    if mode == "setup":
-        new_mode = _run_setup_idle(log_dir)
+    queue = _load_json(_search_queue_path(cfg.log_dir), default=[])
+    if queue:
+        logger.info("  Search queue: %d albums pending", len(queue))
+
+    if cfg.mode == "setup":
+        new_mode = _run_setup_idle(cfg.log_dir)
         if new_mode:
-            mode = new_mode
-            logger.info("Mode changed to: %s", mode)
+            cfg.mode = new_mode
+            logger.info("Mode changed to: %s", cfg.mode)
         else:
             return
 
-    if mode == "delete":
-        corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
-        run_delete_mode(corrupt_list_path, log_file, log_dir)
+    if cfg.mode == "delete":
+        corrupt_list_path = os.path.join(cfg.log_dir, "corrupt.txt")
+        run_delete_mode(corrupt_list_path, cfg.log_file, cfg.log_dir,
+                        cfg.lidarr_url, cfg.lidarr_api_key)
         return
 
-    if not os.path.isdir(input_folder):
-        logger.error("Music directory not found: %s", input_folder)
+    if not os.path.isdir(cfg.input_folder):
+        logger.error("Music directory not found: %s", cfg.input_folder)
         sys.exit(1)
 
-    if mode == "move":
-        if not output_folder or output_folder == "/corrupted":
+    if cfg.mode == "move":
+        if not cfg.output_folder or cfg.output_folder == "/corrupted":
             if not os.path.isdir("/corrupted"):
                 logger.error("Move mode requires the Corrupted Output path to be configured.")
                 logger.error("Set the OUTPUT_DIR variable or mount a volume to /corrupted.")
                 sys.exit(1)
-        os.makedirs(output_folder, exist_ok=True)
+        os.makedirs(cfg.output_folder, exist_ok=True)
 
     while True:
-        if max_log_mb > 0 and os.path.exists(log_file):
+        if cfg.max_log_mb > 0 and os.path.exists(cfg.log_file):
             try:
-                log_size = os.path.getsize(log_file)
-                if log_size > max_log_mb * 1024 * 1024:
-                    _rotate_file(log_file, keep=3)
-                    processed = os.path.join(log_dir, "processed.txt")
+                log_size = os.path.getsize(cfg.log_file)
+                if log_size > cfg.max_log_mb * 1024 * 1024:
+                    _rotate_file(cfg.log_file, keep=3)
+                    processed = os.path.join(cfg.log_dir, "processed.txt")
                     if os.path.exists(processed):
                         _rotate_file(processed, keep=3)
                     logger.info("Log rotated (%s > %dMB limit). Starting fresh full scan.",
-                                format_size(log_size), max_log_mb)
+                                format_size(log_size), cfg.max_log_mb)
             except OSError:
                 pass
 
-        run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
-                 min_age_minutes)
+        run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
+                 cfg.log_dir, cfg.mode, cfg.workers, cfg.min_age_minutes)
 
-        if delete_after > 0:
+        if cfg.delete_after > 0:
             run_auto_delete(
-                log_dir, log_file, delete_after, max_auto_delete,
-                lidarr_url, lidarr_api_key)
+                cfg.log_dir, cfg.log_file, cfg.delete_after,
+                cfg.max_auto_delete, cfg.lidarr_url, cfg.lidarr_api_key,
+                cfg.lidarr_search)
 
         if shutdown_requested:
             break
 
-        if run_interval <= 0:
+        if cfg.run_interval <= 0:
             logger.info("Scan complete. Container is idle. "
                         "Rescan with: rescan [report|move]")
-            result = _idle_wait(log_dir, None)
+            result = _idle_wait(
+                cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
             if result is False:
                 break
             if isinstance(result, str) and result in ("report", "move"):
-                mode = result
-                logger.info("Mode changed to: %s", mode)
+                cfg.mode = result
+                logger.info("Mode changed to: %s", cfg.mode)
             continue
 
         next_run = time.strftime(
             '%Y-%m-%d %H:%M:%S',
-            time.localtime(time.time() + run_interval * 3600)
+            time.localtime(time.time() + cfg.run_interval * 3600)
         )
         logger.info(
             "Next scan at %s (%sh interval). Waiting...",
-            next_run, run_interval
+            next_run, cfg.run_interval
         )
 
-        result = _idle_wait(log_dir, run_interval * 3600)
+        result = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
+                            cfg.lidarr_url, cfg.lidarr_api_key)
         if result is False:
             if shutdown_requested:
                 break
             logger.info("Scheduled scan starting.")
         else:
             if isinstance(result, str) and result in ("report", "move"):
-                mode = result
-                logger.info("Mode changed to: %s", mode)
+                cfg.mode = result
+                logger.info("Mode changed to: %s", cfg.mode)
 
 
 if __name__ == "__main__":

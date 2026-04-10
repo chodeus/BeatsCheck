@@ -38,5 +38,6 @@
   <Config Name="Timezone" Target="TZ" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">UTC</Config>
   <Config Name="Lidarr URL" Target="LIDARR_URL" Default="" Mode="" Description="Lidarr instance URL (e.g. http://lidarr:8686). When set with API key, corrupt files are deleted via Lidarr API so Lidarr can clean its database and re-download. Leave empty to disable." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Lidarr API Key" Target="LIDARR_API_KEY" Default="" Mode="" Description="Lidarr API key (Settings > General in Lidarr). Required if Lidarr URL is set." Type="Variable" Display="advanced" Required="false" Mask="true"></Config>
+  <Config Name="Lidarr Search" Target="LIDARR_SEARCH" Default="" Mode="" Description="Queue album search after auto-deleting corrupt files so Lidarr re-downloads them. Processes 5 albums/hour during idle to avoid flooding trackers. Requires Lidarr URL and API key." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
   <TailscaleStateDir/>
 </Container>

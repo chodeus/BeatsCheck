@@ -48,5 +48,8 @@ services:
       ## Lidarr handles file deletion + database cleanup + re-download
       # - LIDARR_URL=http://lidarr:8686
       # - LIDARR_API_KEY=your-api-key-here
+      ## Queue album search after auto-delete so Lidarr re-downloads (default: false)
+      ## Processes 5 albums/hour during idle to avoid flooding trackers
+      # - LIDARR_SEARCH=true
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2
