@@ -735,7 +735,10 @@ def _handle_files_delete_lidarr(file_paths, log, corrupt_details,
             monitored = album.get("monitored", True) if album else True
             if monitored:
                 print(f"           -> [{i}/{total}] Deleted "
-                      f"{len(tf_ids)} trackfiles")
+                      f"{len(tf_ids)} trackfiles — waiting "
+                      f"for Lidarr search")
+                _lidarr_wait_for_search(lidarr_url, lidarr_api_key)
+                print(f"           -> [{i}/{total}] Search complete")
             else:
                 print(f"           -> [{i}/{total}] Deleted "
                       f"{len(tf_ids)} trackfiles (unmonitored"
@@ -846,16 +849,23 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
             deleted += len(tf_ids)
             log.write(f"LIDARR DELETE: {len(tf_ids)} track files "
                       f"({len(album_ids)} albums)\n")
-            # Check monitored status for each album
+            # Check monitored status and wait for search
+            has_monitored = False
             for aid in album_ids:
                 album = _lidarr_get_album(
                     lidarr_url, lidarr_api_key, aid)
                 monitored = album.get("monitored", True) if album else True
-                if not monitored:
+                if monitored:
+                    has_monitored = True
+                else:
                     print(f"           -> Lidarr: album {aid} "
                           f"unmonitored — will not re-download")
             print(f"           -> Lidarr: deleted {len(tf_ids)} "
                   f"track files ({len(album_ids)} albums)")
+            if has_monitored:
+                print("           -> Waiting for Lidarr search")
+                _lidarr_wait_for_search(lidarr_url, lidarr_api_key)
+                print("           -> Search complete")
         else:
             print("           -> ERROR: Lidarr bulk delete failed. "
                   "Check Lidarr logs.\n")
@@ -1481,6 +1491,28 @@ def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
     return _lidarr_request(url, api_key, method="DELETE", data=data)
 
 
+def _lidarr_wait_for_search(base_url, api_key, log_dir=None):
+    """Wait for any active AlbumSearch commands in Lidarr to complete.
+    Called after each album deletion so Lidarr finishes searching
+    before the next album is deleted. Polls every 10s, 5 min timeout."""
+    heartbeat_path = os.path.join(log_dir, ".heartbeat") if log_dir else None
+    timeout = time.time() + 300
+    while time.time() < timeout and not shutdown_requested:
+        result = _lidarr_request(
+            f"{base_url}/api/v1/command", api_key)
+        if result is None:
+            return
+        active = [c for c in result
+                  if c.get("name") == "AlbumSearch"
+                  and c.get("status", "").lower()
+                  in ("queued", "started")]
+        if not active:
+            return
+        if heartbeat_path:
+            _write_heartbeat(heartbeat_path)
+        time.sleep(10)
+
+
 def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                            log_dir=None, blocklist=False):
     """Delete corrupt files via Lidarr API, one album at a time.
@@ -1540,12 +1572,16 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                 log.write(f"LIDARR DELETE: album {album_id} — "
                           f"{len(tf_ids)} track files\n")
 
-                # Check monitored status
+                # Check monitored status and wait for search
                 album = _lidarr_get_album(base_url, api_key, album_id)
                 monitored = album.get("monitored", True) if album else True
                 if monitored:
-                    logger.info("%s: deleted %d trackfiles",
+                    logger.info("%s: deleted %d trackfiles — "
+                                "waiting for Lidarr search",
                                 prefix, len(tf_ids))
+                    _lidarr_wait_for_search(
+                        base_url, api_key, log_dir)
+                    logger.info("%s: search complete", prefix)
                 else:
                     logger.info("%s: deleted %d trackfiles "
                                 "(unmonitored — Lidarr will not "
