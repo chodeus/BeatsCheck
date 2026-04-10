@@ -680,22 +680,22 @@ def _handle_files_delete_lidarr(file_paths, log, corrupt_details,
             print(f"           -> Lidarr: deleted {len(tf_ids)} "
                   f"track files ({len(album_ids)} albums)")
         else:
-            logger.error("  Lidarr bulk delete failed, "
-                         "falling back to direct deletion")
-            direct_paths.extend(
-                fp for fp in file_paths
-                if corrupt_details.get(fp, {}).get("trackfileId")
-                in tf_ids)
+            print("           -> ERROR: Lidarr bulk delete failed. "
+                  "Check Lidarr logs.\n")
+            log.write("ERROR: Lidarr bulk delete API failed\n")
+            return (0, 0, 0, set())
 
-    # Direct delete for files not in Lidarr
-    for fp in direct_paths:
-        try:
-            os.remove(fp)
-            deleted += 1
-            log.write(f"DIRECT DELETE: {fp}\n")
-        except OSError as e:
-            print(f"           ERROR: {os.path.basename(fp)}: {e}")
-            log.write(f"ERROR deleting {fp}: {e}\n")
+    # Direct delete for files not tracked by Lidarr (non-audio, etc.)
+    if direct_paths:
+        for fp in direct_paths:
+            try:
+                os.remove(fp)
+                deleted += 1
+                log.write(f"DIRECT DELETE (not in Lidarr): {fp}\n")
+            except OSError as e:
+                print(f"           ERROR: "
+                      f"{os.path.basename(fp)}: {e}")
+                log.write(f"ERROR deleting {fp}: {e}\n")
 
     print(f"           -> {deleted} files deleted\n")
     return (0, deleted, 0, album_ids)
@@ -771,16 +771,17 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
             print(f"           -> Lidarr: deleted {len(tf_ids)} "
                   f"track files ({len(album_ids)} albums)")
         else:
-            logger.error("  Lidarr bulk delete failed, "
-                         "falling back to direct deletion")
-            direct_paths = all_files
+            print("           -> ERROR: Lidarr bulk delete failed. "
+                  "Check Lidarr logs.\n")
+            log.write("ERROR: Lidarr bulk delete API failed\n")
+            return (0, 0, 0, set())
 
-    # Direct delete for files not in Lidarr
+    # Direct delete for non-Lidarr files (non-audio, etc.)
     for fp in direct_paths:
         try:
             os.remove(fp)
             deleted += 1
-            log.write(f"DIRECT DELETE: {fp}\n")
+            log.write(f"DIRECT DELETE (not in Lidarr): {fp}\n")
         except OSError as e:
             print(f"           ERROR: {os.path.basename(fp)}: {e}")
             log.write(f"ERROR deleting {fp}: {e}\n")
@@ -788,8 +789,8 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
     # Remove empty folder (but never the mount root)
     if folder != input_folder and os.path.isdir(folder):
         try:
-            remaining = os.listdir(folder)
-            if not remaining:
+            remaining_entries = os.listdir(folder)
+            if not remaining_entries:
                 os.rmdir(folder)
                 log.write(f"REMOVED EMPTY FOLDER: {folder}\n")
         except OSError:
@@ -1217,9 +1218,8 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
             if lidarr_search and album_ids:
                 _search_queue_add(log_dir, album_ids)
         else:
-            logger.warning("  Lidarr integration failed, "
-                           "falling back to direct deletion")
-            direct_delete_paths = to_delete
+            logger.error("  Lidarr API failed — auto-delete aborted. "
+                         "Files will be retried next run.")
     else:
         direct_delete_paths = to_delete
 
@@ -1512,32 +1512,21 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                     log.write(f"LIDARR BLOCKLIST: "
                               f"{len(album_ids)} albums\n")
             else:
-                logger.error("  Lidarr: bulk delete failed, "
-                             "falling back to direct deletion")
-                non_lidarr_paths.extend(
-                    p for p in corrupt_paths
-                    if p not in non_lidarr_paths
-                    and corrupt_details.get(p, {}).get("trackfileId"))
+                logger.error("  Lidarr: bulk delete API failed — "
+                             "no files were deleted. Check Lidarr logs.")
+                log.write("ERROR: Lidarr bulk delete API failed\n")
+                return None
 
-        # Direct delete for files not in Lidarr
-        direct_deleted = False
+        # Direct delete for files not tracked by Lidarr
         for path in non_lidarr_paths:
             try:
                 os.remove(path)
                 deleted += 1
-                direct_deleted = True
                 log.write(f"DIRECT DELETE (not in Lidarr): {path}\n")
                 logger.info("  Deleted (not in Lidarr): %s", path)
             except OSError as e:
                 log.write(f"ERROR deleting {path}: {e}\n")
                 logger.error("  ERROR: %s - %s", path, e)
-
-        # RefreshArtist only needed for direct deletes
-        if direct_deleted and artist_ids:
-            _lidarr_refresh_artists(
-                base_url, api_key, list(artist_ids))
-            logger.info("  Lidarr: triggered refresh for %d artists",
-                        len(artist_ids))
 
     return (deleted, list(album_ids))
 
