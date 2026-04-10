@@ -737,8 +737,10 @@ def run_mass_delete(files, log_file, log_dir):
         print("corrupt.txt cleared.")
 
 
-def _prompt_lidarr_search(deleted_paths, log_dir, lidarr_url, lidarr_api_key):
+def _prompt_lidarr_search(deleted_paths, log_dir, lidarr_url, lidarr_api_key,
+                          lidarr_blocklist=False):
     """After interactive delete, offer to queue Lidarr searches.
+    Blocklists the release first if enabled.
     Interactive delete uses os.remove (not Lidarr API), so we need
     RefreshArtist to make Lidarr notice the missing files."""
     if not lidarr_url or not lidarr_api_key or not deleted_paths:
@@ -747,6 +749,8 @@ def _prompt_lidarr_search(deleted_paths, log_dir, lidarr_url, lidarr_api_key):
         lidarr_url, lidarr_api_key, deleted_paths)
     if not album_ids:
         return
+    if lidarr_blocklist:
+        _lidarr_blocklist_albums(lidarr_url, lidarr_api_key, album_ids)
     try:
         answer = input(
             f"\n  Queue Lidarr search for {len(album_ids)} "
@@ -763,7 +767,8 @@ def _prompt_lidarr_search(deleted_paths, log_dir, lidarr_url, lidarr_api_key):
 
 
 def run_delete_mode(corrupt_list_path, log_file, log_dir,
-                    lidarr_url=None, lidarr_api_key=None):
+                    lidarr_url=None, lidarr_api_key=None,
+                    lidarr_blocklist=False):
     """Interactive delete mode. Groups corrupt files by album folder and prompts."""
     lock_path = os.path.join(log_dir, ".scanning")
     if os.path.exists(lock_path):
@@ -815,7 +820,8 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir,
         run_mass_delete(files, log_file, log_dir)
         deleted_paths = [f for f in files if not os.path.exists(f)]
         _prompt_lidarr_search(deleted_paths, log_dir,
-                              lidarr_url, lidarr_api_key)
+                              lidarr_url, lidarr_api_key,
+                              lidarr_blocklist)
         return
     if action != 'i':
         print("Invalid choice.")
@@ -825,14 +831,15 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir,
                             log_file, files, corrupt_list_path)
     deleted_paths = [f for f in files if not os.path.exists(f)]
     _prompt_lidarr_search(deleted_paths, log_dir,
-                          lidarr_url, lidarr_api_key)
+                          lidarr_url, lidarr_api_key,
+                          lidarr_blocklist)
 
 
 # --- Auto-delete ---
 
 def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
                     lidarr_url=None, lidarr_api_key=None,
-                    lidarr_search=False):
+                    lidarr_search=False, lidarr_blocklist=False):
     """Auto-delete corrupt files that have been known for longer than DELETE_AFTER days.
     Aborts if more than max_deletes files would be removed (safety threshold)."""
     tracking_path = os.path.join(log_dir, "corrupt_tracking.json")
@@ -895,7 +902,8 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
     if lidarr_url and lidarr_api_key:
         logger.info("  Using Lidarr API for deletion")
         result = _lidarr_delete_corrupt(
-            lidarr_url, lidarr_api_key, to_delete, log_file)
+            lidarr_url, lidarr_api_key, to_delete, log_file,
+            blocklist=lidarr_blocklist)
         if result is not None:
             deleted, album_ids = result
             for path in to_delete:
@@ -963,6 +971,10 @@ def _lidarr_request(url, api_key, method="GET", data=None, timeout=30):
         logger.error("Lidarr API %s /api/%s -> HTTP %d",
                      method, api_path, e.code)
         return None
+    except json.JSONDecodeError:
+        logger.error("Lidarr API %s /api/%s -> non-JSON response",
+                     method, api_path)
+        return None
     except (urllib.error.URLError, OSError) as e:
         logger.error("Lidarr API connection failed (%s /api/%s)",
                      method, api_path)
@@ -1013,9 +1025,11 @@ def _lidarr_refresh_artists(base_url, api_key, artist_ids):
     return _lidarr_request(url, api_key, method="POST", data=data)
 
 
-def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
+def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
+                           blocklist=False):
     """Delete corrupt files via Lidarr API using trackfile bulk delete.
     Keeps albums monitored so they show as 'missing' and can be re-downloaded.
+    Optionally blocklists the release first to prevent re-grabbing.
     Falls back to os.remove for files not tracked by Lidarr.
     Returns (deleted_count, affected_album_ids)."""
     artists = _lidarr_get_artists(base_url, api_key)
@@ -1055,6 +1069,17 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
         else:
             non_lidarr_paths.append(corrupt_path)
 
+    # Blocklist: mark most recent grab as failed for each affected album.
+    # Must happen BEFORE deletion so history context is still intact.
+    pre_delete_albums = set()
+    for tf_id in tf_ids_to_delete:
+        aid = trackfile_to_album.get(tf_id, 0)
+        if aid:
+            pre_delete_albums.add(aid)
+
+    if blocklist and pre_delete_albums:
+        _lidarr_blocklist_albums(base_url, api_key, pre_delete_albums)
+
     deleted = 0
     affected_albums = set()
 
@@ -1074,6 +1099,9 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
                             len(tf_ids_to_delete), len(affected_albums))
                 log.write(f"LIDARR DELETE: {len(tf_ids_to_delete)} "
                           f"track files ({len(affected_albums)} albums)\n")
+                if blocklist and pre_delete_albums:
+                    log.write(f"LIDARR BLOCKLIST: "
+                              f"{len(pre_delete_albums)} albums\n")
             else:
                 logger.error("  Lidarr: bulk delete failed, "
                              "falling back to direct deletion")
@@ -1106,7 +1134,59 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file):
     return (deleted, list(affected_albums))
 
 
-def _log_lidarr_status(lidarr_url, lidarr_api_key, lidarr_search):
+def _lidarr_get_album_history(base_url, api_key, album_id):
+    """Fetch the most recent grabbed history record for an album.
+    Returns list of history records (at most 1)."""
+    url = (f"{base_url}/api/v1/history"
+           f"?albumId={album_id}&eventType=grabbed"
+           f"&sortKey=date&sortDirection=descending"
+           f"&pageSize=1&page=1")
+    result = _lidarr_request(url, api_key)
+    if result is None:
+        return []
+    return result.get("records", [])
+
+
+def _lidarr_mark_history_failed(base_url, api_key, history_id):
+    """Mark a history record as failed, creating a blocklist entry.
+    Lidarr auto-blocklists the release on DownloadFailedEvent."""
+    url = f"{base_url}/api/v1/history/failed/{history_id}"
+    return _lidarr_request(url, api_key, method="POST")
+
+
+def _lidarr_blocklist_albums(base_url, api_key, album_ids):
+    """Blocklist the most recent grab for each album by marking it as failed.
+    Best-effort: logs warnings on failure but does not raise.
+    Returns count of successfully blocklisted albums."""
+    blocklisted = 0
+    for album_id in album_ids:
+        history = _lidarr_get_album_history(base_url, api_key, album_id)
+        if not history:
+            logger.debug("  Blocklist: no grab history for album %d",
+                         album_id)
+            continue
+        record = history[0]
+        history_id = record.get("id")
+        if not history_id:
+            logger.debug("  Blocklist: no history ID for album %d",
+                         album_id)
+            continue
+        result = _lidarr_mark_history_failed(base_url, api_key, history_id)
+        if result is not None:
+            blocklisted += 1
+            logger.debug("  Blocklist: marked history %d as failed "
+                         "(album %d)", history_id, album_id)
+        else:
+            logger.warning("  Blocklist: failed to mark history %d "
+                           "for album %d", history_id, album_id)
+    if blocklisted:
+        logger.info("  Lidarr: blocklisted %d/%d albums",
+                    blocklisted, len(album_ids))
+    return blocklisted
+
+
+def _log_lidarr_status(lidarr_url, lidarr_api_key, lidarr_search,
+                       lidarr_blocklist=False):
     """Log Lidarr integration status without exposing credentials."""
     if lidarr_url and not lidarr_url.startswith(("http://", "https://")):
         logger.error("LIDARR_URL must start with http:// or https://")
@@ -1115,6 +1195,8 @@ def _log_lidarr_status(lidarr_url, lidarr_api_key, lidarr_search):
         logger.info("  Lidarr integration: enabled")
         if lidarr_search:
             logger.info("  Lidarr search: enabled (5/hour)")
+        if lidarr_blocklist:
+            logger.info("  Lidarr blocklist: enabled")
         masked = re.sub(r'(https?://)(.+)', r'\1****', lidarr_url)
         logger.debug("  Lidarr URL: %s", masked)
     elif lidarr_url:
@@ -1329,6 +1411,7 @@ def _load_config():
         lidarr_url=os.environ.get("LIDARR_URL", "").rstrip("/"),
         lidarr_api_key=_load_lidarr_api_key(),
         lidarr_search=_parse_env_bool("LIDARR_SEARCH", False),
+        lidarr_blocklist=_parse_env_bool("LIDARR_BLOCKLIST", False),
     )
 
 
@@ -1363,7 +1446,8 @@ def main():
     setup_logging(cfg.log_level, cfg.log_file)
 
     logger.info("BeatsCheck v%s starting", __version__)
-    _log_lidarr_status(cfg.lidarr_url, cfg.lidarr_api_key, cfg.lidarr_search)
+    _log_lidarr_status(cfg.lidarr_url, cfg.lidarr_api_key, cfg.lidarr_search,
+                       cfg.lidarr_blocklist)
 
     queue = _load_json(_search_queue_path(cfg.log_dir), default=[])
     if queue:
@@ -1380,7 +1464,8 @@ def main():
     if cfg.mode == "delete":
         corrupt_list_path = os.path.join(cfg.log_dir, "corrupt.txt")
         run_delete_mode(corrupt_list_path, cfg.log_file, cfg.log_dir,
-                        cfg.lidarr_url, cfg.lidarr_api_key)
+                        cfg.lidarr_url, cfg.lidarr_api_key,
+                        cfg.lidarr_blocklist)
         return
 
     if not os.path.isdir(cfg.input_folder):
@@ -1416,7 +1501,7 @@ def main():
             run_auto_delete(
                 cfg.log_dir, cfg.log_file, cfg.delete_after,
                 cfg.max_auto_delete, cfg.lidarr_url, cfg.lidarr_api_key,
-                cfg.lidarr_search)
+                cfg.lidarr_search, cfg.lidarr_blocklist)
 
         if shutdown_requested:
             break

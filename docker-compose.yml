@@ -51,5 +51,7 @@ services:
       ## Queue album search after auto-delete so Lidarr re-downloads (default: false)
       ## Processes 5 albums/hour during idle to avoid flooding trackers
       # - LIDARR_SEARCH=true
+      ## Blocklist corrupt releases so Lidarr doesn't re-download them (default: false)
+      # - LIDARR_BLOCKLIST=true
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2

@@ -152,6 +152,7 @@ docker exec beatscheck rescan report
 | `LIDARR_URL` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
 | `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
 | `LIDARR_SEARCH` | `false` | Queue album search after auto-delete so Lidarr re-downloads. Processes 5 albums/hour during idle |
+| `LIDARR_BLOCKLIST` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
 
 ## Docker Usage
 
@@ -332,8 +333,9 @@ When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck uses the Lidarr API t
 1. Scan finds corrupt files → added to `corrupt.txt` with first-seen timestamp
 2. After the threshold (e.g. 7 days), auto-delete runs
 3. BeatsCheck maps each corrupt file to a Lidarr track file via the API
-4. Deletes track files via Lidarr bulk delete (albums stay monitored, show as missing)
-5. Files not tracked by Lidarr are deleted directly, then a Lidarr artist refresh is triggered
+4. If `LIDARR_BLOCKLIST=true`, marks the most recent grab for each affected album as failed — Lidarr auto-creates a blocklist entry so the same release is not re-downloaded
+5. Deletes track files via Lidarr bulk delete (albums stay monitored, show as missing)
+6. Files not tracked by Lidarr are deleted directly, then a Lidarr artist refresh is triggered
 
 **Search queue (`LIDARR_SEARCH=true`):**
 
@@ -358,6 +360,7 @@ environment:
   - LIDARR_URL=http://lidarr:8686
   - LIDARR_API_KEY=your-api-key-here
   - LIDARR_SEARCH=true
+  - LIDARR_BLOCKLIST=true
 ```
 
 ## Updating
