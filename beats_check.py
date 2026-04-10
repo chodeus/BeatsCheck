@@ -1535,7 +1535,7 @@ def _lidarr_get_album_history(base_url, api_key, album_id):
     """Fetch the most recent grabbed history record for an album.
     Returns list of history records (at most 1)."""
     url = (f"{base_url}/api/v1/history"
-           f"?albumId={album_id}&eventType=grabbed"
+           f"?albumId={album_id}&eventType=1"
            f"&sortKey=date&sortDirection=descending"
            f"&pageSize=1&page=1")
     result = _lidarr_request(url, api_key)
