@@ -1031,19 +1031,31 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
 
 def _prompt_lidarr_search(log_dir, lidarr_url, lidarr_api_key,
                           album_ids):
-    """After Lidarr API delete, offer to queue album searches
-    so Lidarr re-downloads clean copies."""
+    """After Lidarr API delete, check for unmonitored albums and offer
+    to queue searches. Monitored albums are skipped since Lidarr
+    auto-searches them after trackfile deletion."""
     if not lidarr_url or not lidarr_api_key or not album_ids:
         return
+
+    # Only prompt for unmonitored albums — Lidarr auto-searches monitored ones
+    unmonitored = []
+    for aid in album_ids:
+        album = _lidarr_get_album(lidarr_url, lidarr_api_key, aid)
+        if album and not album.get("monitored", True):
+            unmonitored.append(aid)
+
+    if not unmonitored:
+        return
+
     try:
         answer = input(
-            f"\n  Queue Lidarr search for {len(album_ids)} "
-            f"deleted albums? [y/n] "
+            f"\n  {len(unmonitored)} deleted albums are unmonitored "
+            f"in Lidarr. Queue search? [y/n] "
         ).strip().lower()
     except EOFError:
         return
     if answer == 'y':
-        _search_queue_add(log_dir, album_ids)
+        _search_queue_add(log_dir, unmonitored)
 
 
 def run_delete_mode(corrupt_list_path, log_file, log_dir,
@@ -1190,7 +1202,19 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
                 if not os.path.exists(path):
                     tracking.pop(path, None)
             if lidarr_search and album_ids:
-                _search_queue_add(log_dir, album_ids)
+                # Only queue search for unmonitored albums —
+                # Lidarr auto-searches monitored ones after deletion
+                unmonitored = []
+                for aid in album_ids:
+                    album = _lidarr_get_album(
+                        lidarr_url, lidarr_api_key, aid)
+                    if album and not album.get("monitored", True):
+                        unmonitored.append(aid)
+                if unmonitored:
+                    _search_queue_add(log_dir, unmonitored)
+                    logger.info("  Queued search for %d "
+                                "unmonitored albums",
+                                len(unmonitored))
         else:
             logger.error("  Lidarr API failed — auto-delete aborted. "
                          "Files will be retried next run.")
@@ -1417,6 +1441,12 @@ def _lidarr_get_trackfiles_by_album(base_url, api_key, album_id):
         return []
     return [{"id": tf["id"], "path": tf["path"],
              "albumId": tf.get("albumId", 0)} for tf in result]
+
+
+def _lidarr_get_album(base_url, api_key, album_id):
+    """Fetch album details. Returns dict with 'monitored' field, or None."""
+    url = f"{base_url}/api/v1/album/{album_id}"
+    return _lidarr_request(url, api_key)
 
 
 def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
