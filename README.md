@@ -151,7 +151,7 @@ docker exec beatscheck rescan report
 | `UMASK` | `002` | File creation mask |
 | `LIDARR_URL` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
 | `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
-| `LIDARR_SEARCH` | `false` | Queue album search after auto-delete so Lidarr re-downloads. Processes 5 albums/hour during idle |
+| `LIDARR_SEARCH` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
 | `LIDARR_BLOCKLIST` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
 
 ## Docker Usage
@@ -302,7 +302,7 @@ The third argument is the log file path. All state files (`processed.txt`, `corr
 | `beats_check.log.1` `.2` `.3` | Previous logs after rotation (last 3 kept) |
 | `processed.txt` | Resume cache — one checked file path per line. Rotated alongside the log |
 | `corrupt.txt` | One corrupt file path per line (deduplicated) — for scripting or delete mode |
-| `corrupt_details.json` | Path-to-error-reason mapping — shown during interactive delete |
+| `corrupt_details.json` | Path-to-error mapping with Lidarr trackfile/album IDs (when configured) |
 | `corrupt_tracking.json` | Path-to-first-seen timestamps — used by `DELETE_AFTER` auto-delete |
 | `summary.json` | Machine-readable scan results for notification scripts |
 | `search_queue.json` | Pending Lidarr album search queue — drained during idle (5/hour) |
@@ -326,26 +326,36 @@ For a 100K file library, expect ~10 MB per full scan. With daemon mode, subseque
 
 ## Lidarr Integration
 
-When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck uses the Lidarr API to delete corrupt files instead of deleting them directly. Track file records are removed via the API while albums stay monitored — so Lidarr marks them as missing and can re-download.
+When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck uses the Lidarr API for all deletion operations. Track file records are removed via the API while albums stay monitored — Lidarr automatically re-downloads monitored albums after deletion.
 
-**Auto-delete flow (`DELETE_AFTER`):**
+**How it works:**
 
-1. Scan finds corrupt files → added to `corrupt.txt` with first-seen timestamp
-2. After the threshold (e.g. 7 days), auto-delete runs
-3. BeatsCheck maps each corrupt file to a Lidarr track file via the API
-4. If `LIDARR_BLOCKLIST=true`, marks the most recent grab for each affected album as failed — Lidarr auto-creates a blocklist entry so the same release is not re-downloaded
-5. Deletes track files via Lidarr bulk delete (albums stay monitored, show as missing)
-6. Files not tracked by Lidarr are deleted directly, then a Lidarr artist refresh is triggered
+1. **Scan** — corrupt files are detected and matched to Lidarr trackfile IDs via path suffix matching. IDs are stored in `corrupt_details.json` so delete operations don't need to re-resolve them.
+2. **Blocklist** (`LIDARR_BLOCKLIST=true`) — before deletion, the most recent grab for each affected album is marked as failed. Lidarr auto-creates a blocklist entry so the same corrupt release is not re-downloaded. **If blocklist fails, deletion is aborted.**
+3. **Delete** — track files are removed via Lidarr's bulk delete API. Albums stay monitored and show as "missing". **If the API call fails, deletion is aborted** (no silent fallback to filesystem delete).
+4. **Re-download** — monitored albums are automatically re-searched by Lidarr after the trackfiles are deleted. No manual intervention needed.
 
-**Search queue (`LIDARR_SEARCH=true`):**
+**Unmonitored albums:**
 
-After auto-delete removes corrupt files, affected album IDs are written to a persistent search queue (`search_queue.json`). During idle time the container drains this queue — one album at a time, waiting for each Lidarr search to complete before starting the next. Rate limited to 5 albums/hour to avoid flooding indexers/trackers. The queue survives container restarts.
-
-**Interactive delete** also offers to queue searches. After deleting files, if Lidarr is configured you'll be prompted:
+If a deleted album is unmonitored in Lidarr, it won't be auto-searched. In interactive delete, you'll be prompted:
 
 ```
-Queue Lidarr search for 3 deleted albums? [y/n]
+2 deleted albums are unmonitored in Lidarr. Queue search? [y/n]
 ```
+
+With `LIDARR_SEARCH=true` and auto-delete, unmonitored album IDs are written to a persistent search queue (`search_queue.json`). The container drains this queue during idle — one album at a time, rate limited to 5/hour to avoid flooding indexers.
+
+**Path handling:**
+
+BeatsCheck runs in a container where music is mounted at `/music`, while Lidarr sees the same files at a different host path (e.g. `/data/media/music/Artist/Album/`). At scan time, corrupt files are matched to Lidarr trackfiles by comparing path components from the right (suffix matching). This works regardless of how the music directory is mounted in each container.
+
+**Error handling:**
+
+All Lidarr API operations are fail-safe:
+- If blocklist fails → delete is aborted, error shown
+- If bulk delete API fails → delete is aborted, error shown
+- If Lidarr is unreachable at scan time → files are tracked without Lidarr IDs, direct filesystem delete is used as fallback
+- Files not tracked by Lidarr (cover art, .nfo, etc.) are deleted directly via `os.remove`
 
 **Security:**
 - API key is sent only via HTTP header, never in URLs or logs
