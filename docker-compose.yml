@@ -23,37 +23,12 @@ services:
       ## Auto-detect host timezone (no TZ env var needed if mounted)
       - /etc/localtime:/etc/localtime:ro
     environment:
-      ## Scan mode: report (default), move, or delete
-      - MODE=report
-      ## Parallel ffmpeg decode workers (2=conservative, 4=balanced, 8+=fast)
-      - WORKERS=4
-      ## Hours between scans (0=once, 168=weekly, 24=daily)
-      - RUN_INTERVAL=168
-      ## Auto-delete corrupt files after N days (0=never, 7=one week review window)
-      - DELETE_AFTER=0
-      ## Safety: abort auto-delete if more than N files flagged (0=no limit)
-      - MAX_AUTO_DELETE=50
-      ## Skip files modified within N minutes (avoids flagging active downloads)
-      - MIN_FILE_AGE=30
-      ## Log level: DEBUG, INFO, WARNING, ERROR
-      - LOG_LEVEL=INFO
-      ## Rotate log and do fresh scan when log exceeds N MB (0=never)
-      - MAX_LOG_MB=50
-      ## Container user/group IDs
+      ## Container user/group IDs and timezone
       - PUID=1000
       - PGID=1000
       - TZ=America/New_York
       - UMASK=002
-      ## Lidarr integration (optional): auto-delete via Lidarr API
-      ## Lidarr handles file deletion + database cleanup + re-download
-      ## Recommended: set these in /config/beatscheck.conf instead of here
-      ## so the API key doesn't appear in 'docker inspect' output.
-      # - LIDARR_URL=http://lidarr:8686
-      # - LIDARR_API_KEY=your-api-key-here
-      ## Queue album search after auto-delete so Lidarr re-downloads (default: false)
-      ## Processes 5 albums/hour during idle to avoid flooding trackers
-      # - LIDARR_SEARCH=true
-      ## Blocklist corrupt releases so Lidarr doesn't re-download them (default: false)
-      # - LIDARR_BLOCKLIST=true
+      ## All other settings (mode, workers, Lidarr, etc.) are configured in
+      ## /config/beatscheck.conf — auto-created on first run.
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2

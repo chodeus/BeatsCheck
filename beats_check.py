@@ -1833,46 +1833,49 @@ _DEFAULT_CONFIG = """\
 #######################################################
 ##       BeatsCheck Configuration File               ##
 #######################################################
-##  All values below show defaults. Uncomment and    ##
-##  edit only what you need to change.               ##
-##  Environment variables override config file.      ##
+##  Edit values below to configure BeatsCheck.       ##
+##  Environment variables override all values here.  ##
 ##  https://github.com/chodeus/BeatsCheck            ##
 #######################################################
 
+## Quarantine destination for move mode (must match a mounted volume)
+# output_dir = "/corrupted"
+
 ## Scan mode: setup (idle), report (log only), move (quarantine), delete
-# mode = "report"
+mode = "setup"
 
 ## Parallel ffmpeg decode workers (2=conservative, 4=balanced, 8+=fast)
-# workers = 4
+workers = 4
 
 ## Hours between scans (0=once, 168=weekly, 24=daily)
-# run_interval = 168
+run_interval = 0
 
 ## Auto-delete corrupt files after N days (0=never)
-# delete_after = 0
+delete_after = 0
 
 ## Safety: abort auto-delete if more than N files flagged (0=no limit)
-# max_auto_delete = 50
+max_auto_delete = 50
 
 ## Skip files modified within N minutes (avoids flagging active downloads)
-# min_file_age = 30
+min_file_age = 30
 
 ## Log level: DEBUG, INFO, WARNING, ERROR
-# log_level = "INFO"
+log_level = "INFO"
 
 ## Rotate log when log exceeds N MB (0=never)
-# max_log_mb = 50
+max_log_mb = 50
 
 ##----- Lidarr Integration (optional) ----------------
 ## When configured, BeatsCheck uses the Lidarr API to
 ## delete corrupt files so Lidarr can clean its database
 ## and optionally re-download.
+## Storing credentials here keeps them out of
+## 'docker inspect' output and process listings.
 
 ## Lidarr instance URL
 # lidarr_url = "http://lidarr:8686"
 
-## Lidarr API key (Settings > General in Lidarr).
-## Storing the key here keeps it out of 'docker inspect' output.
+## Lidarr API key (Settings > General in Lidarr)
 # lidarr_api_key = ""
 
 ## Queue album search after auto-delete so Lidarr re-downloads (5/hour)
@@ -1884,6 +1887,7 @@ _DEFAULT_CONFIG = """\
 
 # Maps config-file keys (lowercase) to environment variable names.
 _CONFIG_KEY_MAP = {
+    'output_dir': 'OUTPUT_DIR',
     'mode': 'MODE',
     'workers': 'WORKERS',
     'run_interval': 'RUN_INTERVAL',
@@ -1977,15 +1981,14 @@ def _load_config():
         log_file = sys.argv[3]
         log_dir = os.path.dirname(log_file)
     else:
+        log_dir = os.environ.get("CONFIG_DIR", "/config").rstrip("/")
+        # Write default config template on first run, then load values.
+        # Config file values fill in for any env vars not already set.
+        _write_default_config(log_dir)
+        _apply_config_file(log_dir)
         input_folder = os.environ.get("MUSIC_DIR", "/music").rstrip("/")
         output_folder = os.environ.get("OUTPUT_DIR", "/corrupted").rstrip("/")
-        log_dir = os.environ.get("CONFIG_DIR", "/config").rstrip("/")
         log_file = os.path.join(log_dir, "beats_check.log")
-
-    # Write default config template on first run, then load values.
-    # Config file values fill in for any env vars not already set.
-    _write_default_config(log_dir)
-    _apply_config_file(log_dir)
 
     mode = (os.environ.get("MODE") or "setup").lower()
     if mode not in ("report", "move", "delete", "setup"):

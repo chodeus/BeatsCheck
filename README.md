@@ -132,41 +132,40 @@ docker exec beatscheck rescan report
 
 ## Configuration
 
-### Config File (Recommended for Lidarr API Key)
+### Config File
 
-On first run, BeatsCheck creates a config file at `/config/beatscheck.conf` with all options documented and commented out. Edit this file to set any values — especially the Lidarr API key, which stays out of `docker inspect` when stored here.
+On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and their defaults. Edit this file to configure scanning, scheduling, and Lidarr integration. Credentials stored here stay out of `docker inspect` and process listings.
 
-```conf
-## Lidarr API key (Settings > General in Lidarr).
-## Storing the key here keeps it out of 'docker inspect' output.
-lidarr_api_key = "your-api-key-here"
-```
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `output_dir` | `/corrupted` | Quarantine destination for move mode. Must match a mounted volume |
+| `mode` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
+| `workers` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
+| `run_interval` | `0` | Hours between scans. `0` = run once and exit. `168` = weekly. `24` = daily |
+| `delete_after` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
+| `max_auto_delete` | `50` | Safety threshold — abort auto-delete if more than this many files would be removed. `0` = no limit |
+| `min_file_age` | `30` | Skip files modified within this many minutes. Prevents flagging active downloads |
+| `log_level` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `max_log_mb` | `50` | Rotate log and do fresh full scan when log exceeds this size. `0` = never rotate |
+| `lidarr_url` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
+| `lidarr_api_key` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
+| `lidarr_search` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
+| `lidarr_blocklist` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
 
-Environment variables override the config file, which overrides defaults.
+Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set.
 
-### Environment Variables
+### Container Environment Variables
+
+These Docker-level settings are configured as environment variables:
 
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `MUSIC_DIR` | `/music` | Path to music library inside container |
-| `OUTPUT_DIR` | `/corrupted` | Quarantine destination (move mode only) |
-| `CONFIG_DIR` | `/config` | Persistent directory for logs, corrupt.txt, and tracking data |
-| `MODE` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
-| `WORKERS` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
-| `RUN_INTERVAL` | `0` | Hours between scans. `0` = run once and exit. `168` = weekly. `24` = daily |
-| `DELETE_AFTER` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
-| `MAX_AUTO_DELETE` | `50` | Safety threshold — abort auto-delete if more than this many files would be removed. `0` = no limit |
-| `MIN_FILE_AGE` | `30` | Skip files modified within this many minutes. Prevents flagging active downloads |
-| `MAX_LOG_MB` | `50` | Rotate log and do fresh full scan when log exceeds this size. `0` = never rotate |
-| `LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `PUID` | `99` | User ID for file ownership |
 | `PGID` | `100` | Group ID for file ownership |
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
-| `LIDARR_URL` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
-| `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Recommended: use config file instead. Also reads from `/run/secrets/lidarr_api_key` |
-| `LIDARR_SEARCH` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
-| `LIDARR_BLOCKLIST` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
+
+Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/music`, `/corrupted`, `/config` and are set via Docker volume mounts.
 
 ## Docker Usage
 
