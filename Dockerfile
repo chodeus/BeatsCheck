@@ -29,7 +29,8 @@ ENV PUID=99 \
     DELETE_AFTER=0 \
     LOG_LEVEL=INFO
 
-RUN apk --no-cache add \
+RUN apk --no-cache upgrade && \
+    apk --no-cache add \
     python3 \
     ffmpeg \
     shadow \
