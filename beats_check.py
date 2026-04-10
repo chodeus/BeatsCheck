@@ -35,8 +35,8 @@ def handle_shutdown(signum, frame):
 
 
 def _get_host_mount_path(container_path):
-    """Resolve the host path for a container mount point by reading
-    /proc/self/mountinfo. Returns the host path or None."""
+    """Resolve the host bind-mount path for a container mount point
+    by reading /proc/self/mountinfo. Returns the host path or None."""
     real = os.path.realpath(container_path)
     try:
         with open("/proc/self/mountinfo", "r") as f:
@@ -46,25 +46,32 @@ def _get_host_mount_path(container_path):
                 if len(parts) < 5:
                     continue
                 mount_point = parts[4]
-                # Find the mount root (host path) after the " - " separator
+                mount_root = parts[3]
                 try:
                     sep = parts.index("-")
                     if sep + 2 < len(parts):
                         mount_source = parts[sep + 2]
-                        mount_root = parts[3]
+                    else:
+                        continue
                 except (ValueError, IndexError):
                     continue
                 if real == mount_point or real.startswith(mount_point + "/"):
-                    # Prefer the longest (most specific) mount point
                     if best is None or len(mount_point) > len(best[0]):
                         best = (mount_point, mount_source, mount_root)
             if best:
                 mount_point, source, root = best
-                # Construct full host path
-                rel = real[len(mount_point):].lstrip("/")
-                if root and root != "/":
-                    return os.path.join(source, root.lstrip("/"), rel)
-                return os.path.join(source, rel) if rel else source
+                # For Docker bind mounts, source is the host path
+                # For Unraid shfs/fuse, source is the fs name —
+                # use mount root which has the subpath
+                if source.startswith("/"):
+                    rel = real[len(mount_point):].lstrip("/")
+                    if root and root != "/":
+                        return os.path.join(
+                            source, root.lstrip("/"), rel)
+                    return os.path.join(source, rel) if rel else source
+                elif root and root != "/":
+                    # Unraid: root has the path (e.g. /data/media/music)
+                    return root
     except OSError:
         pass
     return None
