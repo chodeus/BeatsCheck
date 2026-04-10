@@ -1,5 +1,7 @@
 # BeatsCheck
 
+> **This project is in active development.** Features may change between releases. Please report issues on [GitHub](https://github.com/chodeus/BeatsCheck/issues).
+
 Audio file integrity checker that performs a full decode test using ffmpeg. Catches audio stream corruption like `Decoding error: Invalid data` and `Decode error rate exceeds maximum`.
 
 **Default mode is report-only. No files are moved or deleted until you explicitly choose to.**
@@ -30,13 +32,13 @@ You can change modes without restarting — see [Rescan](#4-rescan) below.
 Start the container normally. It scans your library, writes results, and waits for next interval:
 
 ```
-BeatsCheck v2.0.0 starting
-2025-01-15 10:00:00 | INFO     | BeatsCheck v2.0.0
-2025-01-15 10:00:00 | INFO     |   Mode:    report
-2025-01-15 10:00:00 | INFO     |   Workers: 6
-2025-01-15 10:00:00 | INFO     |   Library: 98432 files (2.8 TB)
-2025-01-15 10:00:00 | INFO     |   To scan: 98432 files (0 already processed)
-2025-01-15 10:05:00 | INFO     | [5%] 5000/98432 checked, 2 corrupt, ETA 3h42m
+BeatsCheck v1.0.0 starting
+2026-01-15 10:00:00 | INFO     | BeatsCheck v1.0.0
+2026-01-15 10:00:00 | INFO     |   Mode:    report
+2026-01-15 10:00:00 | INFO     |   Workers: 6
+2026-01-15 10:00:00 | INFO     |   Library: 98432 files (2.8 TB)
+2026-01-15 10:00:00 | INFO     |   To scan: 98432 files (0 already processed)
+2026-01-15 10:05:00 | INFO     | [5%] 5000/98432 checked, 2 corrupt, ETA 3h42m
 ```
 
 ### 2. Review results

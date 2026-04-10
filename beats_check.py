@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-__version__ = "2.0.0"
+__version__ = "1.0.0"
 
 AUDIO_EXTENSIONS = {
     '.flac', '.mp3', '.m4a', '.ogg', '.opus', '.wav',
