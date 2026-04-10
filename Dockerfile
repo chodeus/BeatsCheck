@@ -12,7 +12,7 @@ LABEL org.opencontainers.image.title="beatscheck" \
       org.opencontainers.image.authors="chodeus" \
       org.opencontainers.image.source="https://github.com/chodeus/BeatsCheck" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.base.name="alpine:3.21"
+      org.opencontainers.image.base.name="alpine:3.23"
 
 ENV PUID=99 \
     PGID=100 \

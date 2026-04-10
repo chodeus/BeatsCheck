@@ -170,7 +170,11 @@ def _acquire_scan_lock(log_dir):
     """Acquire an exclusive file lock for scanning. Returns the lock fd."""
     lock_path = os.path.join(log_dir, ".scanning")
     lf = open(lock_path, 'w')
-    fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    try:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        lf.close()
+        raise
     lf.write(str(os.getpid()))
     lf.flush()
     return lf
@@ -373,6 +377,22 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
 
     if total == 0:
         logger.debug("Nothing to do.")
+        existing_details = _load_json(
+            os.path.join(log_dir, "corrupt_details.json"))
+        _finalize_scan(log_dir, corrupt_list_path, existing_details,
+                       output_folder, {
+                           "version": __version__,
+                           "finished": time.strftime('%Y-%m-%d %H:%M:%S'),
+                           "duration": "0s",
+                           "library_files": len(all_files),
+                           "library_size": total_library_size,
+                           "library_size_human": format_size(total_library_size),
+                           "files_checked": 0,
+                           "corrupted": 0,
+                           "corrupt_size": 0,
+                           "corrupt_size_human": format_size(0),
+                           "mode": mode,
+                       })
         return 0
 
     checked = 0
@@ -1240,6 +1260,9 @@ def _search_queue_add(log_dir, album_ids):
     """Append album IDs to the search queue, deduplicating."""
     path = _search_queue_path(log_dir)
     queue = _load_json(path, default=[])
+    if not isinstance(queue, list):
+        logger.warning("Corrupt search_queue.json — resetting to empty list")
+        queue = []
     existing = set(queue)
     added = 0
     for aid in album_ids:
@@ -1258,7 +1281,7 @@ def _search_queue_drain_one(log_dir, base_url, api_key):
     polls until complete. Returns True if a search was attempted."""
     path = _search_queue_path(log_dir)
     queue = _load_json(path, default=[])
-    if not queue:
+    if not isinstance(queue, list) or not queue:
         return False
 
     album_id = queue[0]
@@ -1328,8 +1351,8 @@ def _search_queue_drain_one(log_dir, base_url, api_key):
 
 # --- Config ---
 
-def setup_logging(log_level, log_file):
-    """Configure logging with console and file handlers."""
+def setup_logging(log_level):
+    """Configure logging with console handler."""
     level = getattr(logging, log_level.upper(), logging.INFO)
 
     root = logging.getLogger()
@@ -1415,12 +1438,13 @@ def _load_config():
     )
 
 
-def _run_setup_idle(log_dir):
+def _run_setup_idle(log_dir, lidarr_url=None, lidarr_api_key=None):
     """Setup mode — sit idle until rescan with a mode is triggered.
-    Bare 'rescan' (no mode) defaults to report."""
+    Bare 'rescan' (no mode) defaults to report.
+    Drains the Lidarr search queue during idle if configured."""
     logger.info("Setup mode — container is idle. "
                 "Start scanning with: rescan report")
-    result = _idle_wait(log_dir, None)
+    result = _idle_wait(log_dir, None, lidarr_url, lidarr_api_key)
     if isinstance(result, str) and result in ("report", "move"):
         return result
     if result is True:
@@ -1443,18 +1467,19 @@ def main():
 
     os.makedirs(cfg.log_dir, exist_ok=True)
 
-    setup_logging(cfg.log_level, cfg.log_file)
+    setup_logging(cfg.log_level)
 
     logger.info("BeatsCheck v%s starting", __version__)
     _log_lidarr_status(cfg.lidarr_url, cfg.lidarr_api_key, cfg.lidarr_search,
                        cfg.lidarr_blocklist)
 
     queue = _load_json(_search_queue_path(cfg.log_dir), default=[])
-    if queue:
+    if isinstance(queue, list) and queue:
         logger.info("  Search queue: %d albums pending", len(queue))
 
     if cfg.mode == "setup":
-        new_mode = _run_setup_idle(cfg.log_dir)
+        new_mode = _run_setup_idle(cfg.log_dir, cfg.lidarr_url,
+                                   cfg.lidarr_api_key)
         if new_mode:
             cfg.mode = new_mode
             logger.info("Mode changed to: %s", cfg.mode)

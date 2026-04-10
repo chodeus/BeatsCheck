@@ -1,18 +1,27 @@
 #!/bin/sh
 # Trigger a rescan from inside or outside the container.
 # Usage: rescan [--fresh] [--mode report|move]
+#        rescan [--fresh] [report|move]
 CONFIG_DIR=${CONFIG_DIR:-/config}
 
 MODE_OVERRIDE=""
 FRESH=false
 
-for arg in "$@"; do
-    case "$arg" in
-        --fresh) FRESH=true ;;
-        --mode) shift; MODE_OVERRIDE="$1" ;;
-        report|move) MODE_OVERRIDE="$arg" ;;
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --fresh) FRESH=true; shift ;;
+        --mode)
+            if [ -n "$2" ]; then
+                MODE_OVERRIDE="$2"
+                shift 2
+            else
+                echo "Error: --mode requires a value (report or move)"
+                exit 1
+            fi
+            ;;
+        report|move) MODE_OVERRIDE="$1"; shift ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
     esac
-    shift 2>/dev/null || true
 done
 
 if [ "$FRESH" = true ]; then
