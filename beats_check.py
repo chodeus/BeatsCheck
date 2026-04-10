@@ -34,6 +34,14 @@ def handle_shutdown(signum, frame):
     logger.info("Shutdown requested, finishing in-progress files...")
 
 
+def _decode_mountinfo_path(path):
+    """Decode octal escapes in /proc/self/mountinfo paths.
+    e.g. \\040 -> space, \\011 -> tab."""
+    import re as _re
+    return _re.sub(r'\\([0-7]{3})',
+                   lambda m: chr(int(m.group(1), 8)), path)
+
+
 def _get_host_mount_path(container_path):
     """Resolve the host bind-mount path for a container mount point
     by reading /proc/self/mountinfo. Returns the host path or None."""
@@ -45,12 +53,13 @@ def _get_host_mount_path(container_path):
                 parts = line.split()
                 if len(parts) < 5:
                     continue
-                mount_point = parts[4]
-                mount_root = parts[3]
+                mount_point = _decode_mountinfo_path(parts[4])
+                mount_root = _decode_mountinfo_path(parts[3])
                 try:
                     sep = parts.index("-")
                     if sep + 2 < len(parts):
-                        mount_source = parts[sep + 2]
+                        mount_source = _decode_mountinfo_path(
+                            parts[sep + 2])
                     else:
                         continue
                 except (ValueError, IndexError):
