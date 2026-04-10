@@ -527,6 +527,10 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                     pct, checked, total, corrupted,
                     format_eta(eta))
 
+            # Update WebUI progress (every 10 files to reduce overhead)
+            if checked % 10 == 0 or checked == total:
+                _webui_progress(checked, total, corrupted, file_path)
+
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for f in files_to_check:
                 if shutdown_requested:
@@ -1883,6 +1887,14 @@ max_log_mb = 50
 
 ## Blocklist corrupt release so Lidarr won't re-download the same copy
 # lidarr_blocklist = false
+
+##----- Web UI (optional) ---------------------------------
+## Enable the built-in web interface for monitoring and control.
+## Requires a port to be published (e.g. -p 8080:8080).
+webui = false
+
+## Port for the web interface
+webui_port = 8080
 """
 
 # Maps config-file keys (lowercase) to environment variable names.
@@ -1900,6 +1912,8 @@ _CONFIG_KEY_MAP = {
     'lidarr_api_key': 'LIDARR_API_KEY',
     'lidarr_search': 'LIDARR_SEARCH',
     'lidarr_blocklist': 'LIDARR_BLOCKLIST',
+    'webui': 'WEBUI',
+    'webui_port': 'WEBUI_PORT',
 }
 
 
@@ -2017,6 +2031,8 @@ def _load_config():
         lidarr_api_key=_load_lidarr_api_key(),
         lidarr_search=_parse_env_bool("LIDARR_SEARCH", False),
         lidarr_blocklist=_parse_env_bool("LIDARR_BLOCKLIST", False),
+        webui=_parse_env_bool("WEBUI", False),
+        webui_port=_parse_env_int("WEBUI_PORT", 8080),
     )
 
 
@@ -2032,6 +2048,30 @@ def _run_setup_idle(log_dir, lidarr_url=None, lidarr_api_key=None):
     if result is True:
         return "report"
     return None
+
+
+def _webui_update(cfg, **kwargs):
+    """Update WebUI state if enabled. Safe to call even when WebUI is off."""
+    if not getattr(cfg, 'webui', False):
+        return
+    try:
+        from webui import app_state
+        app_state.update(**kwargs)
+    except ImportError:
+        pass
+
+
+def _webui_progress(current, total, corrupted, current_file):
+    """Update WebUI scan progress. Called from scan loop."""
+    try:
+        from webui import app_state
+        app_state.update(
+            scan_progress={"current": current, "total": total, "file": current_file},
+            corrupt_count=corrupted,
+            total_scanned=current,
+        )
+    except ImportError:
+        pass
 
 
 # --- Main ---
@@ -2052,6 +2092,16 @@ def main():
     setup_logging(cfg.log_level)
 
     logger.info("BeatsCheck v%s starting", __version__)
+
+    # Start optional WebUI
+    if cfg.webui:
+        try:
+            from webui import start_webui, app_state
+            app_state.update(version=__version__, mode=cfg.mode, status="starting")
+            start_webui(cfg.log_dir, cfg.webui_port)
+        except Exception as e:
+            logger.error("WebUI failed to start: %s", e)
+
     _log_lidarr_status(cfg.lidarr_url, cfg.lidarr_api_key, cfg.lidarr_search,
                        cfg.lidarr_blocklist)
 
@@ -2060,6 +2110,7 @@ def main():
         logger.info("  Search queue: %d albums pending", len(queue))
 
     if cfg.mode == "setup":
+        _webui_update(cfg, status="setup", mode="setup")
         new_mode = _run_setup_idle(cfg.log_dir, cfg.lidarr_url,
                                    cfg.lidarr_api_key)
         if new_mode:
@@ -2101,6 +2152,7 @@ def main():
             except OSError:
                 pass
 
+        _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
         run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
                  cfg.log_dir, cfg.mode, cfg.workers, cfg.min_age_minutes,
                  cfg.lidarr_url, cfg.lidarr_api_key)
@@ -2117,6 +2169,7 @@ def main():
         if cfg.run_interval <= 0:
             logger.info("Scan complete. Container is idle. "
                         "Rescan with: rescan [report|move]")
+            _webui_update(cfg, status="idle", scan_progress=None)
             result = _idle_wait(
                 cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
             if result is False:
@@ -2134,6 +2187,7 @@ def main():
             "Next scan at %s (%sh interval). Waiting...",
             next_run, cfg.run_interval
         )
+        _webui_update(cfg, status="idle", scan_progress=None)
 
         result = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
                             cfg.lidarr_url, cfg.lidarr_api_key)

@@ -22,12 +22,7 @@ ENV PUID=99 \
     PYTHONUNBUFFERED=1 \
     MUSIC_DIR=/music \
     OUTPUT_DIR=/corrupted \
-    CONFIG_DIR=/config \
-    MODE=setup \
-    WORKERS=4 \
-    RUN_INTERVAL=0 \
-    DELETE_AFTER=0 \
-    LOG_LEVEL=INFO
+    CONFIG_DIR=/config
 
 RUN apk --no-cache upgrade && \
     apk --no-cache add \
@@ -41,12 +36,16 @@ RUN apk --no-cache upgrade && \
 WORKDIR /app
 
 COPY beats_check.py /app/
+COPY webui.py /app/
+COPY static/ /app/static/
 COPY entrypoint.sh /app/
 COPY delete.sh /app/
 COPY rescan.sh /app/
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
     ln -s /app/rescan.sh /usr/local/bin/rescan
+
+EXPOSE 8080
 
 VOLUME ["/music", "/corrupted", "/config"]
 

@@ -151,6 +151,8 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | `lidarr_api_key` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
 | `lidarr_search` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
 | `lidarr_blocklist` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
+| `webui` | `false` | Enable the built-in web interface. Requires a published port |
+| `webui_port` | `8080` | Port for the web interface |
 
 Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set.
 
@@ -166,6 +168,36 @@ These Docker-level settings are configured as environment variables:
 | `UMASK` | `002` | File creation mask |
 
 Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/music`, `/corrupted`, `/config` and are set via Docker volume mounts.
+
+## Web UI
+
+BeatsCheck includes an optional web interface for monitoring and control. Disabled by default.
+
+### Enabling the WebUI
+
+1. Edit `/config/beatscheck.conf`:
+   ```conf
+   webui = true
+   webui_port = 8080
+   ```
+
+2. Publish the port in your Docker setup:
+   ```yaml
+   # docker-compose.yml
+   ports:
+     - "8080:8080"
+   ```
+
+3. Access at `http://your-server:8080`
+
+### Features
+
+- **Dashboard** — live scan status, progress bar, library stats
+- **Corrupt Files** — browse, search, and delete corrupt files
+- **Configuration** — edit all settings from the browser
+- **Logs** — real-time log viewer with auto-scroll
+- **Dark/Light mode** — toggle with one click, preference saved
+- **Mobile responsive** — full functionality on phones and tablets
 
 ## Docker Usage
 

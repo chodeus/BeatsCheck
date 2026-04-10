@@ -30,5 +30,9 @@ services:
       - UMASK=002
       ## All other settings (mode, workers, Lidarr, etc.) are configured in
       ## /config/beatscheck.conf — auto-created on first run.
+    ## WebUI: uncomment to enable the web interface.
+    ## Also set webui = true in /config/beatscheck.conf
+    # ports:
+    #   - "8080:8080"
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2

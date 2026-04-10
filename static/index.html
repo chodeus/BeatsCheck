@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BeatsCheck</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="header-left">
+      <button id="menu-toggle" class="icon-btn mobile-only" aria-label="Menu">&#9776;</button>
+      <h1>BeatsCheck</h1>
+      <span id="version-badge" class="badge">v1.0.0</span>
+    </div>
+    <div class="header-right">
+      <span id="status-indicator" class="status-dot"></span>
+      <span id="status-text">Connecting...</span>
+      <button id="theme-toggle" class="icon-btn" aria-label="Toggle theme">&#9790;</button>
+    </div>
+  </header>
+
+  <nav id="sidebar">
+    <a href="#dashboard" class="nav-link active" data-page="dashboard">
+      <span class="nav-icon">&#9632;</span> Dashboard
+    </a>
+    <a href="#corrupt" class="nav-link" data-page="corrupt">
+      <span class="nav-icon">&#9888;</span> Corrupt Files
+    </a>
+    <a href="#config" class="nav-link" data-page="config">
+      <span class="nav-icon">&#9881;</span> Configuration
+    </a>
+    <a href="#logs" class="nav-link" data-page="logs">
+      <span class="nav-icon">&#9776;</span> Logs
+    </a>
+  </nav>
+
+  <main id="content">
+
+    <!-- Dashboard -->
+    <section id="page-dashboard" class="page active">
+      <h2>Dashboard</h2>
+      <div class="card-grid">
+        <div class="card">
+          <div class="card-label">Status</div>
+          <div id="dash-status" class="card-value">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Mode</div>
+          <div id="dash-mode" class="card-value">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Corrupt Files</div>
+          <div id="dash-corrupt" class="card-value">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Library Size</div>
+          <div id="dash-library" class="card-value">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Last Scan</div>
+          <div id="dash-last-scan" class="card-value">--</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Uptime</div>
+          <div id="dash-uptime" class="card-value">--</div>
+        </div>
+      </div>
+
+      <!-- Progress bar (visible during scan) -->
+      <div id="scan-progress-section" class="card" style="display:none;">
+        <div class="card-label">Scan Progress</div>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <div id="progress-text" class="progress-text">0 / 0 files</div>
+        <div id="progress-file" class="progress-file"></div>
+      </div>
+
+      <div class="action-bar">
+        <h3>Actions</h3>
+        <div class="btn-group">
+          <button onclick="triggerRescan('report', false)" class="btn btn-primary">Rescan (Report)</button>
+          <button onclick="triggerRescan('move', false)" class="btn btn-secondary">Rescan (Move)</button>
+          <button onclick="triggerRescan('report', true)" class="btn btn-outline">Fresh Rescan</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Corrupt Files -->
+    <section id="page-corrupt" class="page">
+      <h2>Corrupt Files <span id="corrupt-count" class="badge">0</span></h2>
+      <div class="table-toolbar">
+        <input type="text" id="corrupt-search" placeholder="Search files..." class="input">
+        <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled>Delete Selected</button>
+      </div>
+      <div class="table-wrap">
+        <table id="corrupt-table">
+          <thead>
+            <tr>
+              <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
+              <th>File</th>
+              <th>Reason</th>
+              <th class="col-size">Size</th>
+              <th class="col-action">Action</th>
+            </tr>
+          </thead>
+          <tbody id="corrupt-tbody">
+            <tr><td colspan="5" class="empty-state">No corrupt files found</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Configuration -->
+    <section id="page-config" class="page">
+      <h2>Configuration</h2>
+      <p class="subtitle">Edit <code>/config/beatscheck.conf</code> &mdash; changes take effect on next scan.</p>
+      <form id="config-form" onsubmit="saveConfig(event)">
+        <div id="config-fields"></div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save Configuration</button>
+          <span id="config-status" class="form-status"></span>
+        </div>
+      </form>
+    </section>
+
+    <!-- Logs -->
+    <section id="page-logs" class="page">
+      <h2>Logs</h2>
+      <div class="log-toolbar">
+        <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+        <button class="btn btn-outline btn-sm" onclick="refreshLogs()">Refresh</button>
+      </div>
+      <pre id="log-output" class="log-viewer"></pre>
+    </section>
+
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
