@@ -646,64 +646,75 @@ def _handle_folder_action(choice, folder, existing, log,
 def _handle_files_delete_lidarr(file_paths, log, corrupt_details,
                                 lidarr_url, lidarr_api_key,
                                 lidarr_blocklist):
-    """Delete specific files via Lidarr API using stored trackfile IDs.
+    """Delete specific files via Lidarr API, one album at a time.
     Returns (folders_del, files_del, skipped, album_ids)."""
-    tf_ids = []
-    album_ids = set()
+    # Group by album
+    album_to_tfids = {}
     direct_paths = []
 
     for fp in file_paths:
         detail = corrupt_details.get(fp, {})
         if isinstance(detail, dict) and "trackfileId" in detail:
-            tf_ids.append(detail["trackfileId"])
-            if detail.get("albumId"):
-                album_ids.add(detail["albumId"])
+            aid = detail.get("albumId", 0)
+            if aid not in album_to_tfids:
+                album_to_tfids[aid] = []
+            album_to_tfids[aid].append(detail["trackfileId"])
         else:
             direct_paths.append(fp)
 
     deleted = 0
+    album_ids = set()
+    total = len(album_to_tfids)
 
-    # Blocklist before deletion so history context is intact
-    if lidarr_blocklist and album_ids:
-        bl_ok, bl_fail = _lidarr_blocklist_albums(
-            lidarr_url, lidarr_api_key, album_ids)
-        if bl_fail:
-            print(f"           -> ERROR: Blocklist failed for "
-                  f"{bl_fail} albums. Delete aborted.\n")
-            log.write(f"ERROR: Blocklist failed for {bl_fail} albums "
-                      f"— delete aborted\n")
-            return (0, 0, 0, set())
-        if bl_ok:
-            log.write(f"LIDARR BLOCKLIST: {bl_ok} albums\n")
-            print(f"           -> Lidarr: blocklisted {bl_ok} albums")
+    for i, (album_id, tf_ids) in enumerate(
+            album_to_tfids.items(), 1):
+        # Blocklist before deletion
+        if lidarr_blocklist:
+            bl_ok, bl_fail = _lidarr_blocklist_albums(
+                lidarr_url, lidarr_api_key, [album_id])
+            if bl_fail:
+                print(f"           -> ERROR: Blocklist failed for "
+                      f"album {album_id}. Skipping.\n")
+                log.write(f"ERROR: Blocklist failed for album "
+                          f"{album_id} — skipped\n")
+                continue
+            if bl_ok:
+                print(f"           -> Lidarr: blocklisted album "
+                      f"[{i}/{total}]")
 
-    # Bulk delete via Lidarr API
-    if tf_ids:
+        # Delete this album's trackfiles
         result = _lidarr_delete_trackfiles_bulk(
             lidarr_url, lidarr_api_key, tf_ids)
         if result is not None:
             deleted += len(tf_ids)
-            log.write(f"LIDARR DELETE: {len(tf_ids)} track files "
-                      f"({len(album_ids)} albums)\n")
-            print(f"           -> Lidarr: deleted {len(tf_ids)} "
-                  f"track files ({len(album_ids)} albums)")
+            album_ids.add(album_id)
+            log.write(f"LIDARR DELETE: album {album_id} — "
+                      f"{len(tf_ids)} track files\n")
+            album = _lidarr_get_album(
+                lidarr_url, lidarr_api_key, album_id)
+            monitored = album.get("monitored", True) if album else True
+            if monitored:
+                print(f"           -> [{i}/{total}] Deleted "
+                      f"{len(tf_ids)} trackfiles")
+            else:
+                print(f"           -> [{i}/{total}] Deleted "
+                      f"{len(tf_ids)} trackfiles (unmonitored"
+                      f" — Lidarr will not re-download)")
         else:
-            print("           -> ERROR: Lidarr bulk delete failed. "
-                  "Check Lidarr logs.\n")
-            log.write("ERROR: Lidarr bulk delete API failed\n")
-            return (0, 0, 0, set())
+            print(f"           -> ERROR: Bulk delete failed for "
+                  f"album {album_id}. Skipping.\n")
+            log.write(f"ERROR: Bulk delete failed for album "
+                      f"{album_id}\n")
 
-    # Direct delete for files not tracked by Lidarr (non-audio, etc.)
-    if direct_paths:
-        for fp in direct_paths:
-            try:
-                os.remove(fp)
-                deleted += 1
-                log.write(f"DIRECT DELETE (not in Lidarr): {fp}\n")
-            except OSError as e:
-                print(f"           ERROR: "
-                      f"{os.path.basename(fp)}: {e}")
-                log.write(f"ERROR deleting {fp}: {e}\n")
+    # Direct delete for files not tracked by Lidarr
+    for fp in direct_paths:
+        try:
+            os.remove(fp)
+            deleted += 1
+            log.write(f"DIRECT DELETE (not in Lidarr): {fp}\n")
+        except OSError as e:
+            print(f"           ERROR: {os.path.basename(fp)}: {e}")
+            log.write(f"ERROR deleting {fp}: {e}\n")
 
     print(f"           -> {deleted} files deleted\n")
     return (0, deleted, 0, album_ids)
@@ -795,6 +806,14 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
             deleted += len(tf_ids)
             log.write(f"LIDARR DELETE: {len(tf_ids)} track files "
                       f"({len(album_ids)} albums)\n")
+            # Check monitored status for each album
+            for aid in album_ids:
+                album = _lidarr_get_album(
+                    lidarr_url, lidarr_api_key, aid)
+                monitored = album.get("monitored", True) if album else True
+                if not monitored:
+                    print(f"           -> Lidarr: album {aid} "
+                          f"unmonitored — will not re-download")
             print(f"           -> Lidarr: deleted {len(tf_ids)} "
                   f"track files ({len(album_ids)} albums)")
         else:
@@ -1029,35 +1048,6 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
     return None
 
 
-def _prompt_lidarr_search(log_dir, lidarr_url, lidarr_api_key,
-                          album_ids):
-    """After Lidarr API delete, check for unmonitored albums and offer
-    to queue searches. Monitored albums are skipped since Lidarr
-    auto-searches them after trackfile deletion."""
-    if not lidarr_url or not lidarr_api_key or not album_ids:
-        return
-
-    # Only prompt for unmonitored albums — Lidarr auto-searches monitored ones
-    unmonitored = []
-    for aid in album_ids:
-        album = _lidarr_get_album(lidarr_url, lidarr_api_key, aid)
-        if album and not album.get("monitored", True):
-            unmonitored.append(aid)
-
-    if not unmonitored:
-        return
-
-    try:
-        answer = input(
-            f"\n  {len(unmonitored)} deleted albums are unmonitored "
-            f"in Lidarr. Queue search? [y/n] "
-        ).strip().lower()
-    except EOFError:
-        return
-    if answer == 'y':
-        _search_queue_add(log_dir, unmonitored)
-
-
 def run_delete_mode(corrupt_list_path, log_file, log_dir,
                     input_folder=None, lidarr_url=None,
                     lidarr_api_key=None, lidarr_blocklist=False):
@@ -1109,22 +1099,17 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir,
     if action == 'q':
         return
     if action == 'a':
-        mass_album_ids = run_mass_delete(
-            files, log_file, log_dir, corrupt_details,
-            lidarr_url, lidarr_api_key, lidarr_blocklist)
-        _prompt_lidarr_search(log_dir, lidarr_url, lidarr_api_key,
-                              mass_album_ids)
+        run_mass_delete(files, log_file, log_dir, corrupt_details,
+                        lidarr_url, lidarr_api_key, lidarr_blocklist)
         return
     if action != 'i':
         print("Invalid choice.")
         return
 
-    album_ids = _run_interactive_delete(
+    _run_interactive_delete(
         folders, total_folders, corrupt_details,
         log_file, files, corrupt_list_path,
         input_folder, lidarr_url, lidarr_api_key, lidarr_blocklist)
-    _prompt_lidarr_search(log_dir, lidarr_url, lidarr_api_key,
-                          album_ids)
 
 
 # --- Auto-delete ---
@@ -1458,66 +1443,78 @@ def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
 
 def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                            log_dir=None, blocklist=False):
-    """Delete corrupt files via Lidarr API using stored trackfile IDs.
+    """Delete corrupt files via Lidarr API, one album at a time.
     Reads IDs from corrupt_details.json (resolved at scan time).
-    Keeps albums monitored so they show as 'missing' and can be re-downloaded.
-    Falls back to os.remove for files not tracked by Lidarr.
+    Sequential processing prevents flooding indexers with searches.
     Returns (deleted_count, affected_album_ids)."""
-    # Load stored Lidarr IDs from corrupt_details.json
     details_path = os.path.join(
         log_dir or os.path.dirname(log_file), "corrupt_details.json")
     corrupt_details = _load_json(details_path)
 
-    tf_ids_to_delete = []
-    album_ids = set()
-    artist_ids = set()
+    # Group trackfile IDs by album
+    album_to_tfids = {}
     non_lidarr_paths = []
 
     for path in corrupt_paths:
         detail = corrupt_details.get(path, {})
         if isinstance(detail, dict) and "trackfileId" in detail:
-            tf_ids_to_delete.append(detail["trackfileId"])
-            if detail.get("albumId"):
-                album_ids.add(detail["albumId"])
-            if detail.get("artistId"):
-                artist_ids.add(detail["artistId"])
+            aid = detail.get("albumId", 0)
+            if aid not in album_to_tfids:
+                album_to_tfids[aid] = []
+            album_to_tfids[aid].append(detail["trackfileId"])
         else:
             non_lidarr_paths.append(path)
 
-    if not tf_ids_to_delete and not non_lidarr_paths:
+    if not album_to_tfids and not non_lidarr_paths:
         return (0, [])
 
-    # Blocklist before deletion so history context is intact
-    if blocklist and album_ids:
-        bl_ok, bl_fail = _lidarr_blocklist_albums(
-            base_url, api_key, album_ids)
-        if bl_fail:
-            logger.error("  Blocklist failed for %d albums — "
-                         "delete aborted", bl_fail)
-            return None
-
     deleted = 0
+    affected_albums = []
+    total_albums = len(album_to_tfids)
 
     with open(log_file, 'a', encoding='utf-8') as log:
-        # Bulk delete trackfiles — keeps albums monitored (missing)
-        if tf_ids_to_delete:
+        # Process one album at a time
+        for i, (album_id, tf_ids) in enumerate(
+                album_to_tfids.items(), 1):
+            prefix = f"  [{i}/{total_albums}] Album {album_id}"
+
+            # Blocklist before deletion
+            if blocklist:
+                bl_ok, bl_fail = _lidarr_blocklist_albums(
+                    base_url, api_key, [album_id])
+                if bl_fail:
+                    logger.error("%s: blocklist failed — skipping",
+                                 prefix)
+                    log.write(f"ERROR: Blocklist failed for album "
+                              f"{album_id} — skipped\n")
+                    continue
+                if bl_ok:
+                    logger.debug("%s: blocklisted", prefix)
+
+            # Bulk delete this album's trackfiles
             result = _lidarr_delete_trackfiles_bulk(
-                base_url, api_key, tf_ids_to_delete)
+                base_url, api_key, tf_ids)
             if result is not None:
-                deleted += len(tf_ids_to_delete)
-                logger.info("  Lidarr: deleted %d track files "
-                            "(%d albums affected)",
-                            len(tf_ids_to_delete), len(album_ids))
-                log.write(f"LIDARR DELETE: {len(tf_ids_to_delete)} "
-                          f"track files ({len(album_ids)} albums)\n")
-                if blocklist and album_ids:
-                    log.write(f"LIDARR BLOCKLIST: "
-                              f"{len(album_ids)} albums\n")
+                deleted += len(tf_ids)
+                affected_albums.append(album_id)
+                log.write(f"LIDARR DELETE: album {album_id} — "
+                          f"{len(tf_ids)} track files\n")
+
+                # Check monitored status
+                album = _lidarr_get_album(base_url, api_key, album_id)
+                monitored = album.get("monitored", True) if album else True
+                if monitored:
+                    logger.info("%s: deleted %d trackfiles",
+                                prefix, len(tf_ids))
+                else:
+                    logger.info("%s: deleted %d trackfiles "
+                                "(unmonitored — Lidarr will not "
+                                "re-download)", prefix, len(tf_ids))
             else:
-                logger.error("  Lidarr: bulk delete API failed — "
-                             "no files were deleted. Check Lidarr logs.")
-                log.write("ERROR: Lidarr bulk delete API failed\n")
-                return None
+                logger.error("%s: bulk delete failed — skipping",
+                             prefix)
+                log.write(f"ERROR: Bulk delete failed for album "
+                          f"{album_id}\n")
 
         # Direct delete for files not tracked by Lidarr
         for path in non_lidarr_paths:
@@ -1530,7 +1527,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                 log.write(f"ERROR deleting {path}: {e}\n")
                 logger.error("  ERROR: %s - %s", path, e)
 
-    return (deleted, list(album_ids))
+    return (deleted, affected_albums)
 
 
 def _lidarr_get_album_history(base_url, api_key, album_id):
