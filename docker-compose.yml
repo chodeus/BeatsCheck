@@ -33,6 +33,6 @@ services:
     ## WebUI: uncomment to enable the web interface.
     ## Also set webui = true in /config/beatscheck.conf
     # ports:
-    #   - "8080:8080"
+    #   - "8484:8484"
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2

@@ -85,7 +85,10 @@ function navigate(page) {
   // Close mobile sidebar
   closeSidebar();
 
-  // Page-specific init
+  // Page-specific init + polling control
+  if (page === 'dashboard') { startStatusPoll(); }
+  else { stopStatusPoll(); }
+
   if (page === 'corrupt') loadCorrupt();
   if (page === 'config') loadConfig();
   if (page === 'logs') { refreshLogs(); startLogPoll(); }
@@ -194,7 +197,11 @@ function setText(id, val) {
 // --- Corrupt Files ---
 async function loadCorrupt() {
   const data = await api('corrupt');
-  if (!data) return;
+  if (!data) {
+    document.getElementById('corrupt-tbody').innerHTML =
+      '<tr><td colspan="5" class="empty-state">Failed to load data</td></tr>';
+    return;
+  }
   corruptFiles = data.files || [];
   document.getElementById('corrupt-count').textContent = corruptFiles.length;
   renderCorruptTable(corruptFiles);
@@ -206,16 +213,17 @@ function renderCorruptTable(files) {
     tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No corrupt files found</td></tr>';
     return;
   }
-  tbody.innerHTML = files.map((f, i) => {
+  tbody.innerHTML = files.map(f => {
     const cls = f.missing ? 'file-missing' : '';
     const name = f.path.split('/').pop();
     const dir = f.path.split('/').slice(0, -1).join('/');
+    const safePath = escHtml(f.path);
     return `<tr class="${cls}">
-      <td class="col-check"><input type="checkbox" class="file-check" data-idx="${i}" onchange="updateDeleteBtn()"></td>
-      <td><div class="file-path" title="${escHtml(f.path)}"><strong>${escHtml(name)}</strong><br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
+      <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()"></td>
+      <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong><br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
       <td style="font-size:.82rem;color:var(--text-muted)">${escHtml(f.reason || '')}</td>
-      <td class="col-size">${formatSize(f.size)}</td>
-      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(${i})" ${f.missing ? 'disabled' : ''}>Delete</button></td>
+      <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
+      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
     </tr>`;
   }).join('');
 }
@@ -250,22 +258,22 @@ function updateDeleteBtn() {
   document.getElementById('delete-selected-btn').disabled = !any;
 }
 
-async function deleteSingle(idx) {
-  const f = corruptFiles[idx];
-  if (!f || !confirm('Delete ' + f.path + '?')) return;
-  const res = await apiPost('delete', { files: [f.path] });
+async function deleteSingle(el) {
+  const path = el.dataset.path;
+  if (!path || !confirm('Delete ' + path + '?')) return;
+  const res = await apiPost('delete', { files: [path] });
   if (res && res.count > 0) {
     showToast('Deleted ' + res.count + ' file(s)', 'success');
     loadCorrupt();
     refreshDashboard();
   } else {
-    showToast('Delete failed', 'error');
+    showToast('Delete failed' + (res && res.errors && res.errors.length ? ': ' + res.errors[0].error : ''), 'error');
   }
 }
 
 async function deleteSelected() {
   const checks = document.querySelectorAll('.file-check:checked');
-  const paths = Array.from(checks).map(c => corruptFiles[parseInt(c.dataset.idx)]?.path).filter(Boolean);
+  const paths = Array.from(checks).map(c => c.dataset.path).filter(Boolean);
   if (paths.length === 0) return;
   if (!confirm('Delete ' + paths.length + ' file(s)?')) return;
   const res = await apiPost('delete', { files: paths });
@@ -282,7 +290,11 @@ async function deleteSelected() {
 // --- Configuration ---
 async function loadConfig() {
   const data = await api('config');
-  if (!data) return;
+  if (!data) {
+    document.getElementById('config-fields').innerHTML =
+      '<div class="empty-state">Failed to load configuration</div>';
+    return;
+  }
   const values = {};
   (data.config || []).forEach(e => { values[e.key] = e.value; });
   renderConfigForm(values);
@@ -306,6 +318,13 @@ function renderConfigForm(values) {
     label.textContent = item.key;
     label.title = item.desc || '';
     group.appendChild(label);
+
+    if (item.desc) {
+      const desc = document.createElement('span');
+      desc.className = 'config-desc';
+      desc.textContent = item.desc;
+      group.appendChild(desc);
+    }
 
     let input;
     if (item.type === 'select') {
@@ -357,7 +376,10 @@ async function saveConfig(e) {
 // --- Logs ---
 async function refreshLogs() {
   const data = await api('log?lines=500');
-  if (!data) return;
+  if (!data) {
+    document.getElementById('log-output').textContent = '(failed to load logs)';
+    return;
+  }
   const viewer = document.getElementById('log-output');
   viewer.textContent = data.log || '(no logs yet)';
   if (document.getElementById('log-autoscroll').checked) {
@@ -397,13 +419,18 @@ function showToast(message, type) {
   t.className = 'toast ' + (type || '');
   t.textContent = message;
   document.body.appendChild(t);
-  setTimeout(() => t.remove(), 4000);
+  setTimeout(() => { if (t.parentNode) t.remove(); }, 4000);
 }
 
 // --- Polling ---
 function startStatusPoll() {
+  stopStatusPoll();
   refreshDashboard();
   pollTimer = setInterval(refreshDashboard, 5000);
+}
+
+function stopStatusPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
 }
 
 // --- Init ---
@@ -411,6 +438,5 @@ document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initSidebar();
   initRouter();
-  startStatusPoll();
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
 });

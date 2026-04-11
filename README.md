@@ -152,7 +152,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | `lidarr_search` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
 | `lidarr_blocklist` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
 | `webui` | `false` | Enable the built-in web interface. Requires a published port |
-| `webui_port` | `8080` | Port for the web interface |
+| `webui_port` | `8484` | Port for the web interface |
 
 Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set.
 
@@ -178,17 +178,17 @@ BeatsCheck includes an optional web interface for monitoring and control. Disabl
 1. Edit `/config/beatscheck.conf`:
    ```conf
    webui = true
-   webui_port = 8080
+   webui_port = 8484
    ```
 
 2. Publish the port in your Docker setup:
    ```yaml
    # docker-compose.yml
    ports:
-     - "8080:8080"
+     - "8484:8484"
    ```
 
-3. Access at `http://your-server:8080`
+3. Access at `http://your-server:8484`
 
 ### Features
 

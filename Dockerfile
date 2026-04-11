@@ -35,17 +35,17 @@ RUN apk --no-cache upgrade && \
 
 WORKDIR /app
 
-COPY beats_check.py /app/
-COPY webui.py /app/
-COPY static/ /app/static/
 COPY entrypoint.sh /app/
 COPY delete.sh /app/
 COPY rescan.sh /app/
+COPY static/ /app/static/
+COPY webui.py /app/
+COPY beats_check.py /app/
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
     ln -s /app/rescan.sh /usr/local/bin/rescan
 
-EXPOSE 8080
+EXPOSE 8484
 
 VOLUME ["/music", "/corrupted", "/config"]
 

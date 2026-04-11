@@ -306,6 +306,14 @@ tbody tr:hover { background: var(--bg-hover); }
   font-size: .85rem;
 }
 .config-group input:focus, .config-group select:focus { outline: none; border-color: var(--accent); }
+.config-desc {
+  display: block;
+  font-size: .75rem;
+  color: var(--text-muted);
+  grid-column: 1 / -1;
+  margin-top: -.25rem;
+  padding-bottom: .15rem;
+}
 .config-section-title {
   font-size: .9rem;
   font-weight: 700;
@@ -405,6 +413,7 @@ tbody tr:hover { background: var(--bg-hover); }
   .card-value { font-size: 1.1rem; }
   .config-group { grid-template-columns: 1fr; }
   .config-group label { margin-bottom: .1rem; }
+  .config-desc { padding-left: 0; }
   .btn-group { flex-direction: column; }
   .btn-group .btn { width: 100%; }
   .table-toolbar { flex-direction: column; }

@@ -28,7 +28,7 @@ class AppState:
             "last_scan_duration": None,
             "corrupt_count": 0,
             "total_scanned": 0,
-            "version": "1.0.0",
+            "version": "unknown",
             "uptime_start": time.time(),
         }
 
@@ -57,8 +57,11 @@ app_state = AppState()
 # API helpers
 # ---------------------------------------------------------------------------
 
+_API_KEY_MASK = "********"
+
+
 def _read_config_file(config_dir):
-    """Parse beatscheck.conf into an ordered list of {key, value, comment}."""
+    """Parse beatscheck.conf into an ordered list of {key, value}."""
     path = os.path.join(config_dir, "beatscheck.conf")
     entries = []
     if not os.path.isfile(path):
@@ -74,14 +77,16 @@ def _read_config_file(config_dir):
             key, _, value = stripped.partition('=')
             key = key.strip().lower()
             value = value.strip()
-            if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
+            if len(value) >= 2 and value[0] == value[-1] \
+                    and value[0] in ('"', "'"):
                 value = value[1:-1]
             entries.append({"key": key, "value": value})
     return entries
 
 
 def _write_config_file(config_dir, updates):
-    """Update beatscheck.conf preserving comments and structure."""
+    """Update beatscheck.conf preserving comments and structure.
+    Uses atomic write (tmp + rename) to prevent corruption."""
     path = os.path.join(config_dir, "beatscheck.conf")
     if not os.path.isfile(path):
         return False
@@ -106,7 +111,8 @@ def _write_config_file(config_dir, updates):
             if key in new_vals:
                 val = new_vals[key]
                 # Quote strings that aren't pure numbers or booleans
-                if not re.match(r'^(\d+\.?\d*|true|false)$', str(val)):
+                if not re.match(
+                        r'^(\d+\.?\d*|true|false)$', str(val)):
                     val = f'"{val}"'
                 result.append(f"{key} = {val}\n")
                 written_keys.add(key)
@@ -115,7 +121,8 @@ def _write_config_file(config_dir, updates):
             key = commented_match.group(1).lower()
             if key in new_vals:
                 val = new_vals[key]
-                if not re.match(r'^(\d+\.?\d*|true|false)$', str(val)):
+                if not re.match(
+                        r'^(\d+\.?\d*|true|false)$', str(val)):
                     val = f'"{val}"'
                 result.append(f"{key} = {val}\n")
                 written_keys.add(key)
@@ -130,13 +137,16 @@ def _write_config_file(config_dir, updates):
                 val = f'"{val}"'
             result.append(f"{key} = {val}\n")
 
-    with open(path, 'w') as f:
+    # Atomic write: tmp file + rename
+    tmp_path = path + ".tmp"
+    with open(tmp_path, 'w') as f:
         f.writelines(result)
+    os.rename(tmp_path, path)
     return True
 
 
 def _read_corrupt_list(config_dir):
-    """Read corrupt.txt and corrupt_details.json, merge into list of dicts."""
+    """Read corrupt.txt and corrupt_details.json, merge into list."""
     corrupt_path = os.path.join(config_dir, "corrupt.txt")
     details_path = os.path.join(config_dir, "corrupt_details.json")
 
@@ -213,7 +223,16 @@ def _trigger_rescan(config_dir, mode="report", fresh=False):
         if fresh:
             processed = os.path.join(config_dir, "processed.txt")
             if os.path.exists(processed):
-                os.remove(processed)
+                # Wait for any active scan to finish before removing
+                try:
+                    from beats_check import _wait_for_scan_lock
+                    _wait_for_scan_lock(config_dir)
+                except ImportError:
+                    pass
+                try:
+                    os.remove(processed)
+                except OSError:
+                    pass
         return True
     except OSError:
         return False
@@ -222,6 +241,9 @@ def _trigger_rescan(config_dir, mode="report", fresh=False):
 # ---------------------------------------------------------------------------
 # HTTP Request Handler
 # ---------------------------------------------------------------------------
+
+_MAX_BODY = 1_048_576  # 1 MB
+
 
 class WebUIHandler(SimpleHTTPRequestHandler):
     """Handles both static files and /api/* JSON endpoints."""
@@ -244,7 +266,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             length = int(self.headers.get('Content-Length', 0))
         except (ValueError, TypeError):
             return {}
-        if length <= 0:
+        if length <= 0 or length > _MAX_BODY:
             return {}
         try:
             return json.loads(self.rfile.read(length))
@@ -262,6 +284,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
         elif self.path == '/api/config':
             entries = _read_config_file(config_dir)
+            # Mask sensitive values
+            for entry in entries:
+                if entry["key"] == "lidarr_api_key" \
+                        and entry["value"]:
+                    entry["value"] = _API_KEY_MASK
             self._json_response({"config": entries})
 
         elif self.path == '/api/corrupt':
@@ -273,10 +300,12 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             lines = 200
             if '?' in self.path:
                 try:
-                    params = dict(p.split('=', 1) for p in
-                                  self.path.split('?', 1)[1].split('&')
-                                  if '=' in p)
-                    lines = max(1, min(int(params.get('lines', 200)), 10000))
+                    params = dict(
+                        p.split('=', 1) for p in
+                        self.path.split('?', 1)[1].split('&')
+                        if '=' in p)
+                    lines = max(1, min(
+                        int(params.get('lines', 200)), 10000))
                 except (ValueError, TypeError):
                     lines = 200
             text = _read_log_tail(config_dir, lines)
@@ -310,8 +339,12 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             body = self._read_body()
             updates = body.get('config', {})
             if not updates:
-                self._json_response({"error": "no config provided"}, 400)
+                self._json_response(
+                    {"error": "no config provided"}, 400)
                 return
+            # Don't overwrite real key with the mask sentinel
+            if updates.get('lidarr_api_key') == _API_KEY_MASK:
+                del updates['lidarr_api_key']
             ok = _write_config_file(config_dir, updates)
             self._json_response({"ok": ok})
 
@@ -320,7 +353,9 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             mode = body.get('mode', 'report')
             fresh = body.get('fresh', False)
             if mode not in ('report', 'move'):
-                self._json_response({"error": "mode must be report or move"}, 400)
+                self._json_response(
+                    {"error": "mode must be report or move"},
+                    400)
                 return
             ok = _trigger_rescan(config_dir, mode, fresh)
             self._json_response({"ok": ok})
@@ -329,50 +364,21 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             body = self._read_body()
             files = body.get('files', [])
             if not files:
-                self._json_response({"error": "no files specified"}, 400)
+                self._json_response(
+                    {"error": "no files specified"}, 400)
                 return
-            # Single read of corrupt.txt — used for validation and update
-            corrupt_path = os.path.join(config_dir, "corrupt.txt")
-            allowed = set()
-            if os.path.isfile(corrupt_path):
-                try:
-                    with open(corrupt_path, 'r') as f:
-                        allowed = {l.strip() for l in f if l.strip()}
-                except OSError:
-                    pass
-            deleted = []
-            errors = []
-            for fp in files:
-                if fp not in allowed:
-                    errors.append({"path": fp, "error": "not in corrupt list"})
-                    continue
-                try:
-                    # Reject symlinks to prevent targeting files outside library
-                    if os.path.islink(fp):
-                        errors.append({"path": fp, "error": "symlink rejected"})
-                        continue
-                    real = os.path.realpath(fp)
-                    if os.path.isfile(real):
-                        os.remove(real)
-                        deleted.append(fp)
-                    else:
-                        errors.append({"path": fp, "error": "not found"})
-                except OSError as e:
-                    errors.append({"path": fp, "error": str(e)})
-            # Update corrupt.txt from the same set we validated against
-            if deleted:
-                remaining = sorted(allowed - set(deleted))
-                try:
-                    with open(corrupt_path, 'w') as f:
-                        for p in remaining:
-                            f.write(p + '\n')
-                except OSError:
-                    pass
-            self._json_response({
-                "deleted": deleted,
-                "errors": errors,
-                "count": len(deleted),
-            })
+            # Delegate to beats_check for Lidarr-aware deletion
+            # and full state file cleanup
+            try:
+                from beats_check import delete_corrupt_files
+            except ImportError:
+                self._json_response(
+                    {"error": "delete not available"}, 500)
+                return
+            music_dir = os.environ.get("MUSIC_DIR", "/music")
+            result = delete_corrupt_files(
+                files, config_dir, music_dir=music_dir)
+            self._json_response(result)
 
         else:
             self._json_response({"error": "not found"}, 404)
@@ -426,7 +432,7 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
         super().__init__(addr, handler)
 
 
-def start_webui(config_dir, port=8080, static_dir=None):
+def start_webui(config_dir, port=8484, static_dir=None):
     """Start the WebUI HTTP server in a daemon thread."""
     if static_dir is None:
         static_dir = os.path.join(os.path.dirname(__file__), 'static')
@@ -434,7 +440,8 @@ def start_webui(config_dir, port=8080, static_dir=None):
     server = ThreadedHTTPServer(
         ('0.0.0.0', port), WebUIHandler, config_dir, static_dir)
 
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread = threading.Thread(
+        target=server.serve_forever, daemon=True)
     thread.start()
     logger.info("WebUI started on port %d", port)
     return server

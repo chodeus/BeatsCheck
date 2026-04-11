@@ -12,7 +12,7 @@
   <ReadMe>https://github.com/chodeus/BeatsCheck/blob/main/README.md</ReadMe>
   <Overview>Audio file integrity checker that decode-tests all audio files (FLAC, MP3, M4A, OGG, Opus, WAV, AAC, and more) using ffmpeg. Identifies corrupted files that cause playback errors.[br][br]The container scans on a schedule and stays running. Default: idle mode (no scanning until configured).[br][br]Settings are configured in /config/beatscheck.conf (auto-created on first run).[br]To review results: check /config/corrupt.txt[br]To delete corrupt files: docker exec -it BeatsCheck /app/delete.sh</Overview>
   <Category>MediaApp:Music Tools:</Category>
-  <WebUI>http://[IP]:[PORT:8080]/</WebUI>
+  <WebUI/>
   <TemplateURL/>
   <Icon>https://raw.githubusercontent.com/chodeus/BeatsCheck/main/icon.png</Icon>
   <ExtraParams>--restart unless-stopped</ExtraParams>
@@ -28,6 +28,6 @@
   <Config Name="PGID" Target="PGID" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="UMASK" Target="UMASK" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">002</Config>
   <Config Name="Timezone" Target="TZ" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">UTC</Config>
-  <Config Name="WebUI Port" Target="8080" Default="8080" Mode="tcp" Description="Port for the optional web interface. Enable WebUI by setting webui = true in /config/beatscheck.conf." Type="Port" Display="advanced" Required="false" Mask="false">8080</Config>
+  <Config Name="WebUI Port" Target="8484" Default="8484" Mode="tcp" Description="Port for the optional web interface. Enable WebUI by setting webui = true in /config/beatscheck.conf." Type="Port" Display="advanced" Required="false" Mask="false">8484</Config>
   <TailscaleStateDir/>
 </Container>

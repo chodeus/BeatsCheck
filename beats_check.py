@@ -142,6 +142,128 @@ def _load_lines_as_set(path):
         return {line.strip() for line in f if line.strip()}
 
 
+def delete_corrupt_files(paths, config_dir, music_dir=None):
+    """Delete corrupt files with Lidarr support and full state cleanup.
+
+    Validates paths, routes Lidarr-tracked files through the Lidarr API,
+    and updates corrupt.txt, corrupt_details.json, and corrupt_tracking.json.
+
+    Args:
+        paths: List of file paths to delete.
+        config_dir: Directory containing state files.
+        music_dir: If set, rejects paths outside this directory.
+
+    Returns:
+        dict with 'deleted' (list), 'errors' (list of dicts), 'count' (int).
+    """
+    corrupt_path = os.path.join(config_dir, "corrupt.txt")
+    details_path = os.path.join(config_dir, "corrupt_details.json")
+    tracking_path = os.path.join(config_dir, "corrupt_tracking.json")
+    log_file = os.path.join(config_dir, "beats_check.log")
+
+    # Load allowlist from corrupt.txt
+    allowed = _load_lines_as_set(corrupt_path)
+
+    # Resolve music_dir realpath once for containment checks
+    music_real = os.path.realpath(music_dir) if music_dir else None
+
+    # Validate all paths first
+    validated = []
+    errors = []
+    for fp in paths:
+        if fp not in allowed:
+            errors.append({"path": fp, "error": "not in corrupt list"})
+            continue
+        if os.path.islink(fp):
+            errors.append({"path": fp, "error": "symlink rejected"})
+            continue
+        real = os.path.realpath(fp)
+        if music_real and not real.startswith(music_real + os.sep):
+            errors.append({"path": fp, "error": "outside music directory"})
+            continue
+        if not os.path.isfile(real):
+            errors.append({"path": fp, "error": "not found"})
+            continue
+        validated.append(fp)
+
+    if not validated:
+        return {"deleted": [], "errors": errors, "count": 0}
+
+    # Load Lidarr config and corrupt details
+    lidarr_url = os.environ.get("LIDARR_URL", "").rstrip("/")
+    lidarr_key = _load_lidarr_api_key()
+    lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
+    details = _load_json(details_path)
+
+    # Split into Lidarr-tracked and non-Lidarr paths
+    lidarr_paths = []
+    direct_paths = []
+    for fp in validated:
+        detail = details.get(fp, {})
+        if (lidarr_url and lidarr_key
+                and isinstance(detail, dict)
+                and "trackfileId" in detail):
+            lidarr_paths.append(fp)
+        else:
+            direct_paths.append(fp)
+
+    deleted = []
+
+    # Delete Lidarr-tracked files via API (search=False for prompt return)
+    if lidarr_paths:
+        count, _ = _lidarr_delete_corrupt(
+            lidarr_url, lidarr_key, lidarr_paths, log_file,
+            log_dir=config_dir, blocklist=lidarr_blocklist,
+            search=False)
+        if count > 0:
+            # Check which files were actually removed
+            for fp in lidarr_paths:
+                if not os.path.exists(fp):
+                    deleted.append(fp)
+                else:
+                    errors.append({"path": fp,
+                                   "error": "Lidarr delete failed"})
+        else:
+            for fp in lidarr_paths:
+                errors.append({"path": fp,
+                               "error": "Lidarr API delete failed"})
+
+    # Direct delete for non-Lidarr files
+    for fp in direct_paths:
+        try:
+            os.remove(fp)
+            deleted.append(fp)
+        except OSError as e:
+            errors.append({"path": fp, "error": str(e)})
+
+    # Update all state files
+    if deleted:
+        deleted_set = set(deleted)
+        remaining = sorted(allowed - deleted_set)
+        # Rewrite corrupt.txt atomically
+        tmp = corrupt_path + ".tmp"
+        try:
+            with open(tmp, 'w', encoding='utf-8') as f:
+                for p in remaining:
+                    f.write(p + '\n')
+            os.rename(tmp, corrupt_path)
+        except OSError:
+            pass
+
+        # Remove deleted entries from corrupt_details.json
+        for fp in deleted:
+            details.pop(fp, None)
+        write_json_atomic(details_path, details)
+
+        # Remove deleted entries from corrupt_tracking.json
+        tracking = _load_json(tracking_path)
+        for fp in deleted:
+            tracking.pop(fp, None)
+        write_json_atomic(tracking_path, tracking)
+
+    return {"deleted": deleted, "errors": errors, "count": len(deleted)}
+
+
 def _rotate_file(path, keep=3):
     """Rotate path -> path.1 -> path.2 -> ... keeping last N copies."""
     oldest = f"{path}.{keep}"
@@ -1552,10 +1674,11 @@ def _lidarr_wait_for_search(base_url, api_key, log_dir=None):
 
 
 def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
-                           log_dir=None, blocklist=False):
+                           log_dir=None, blocklist=False, search=True):
     """Delete corrupt files via Lidarr API, one album at a time.
     Reads IDs from corrupt_details.json (resolved at scan time).
     Sequential processing prevents flooding indexers with searches.
+    When search=False, skips waiting for Lidarr search (used by WebUI).
     Returns (deleted_count, affected_album_ids)."""
     details_path = os.path.join(
         log_dir or os.path.dirname(log_file), "corrupt_details.json")
@@ -1610,22 +1733,34 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                 log.write(f"LIDARR DELETE: album {album_id} — "
                           f"{len(tf_ids)} track files\n")
 
-                # Check monitored status and wait for search
-                album = _lidarr_get_album(base_url, api_key, album_id)
-                monitored = album.get("monitored", True) if album else True
-                if monitored:
-                    logger.info("%s: deleted %d trackfiles — "
-                                "waiting for search", prefix, len(tf_ids))
-                    msg = _lidarr_wait_for_search(
-                        base_url, api_key, log_dir)
-                    if msg:
-                        logger.info("%s: %s", prefix, msg)
+                if search:
+                    # Check monitored status and wait for search
+                    album = _lidarr_get_album(
+                        base_url, api_key, album_id)
+                    monitored = (album.get("monitored", True)
+                                 if album else True)
+                    if monitored:
+                        logger.info(
+                            "%s: deleted %d trackfiles — "
+                            "waiting for search",
+                            prefix, len(tf_ids))
+                        msg = _lidarr_wait_for_search(
+                            base_url, api_key, log_dir)
+                        if msg:
+                            logger.info("%s: %s", prefix, msg)
+                        else:
+                            logger.info(
+                                "%s: search complete", prefix)
                     else:
-                        logger.info("%s: search complete", prefix)
+                        logger.info(
+                            "%s: deleted %d trackfiles "
+                            "(unmonitored — Lidarr will not "
+                            "re-download)",
+                            prefix, len(tf_ids))
                 else:
-                    logger.info("%s: deleted %d trackfiles "
-                                "(unmonitored — Lidarr will not "
-                                "re-download)", prefix, len(tf_ids))
+                    logger.info(
+                        "%s: deleted %d trackfiles",
+                        prefix, len(tf_ids))
             else:
                 logger.error("%s: bulk delete failed — skipping",
                              prefix)
@@ -1841,6 +1976,7 @@ _DEFAULT_CONFIG = """\
 ##  Environment variables override all values here.  ##
 ##  https://github.com/chodeus/BeatsCheck            ##
 #######################################################
+## Boolean values: true, false, yes, no, 1, 0
 
 ## Quarantine destination for move mode (must match a mounted volume)
 # output_dir = "/corrupted"
@@ -1890,11 +2026,11 @@ max_log_mb = 50
 
 ##----- Web UI (optional) ---------------------------------
 ## Enable the built-in web interface for monitoring and control.
-## Requires a port to be published (e.g. -p 8080:8080).
+## Requires a port to be published (e.g. -p 8484:8484).
 webui = false
 
 ## Port for the web interface
-webui_port = 8080
+webui_port = 8484
 """
 
 # Maps config-file keys (lowercase) to environment variable names.
@@ -1920,13 +2056,14 @@ _CONFIG_KEY_MAP = {
 def _write_default_config(config_dir):
     """Write the default beatscheck.conf template if it doesn't exist."""
     path = os.path.join(config_dir, "beatscheck.conf")
-    if os.path.exists(path):
-        return
     try:
-        with open(path, 'w') as f:
+        with open(path, 'x') as f:
             f.write(_DEFAULT_CONFIG)
-    except OSError:
+        print(f"Created default config: {path}")
+    except FileExistsError:
         pass
+    except OSError as e:
+        print(f"Warning: could not write default config {path}: {e}")
 
 
 def _apply_config_file(config_dir):
@@ -1953,8 +2090,8 @@ def _apply_config_file(config_dir):
                 env_name = _CONFIG_KEY_MAP.get(key)
                 if env_name and env_name not in os.environ:
                     os.environ[env_name] = value
-    except OSError:
-        pass
+    except OSError as e:
+        print(f"Warning: could not read config file {path}: {e}")
 
 
 def _parse_env_int(name, default, label=None):
@@ -2032,7 +2169,7 @@ def _load_config():
         lidarr_search=_parse_env_bool("LIDARR_SEARCH", False),
         lidarr_blocklist=_parse_env_bool("LIDARR_BLOCKLIST", False),
         webui=_parse_env_bool("WEBUI", False),
-        webui_port=_parse_env_int("WEBUI_PORT", 8080),
+        webui_port=_parse_env_int("WEBUI_PORT", 8484),
     )
 
 
@@ -2050,28 +2187,25 @@ def _run_setup_idle(log_dir, lidarr_url=None, lidarr_api_key=None):
     return None
 
 
+_webui_app_state = None
+
+
 def _webui_update(cfg, **kwargs):
     """Update WebUI state if enabled. Safe to call even when WebUI is off."""
-    if not getattr(cfg, 'webui', False):
-        return
-    try:
-        from webui import app_state
-        app_state.update(**kwargs)
-    except ImportError:
-        pass
+    if _webui_app_state is not None:
+        _webui_app_state.update(**kwargs)
 
 
 def _webui_progress(current, total, corrupted, current_file):
     """Update WebUI scan progress. Called from scan loop."""
-    try:
-        from webui import app_state
-        app_state.update(
-            scan_progress={"current": current, "total": total, "file": current_file},
+    if _webui_app_state is not None:
+        _webui_app_state.update(
+            scan_progress={
+                "current": current, "total": total,
+                "file": current_file},
             corrupt_count=corrupted,
             total_scanned=current,
         )
-    except ImportError:
-        pass
 
 
 # --- Main ---
@@ -2096,8 +2230,11 @@ def main():
     # Start optional WebUI
     if cfg.webui:
         try:
+            global _webui_app_state
             from webui import start_webui, app_state
-            app_state.update(version=__version__, mode=cfg.mode, status="starting")
+            _webui_app_state = app_state
+            app_state.update(version=__version__, mode=cfg.mode,
+                             status="starting")
             start_webui(cfg.log_dir, cfg.webui_port)
         except Exception as e:
             logger.error("WebUI failed to start: %s", e)
