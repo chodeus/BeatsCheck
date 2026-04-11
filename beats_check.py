@@ -463,7 +463,8 @@ def collect_audio_files(input_folder, min_age_minutes=30):
 
 
 def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
-                         corrupt_log, log, existing_corrupt, corrupt_details):
+                         corrupt_log, log, existing_corrupt, corrupt_details,
+                         log_dir=None):
     logger.info("CORRUPT: %s", file_path)
     logger.debug("         %s", reason)
 
@@ -480,6 +481,11 @@ def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
         corrupt_log.flush()
         existing_corrupt.add(file_path)
     corrupt_details[file_path] = {"reason": reason}
+
+    # Write details incrementally so WebUI shows reasons in real time
+    if log_dir:
+        details_path = os.path.join(log_dir, "corrupt_details.json")
+        write_json_atomic(details_path, corrupt_details)
 
     if mode == "move":
         rel = os.path.relpath(os.path.dirname(file_path), input_folder)
@@ -648,7 +654,8 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                 _handle_corrupt_file(
                     file_path, reason, mode, input_folder,
                     output_folder, corrupt_log, log,
-                    existing_corrupt, corrupt_details)
+                    existing_corrupt, corrupt_details,
+                    log_dir=log_dir)
 
             _write_heartbeat(heartbeat_path)
 
