@@ -132,27 +132,98 @@ docker exec beatscheck rescan report
 
 ## Configuration
 
+### Config File
+
+On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and their defaults. Edit this file to configure scanning, scheduling, and Lidarr integration. Credentials stored here stay out of `docker inspect` and process listings.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `output_dir` | `/corrupted` | Quarantine destination for move mode. Must match a mounted volume |
+| `mode` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
+| `workers` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
+| `run_interval` | `0` | Hours between scans. `0` = run once and exit. `168` = weekly. `24` = daily |
+| `delete_after` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
+| `max_auto_delete` | `50` | Safety threshold — abort auto-delete if more than this many files would be removed. `0` = no limit |
+| `min_file_age` | `30` | Skip files modified within this many minutes. Prevents flagging active downloads |
+| `log_level` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `max_log_mb` | `50` | Rotate log and do fresh full scan when log exceeds this size. `0` = never rotate |
+| `lidarr_url` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
+| `lidarr_api_key` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
+| `lidarr_search` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
+| `lidarr_blocklist` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
+| `webui` | `false` | Enable the built-in web interface. Requires a published port |
+| `webui_port` | `8484` | Port for the web interface |
+
+Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set.
+
+### Container Environment Variables
+
+These Docker-level settings are configured as environment variables:
+
 | Env Var | Default | Description |
 |---------|---------|-------------|
-| `MUSIC_DIR` | `/music` | Path to music library inside container |
-| `OUTPUT_DIR` | `/corrupted` | Quarantine destination (move mode only) |
-| `CONFIG_DIR` | `/config` | Persistent directory for logs, corrupt.txt, and tracking data |
-| `MODE` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
-| `WORKERS` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
-| `RUN_INTERVAL` | `0` | Hours between scans. `0` = run once and exit. `168` = weekly. `24` = daily |
-| `DELETE_AFTER` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
-| `MAX_AUTO_DELETE` | `50` | Safety threshold — abort auto-delete if more than this many files would be removed. `0` = no limit |
-| `MIN_FILE_AGE` | `30` | Skip files modified within this many minutes. Prevents flagging active downloads |
-| `MAX_LOG_MB` | `50` | Rotate log and do fresh full scan when log exceeds this size. `0` = never rotate |
-| `LOG_LEVEL` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `PUID` | `99` | User ID for file ownership |
 | `PGID` | `100` | Group ID for file ownership |
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
-| `LIDARR_URL` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |
-| `LIDARR_API_KEY` | *(empty)* | Lidarr API key (Settings → General in Lidarr). Also reads from `/run/secrets/lidarr_api_key` |
-| `LIDARR_SEARCH` | `false` | Queue search for unmonitored albums after auto-delete. Monitored albums are auto-searched by Lidarr. 5 albums/hour during idle |
-| `LIDARR_BLOCKLIST` | `false` | Blocklist the release in Lidarr before deleting, preventing re-download of the same corrupt copy |
+
+Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/music`, `/corrupted`, `/config` and are set via Docker volume mounts.
+
+## Web UI
+
+BeatsCheck includes an optional web interface for monitoring and control. Disabled by default.
+
+### Enabling the WebUI
+
+1. Edit `/config/beatscheck.conf`:
+   ```conf
+   webui = true
+   webui_port = 8484
+   ```
+
+2. Publish the port in your Docker setup:
+   ```yaml
+   # docker-compose.yml
+   ports:
+     - "8484:8484"
+   ```
+
+3. Access at `http://your-server:8484`
+4. On first visit, create your login credentials via the setup wizard
+
+### Features
+
+- **Authentication** — first-run setup wizard, session-based login with PBKDF2-hashed passwords
+- **Dashboard** — live scan status, progress bar with ETA, library stats
+- **Corrupt Files** — sortable/searchable table with individual and bulk delete
+- **Configuration** — edit all settings from the browser (config key allowlist enforced)
+- **Logs** — real-time log viewer with syntax highlighting, level filter, search, copy/download
+- **Dark/Light mode** — toggle with one click, preference saved
+- **Mobile responsive** — full functionality on phones and tablets
+- **Accessible** — keyboard navigation, ARIA labels, skip-to-content, reduced motion support
+
+### Resetting Credentials
+
+If you forget your WebUI password:
+
+```bash
+docker exec beatscheck reset-webui-password
+```
+
+This removes the credential file. The next visit to the WebUI will show the setup wizard to create new credentials.
+
+### WebUI Security
+
+- **Authentication required** — all API endpoints require a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies)
+- **Setup wizard** — credentials created on first access, stored hashed in `/config/webui_auth.json`
+- **Config allowlist** — only known configuration keys are accepted (arbitrary key injection blocked)
+- **Thread-safe config writes** — concurrent requests cannot corrupt the config file
+- **Delete validation** — files must be in `corrupt.txt` and inside the music directory; symlinks rejected
+- **Path traversal protection** — static file serving validates all paths against the static directory
+- **API key masking** — Lidarr API key shown as `********` in the UI
+- **No external dependencies** — built on Python stdlib only (no supply chain risk)
+
+**Important:** The WebUI is designed for trusted LAN / Docker bridge networks. For remote access, use a reverse proxy with HTTPS and authentication (Nginx, Caddy, Traefik). Do not expose the WebUI port directly to the internet.
 
 ## Docker Usage
 
@@ -306,6 +377,7 @@ The third argument is the log file path. All state files (`processed.txt`, `corr
 | `corrupt_tracking.json` | Path-to-first-seen timestamps — used by `DELETE_AFTER` auto-delete |
 | `summary.json` | Machine-readable scan results for notification scripts |
 | `search_queue.json` | Pending Lidarr album search queue — drained during idle (5/hour) |
+| `webui_auth.json` | WebUI login credentials (username + PBKDF2-hashed password) |
 | `.scanning` | Lock file (exists only during active scans, uses `flock`) |
 | `.heartbeat` | Timestamp updated during scans and idle — used by Docker healthcheck |
 
@@ -360,17 +432,17 @@ All Lidarr API operations are fail-safe:
 **Security:**
 - API key is sent only via HTTP header, never in URLs or logs
 - Lidarr URL is masked in all log output
-- Supports Docker secrets (`/run/secrets/lidarr_api_key`)
+- Config file support — store the API key in `/config/beatscheck.conf` to keep it out of `docker inspect` and process listings
+- Also supports Docker secrets (`/run/secrets/lidarr_api_key`)
 - HTTP redirects are blocked to prevent credential leaking
 - All API calls have explicit timeouts
 
-```yaml
-environment:
-  - DELETE_AFTER=7
-  - LIDARR_URL=http://lidarr:8686
-  - LIDARR_API_KEY=your-api-key-here
-  - LIDARR_SEARCH=true
-  - LIDARR_BLOCKLIST=true
+```conf
+## /config/beatscheck.conf — API key stays off the command line
+lidarr_url = "http://lidarr:8686"
+lidarr_api_key = "your-api-key-here"
+lidarr_search = true
+lidarr_blocklist = true
 ```
 
 ## Updating
