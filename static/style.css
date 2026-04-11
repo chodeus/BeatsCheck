@@ -589,6 +589,38 @@ tbody tr:hover { background: var(--bg-hover); }
 .album-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
 .col-actions { white-space: nowrap; }
 
+/* --- Folder Picker --- */
+.folder-picker { width: 100%; }
+.folder-picker-row { display: flex; gap: .5rem; align-items: center; }
+.folder-picker-value { flex: 1; cursor: pointer; }
+.folder-browser {
+  margin-top: .4rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  max-height: 250px;
+  overflow-y: auto;
+}
+.folder-item {
+  padding: .45rem .7rem;
+  cursor: pointer;
+  font-size: .85rem;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  border-bottom: 1px solid var(--border);
+}
+.folder-item:last-child { border-bottom: none; }
+.folder-item:hover { background: var(--bg-hover); }
+.folder-back { color: var(--text-muted); font-size: .82rem; }
+.folder-current {
+  background: var(--bg-input);
+  justify-content: space-between;
+  font-size: .82rem;
+}
+.folder-icon { font-size: 1rem; }
+.folder-select-btn { flex-shrink: 0; }
+
 /* --- Scan Banner --- */
 .scan-banner {
   background: color-mix(in srgb, var(--warning) 15%, var(--bg-card));

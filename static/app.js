@@ -721,26 +721,98 @@ async function deleteSelected() {
   }
 }
 
-// Path dropdown loader
-async function loadPathOptions(selectEl, currentVal) {
-  const data = await api('paths');
-  if (!data || !data.paths) return;
-  // Collect all paths and children
-  const allPaths = new Set();
-  data.paths.forEach(p => {
-    allPaths.add(p.path);
-    p.children.forEach(c => allPaths.add(c));
+// --- Folder Picker ---
+function createFolderPicker(inputId, currentVal) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'folder-picker';
+
+  // Display current value + browse button
+  const display = document.createElement('input');
+  display.type = 'text';
+  display.className = 'input folder-picker-value';
+  display.id = inputId;
+  display.name = inputId.replace('cfg-', '');
+  display.value = currentVal || '/data';
+  display.readOnly = true;
+
+  const browseBtn = document.createElement('button');
+  browseBtn.type = 'button';
+  browseBtn.className = 'btn btn-outline btn-sm';
+  browseBtn.textContent = 'Browse';
+  browseBtn.onclick = () => toggleFolderBrowser(wrapper, display);
+
+  const row = document.createElement('div');
+  row.className = 'folder-picker-row';
+  row.appendChild(display);
+  row.appendChild(browseBtn);
+  wrapper.appendChild(row);
+
+  // Browser panel (hidden by default)
+  const browser = document.createElement('div');
+  browser.className = 'folder-browser';
+  browser.style.display = 'none';
+  wrapper.appendChild(browser);
+
+  return wrapper;
+}
+
+async function toggleFolderBrowser(wrapper, display) {
+  const browser = wrapper.querySelector('.folder-browser');
+  if (browser.style.display !== 'none') {
+    browser.style.display = 'none';
+    return;
+  }
+  browser.style.display = '';
+  await loadFolderLevel(browser, '/data', display);
+}
+
+async function loadFolderLevel(browser, dir, display) {
+  browser.innerHTML = '<div style="padding:.5rem;color:var(--text-muted)">Loading...</div>';
+  const data = await api('paths?dir=' + encodeURIComponent(dir));
+  if (!data) {
+    browser.innerHTML = '<div style="padding:.5rem;color:var(--danger)">Failed to load</div>';
+    return;
+  }
+
+  let html = '';
+  // Back button (if not at root)
+  if (dir !== '/data') {
+    const parent = dir.split('/').slice(0, -1).join('/') || '/data';
+    html += `<div class="folder-item folder-back" data-path="${escHtml(parent)}">.. (back)</div>`;
+  }
+  // Current dir — select button
+  html += `<div class="folder-item folder-current" data-path="${escHtml(dir)}">
+    <strong>${escHtml(dir)}</strong>
+    <button class="btn btn-primary btn-sm folder-select-btn" type="button">Select</button>
+  </div>`;
+  // Children
+  if (data.children && data.children.length > 0) {
+    data.children.forEach(c => {
+      const name = c.split('/').pop();
+      html += `<div class="folder-item folder-child" data-path="${escHtml(c)}">
+        <span class="folder-icon">&#128193;</span> ${escHtml(name)}
+      </div>`;
+    });
+  } else {
+    html += '<div style="padding:.3rem .5rem;color:var(--text-dim);font-size:.82rem">No subfolders</div>';
+  }
+  browser.innerHTML = html;
+
+  // Wire up clicks
+  browser.querySelectorAll('.folder-child').forEach(el => {
+    el.onclick = () => loadFolderLevel(browser, el.dataset.path, display);
   });
-  // Remove current value dupe, add all as options
-  const sorted = Array.from(allPaths).sort();
-  sorted.forEach(p => {
-    if (p === currentVal) return; // already added
-    const opt = document.createElement('option');
-    opt.value = p;
-    opt.textContent = p;
-    selectEl.appendChild(opt);
+  browser.querySelectorAll('.folder-back').forEach(el => {
+    el.onclick = () => loadFolderLevel(browser, el.dataset.path, display);
   });
-  selectEl.value = currentVal;
+  browser.querySelectorAll('.folder-select-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      display.value = btn.closest('.folder-current').dataset.path;
+      browser.style.display = 'none';
+      updateUnsavedIndicator();
+    };
+  });
 }
 
 // --- Configuration ---
@@ -801,20 +873,11 @@ function renderConfigForm(values) {
 
     let input;
     if (item.type === 'path') {
-      // Path selector — dropdown populated from /api/paths
-      input = document.createElement('select');
-      input.id = 'cfg-' + item.key;
-      input.name = item.key;
       const currentVal = item.key in values ? values[item.key] : (item.default || '');
-      // Add current value as first option
-      const cur = document.createElement('option');
-      cur.value = currentVal;
-      cur.textContent = currentVal || '(not set)';
-      input.appendChild(cur);
-      // Fetch paths async and populate
-      loadPathOptions(input, currentVal);
-      input.addEventListener('change', updateUnsavedIndicator);
-      group.appendChild(input);
+      const picker = createFolderPicker('cfg-' + item.key, currentVal);
+      group.appendChild(picker);
+      container.appendChild(group);
+      return;
     } else if (item.type === 'select') {
       input = document.createElement('select');
       (item.options || []).forEach(opt => {

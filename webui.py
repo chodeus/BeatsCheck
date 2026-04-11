@@ -403,36 +403,17 @@ def _ignore_corrupt_files(config_dir, files):
             pass
 
 
-def _list_available_paths():
-    """List available directories for path dropdowns.
-    Scans 2 levels deep under configured mount points."""
-    music = os.environ.get("MUSIC_DIR", "/data")
-    roots = [music]
-    if music != '/data' and os.path.isdir('/data'):
-        roots.append('/data')
-    result = []
-    for d in roots:
-        if not os.path.isdir(d):
-            continue
-        children = []
-        try:
-            for n in sorted(os.listdir(d)):
-                sub = os.path.join(d, n)
-                if not os.path.isdir(sub) or n.startswith('.'):
-                    continue
-                children.append(sub)
-                try:
-                    for n2 in sorted(os.listdir(sub)):
-                        sub2 = os.path.join(sub, n2)
-                        if os.path.isdir(sub2) \
-                                and not n2.startswith('.'):
-                            children.append(sub2)
-                except OSError:
-                    pass
-        except OSError:
-            pass
-        result.append({"path": d, "children": children})
-    return result
+def _list_dir(path):
+    """List immediate subdirectories of a path. Used by folder picker."""
+    if not os.path.isdir(path):
+        return []
+    try:
+        return sorted([
+            os.path.join(path, n) for n in os.listdir(path)
+            if os.path.isdir(os.path.join(path, n))
+            and not n.startswith('.')])
+    except OSError:
+        return []
 
 
 def _trigger_rescan(config_dir, mode="report", fresh=False):
@@ -602,9 +583,31 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 "version": state["version"],
             })
 
-        elif self.path == '/api/paths':
-            self._json_response(
-                {"paths": _list_available_paths()})
+        elif self.path == '/api/paths' \
+                or self.path.startswith('/api/paths?'):
+            # Folder picker — list children of a directory
+            parent = '/data'
+            if '?' in self.path:
+                try:
+                    params = dict(
+                        p.split('=', 1) for p in
+                        self.path.split('?', 1)[1].split('&')
+                        if '=' in p)
+                    parent = params.get('dir', '/data')
+                except (ValueError, TypeError):
+                    pass
+            # Security: only allow browsing under /data
+            real = os.path.realpath(parent)
+            data_real = os.path.realpath('/data')
+            if not real.startswith(data_real):
+                self._json_response(
+                    {"error": "path outside /data"}, 403)
+                return
+            children = _list_dir(parent)
+            self._json_response({
+                "path": parent,
+                "children": children,
+            })
 
         else:
             self._json_response({"error": "not found"}, 404)
