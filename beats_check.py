@@ -2012,6 +2012,11 @@ _DEFAULT_CONFIG = """\
 ##----- Scanning ---------------------------------------
 ## How and when BeatsCheck scans your library.
 
+## music_dir — folder to scan for audio files
+##   Defaults to /data. Set a subfolder if your music
+##   is under e.g. /data/media/music
+# music_dir = /data
+
 ## mode — what happens when BeatsCheck runs
 ##   setup  = sit idle, don't scan (default)
 ##   report = scan and log corrupt files (nothing deleted)
@@ -2119,6 +2124,7 @@ webui_port = 8484
 
 # Maps config-file keys (lowercase) to environment variable names.
 _CONFIG_KEY_MAP = {
+    'music_dir': 'MUSIC_DIR',
     'output_dir': 'OUTPUT_DIR',
     'mode': 'MODE',
     'workers': 'WORKERS',

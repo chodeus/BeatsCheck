@@ -169,7 +169,7 @@ _API_KEY_MASK = "********"
 # Valid config keys (mirrors _CONFIG_KEY_MAP in beats_check.py).
 # Hardcoded to avoid circular import.
 _ALLOWED_CONFIG_KEYS = frozenset({
-    'output_dir', 'mode', 'workers', 'run_interval', 'delete_after',
+    'music_dir', 'output_dir', 'mode', 'workers', 'run_interval', 'delete_after',
     'max_auto_delete', 'min_file_age', 'log_level', 'max_log_mb',
     'lidarr_url', 'lidarr_api_key', 'lidarr_search', 'lidarr_blocklist',
     'webui', 'webui_port',
@@ -403,6 +403,38 @@ def _ignore_corrupt_files(config_dir, files):
             pass
 
 
+def _list_available_paths():
+    """List available directories for path dropdowns.
+    Scans 2 levels deep under configured mount points."""
+    music = os.environ.get("MUSIC_DIR", "/data")
+    roots = [music]
+    if music != '/data' and os.path.isdir('/data'):
+        roots.append('/data')
+    result = []
+    for d in roots:
+        if not os.path.isdir(d):
+            continue
+        children = []
+        try:
+            for n in sorted(os.listdir(d)):
+                sub = os.path.join(d, n)
+                if not os.path.isdir(sub) or n.startswith('.'):
+                    continue
+                children.append(sub)
+                try:
+                    for n2 in sorted(os.listdir(sub)):
+                        sub2 = os.path.join(sub, n2)
+                        if os.path.isdir(sub2) \
+                                and not n2.startswith('.'):
+                            children.append(sub2)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+        result.append({"path": d, "children": children})
+    return result
+
+
 def _trigger_rescan(config_dir, mode="report", fresh=False):
     """Trigger a rescan by writing the .rescan file."""
     rescan_path = os.path.join(config_dir, ".rescan")
@@ -571,22 +603,8 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             })
 
         elif self.path == '/api/paths':
-            # List available directories for path dropdowns
-            roots = ['/data', '/music']
-            paths = []
-            for d in roots:
-                if os.path.isdir(d):
-                    try:
-                        children = sorted([
-                            os.path.join(d, n)
-                            for n in os.listdir(d)
-                            if os.path.isdir(os.path.join(d, n))
-                            and not n.startswith('.')])
-                    except OSError:
-                        children = []
-                    paths.append(
-                        {"path": d, "children": children})
-            self._json_response({"paths": paths})
+            self._json_response(
+                {"paths": _list_available_paths()})
 
         else:
             self._json_response({"error": "not found"}, 404)

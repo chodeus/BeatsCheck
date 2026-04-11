@@ -21,6 +21,8 @@ let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; //
 const CONFIG_SCHEMA = [
   { section: 'Scanning',
     help: 'How and when BeatsCheck scans your music library for corruption.' },
+  { key: 'music_dir',        label: 'Scan Location',    type: 'path',   default: '/data',
+    desc: 'Folder to scan for audio files' },
   { key: 'mode',             label: 'Scan Mode',        type: 'select', options: ['setup','report','move'], default: 'setup',
     desc: 'setup = idle (no scanning), report = scan and log only, move = quarantine corrupt files' },
   { key: 'workers',          label: 'Workers',          type: 'number', default: '4',
@@ -36,8 +38,8 @@ const CONFIG_SCHEMA = [
     desc: 'Automatically delete corrupt files after this many days. 0 = never (use Corrupt Files page to delete manually). 7 = one week review window' },
   { key: 'max_auto_delete',  label: 'Safety Limit',     type: 'number', default: '50',
     desc: 'Abort auto-delete if more than this many files would be removed in one run. Prevents mass deletion from filesystem issues. 0 = no limit' },
-  { key: 'output_dir',       label: 'Quarantine Folder', type: 'text',  default: '/data/corrupted',
-    desc: 'Only for move mode — corrupt files are moved here instead of deleted. Must match a mounted volume' },
+  { key: 'output_dir',       label: 'Quarantine Folder', type: 'path',  default: '/data/corrupted',
+    desc: 'Only for move mode — corrupt files are moved here instead of deleted' },
 
   { section: 'Lidarr (Automatic Re-download)',
     help: 'Connect to Lidarr so deleted corrupt files are automatically re-downloaded. Monitored albums are re-searched by Lidarr after deletion — no extra config needed.' },
@@ -719,6 +721,28 @@ async function deleteSelected() {
   }
 }
 
+// Path dropdown loader
+async function loadPathOptions(selectEl, currentVal) {
+  const data = await api('paths');
+  if (!data || !data.paths) return;
+  // Collect all paths and children
+  const allPaths = new Set();
+  data.paths.forEach(p => {
+    allPaths.add(p.path);
+    p.children.forEach(c => allPaths.add(c));
+  });
+  // Remove current value dupe, add all as options
+  const sorted = Array.from(allPaths).sort();
+  sorted.forEach(p => {
+    if (p === currentVal) return; // already added
+    const opt = document.createElement('option');
+    opt.value = p;
+    opt.textContent = p;
+    selectEl.appendChild(opt);
+  });
+  selectEl.value = currentVal;
+}
+
 // --- Configuration ---
 function buildConfigSnapshot() {
   const form = document.getElementById('config-form');
@@ -776,7 +800,22 @@ function renderConfigForm(values) {
     }
 
     let input;
-    if (item.type === 'select') {
+    if (item.type === 'path') {
+      // Path selector — dropdown populated from /api/paths
+      input = document.createElement('select');
+      input.id = 'cfg-' + item.key;
+      input.name = item.key;
+      const currentVal = item.key in values ? values[item.key] : (item.default || '');
+      // Add current value as first option
+      const cur = document.createElement('option');
+      cur.value = currentVal;
+      cur.textContent = currentVal || '(not set)';
+      input.appendChild(cur);
+      // Fetch paths async and populate
+      loadPathOptions(input, currentVal);
+      input.addEventListener('change', updateUnsavedIndicator);
+      group.appendChild(input);
+    } else if (item.type === 'select') {
       input = document.createElement('select');
       (item.options || []).forEach(opt => {
         const o = document.createElement('option');
@@ -784,17 +823,22 @@ function renderConfigForm(values) {
         o.textContent = opt;
         input.appendChild(o);
       });
+      input.id = 'cfg-' + item.key;
+      input.name = item.key;
+      input.value = item.key in values ? values[item.key] : (item.default || '');
+      input.addEventListener('change', updateUnsavedIndicator);
+      group.appendChild(input);
     } else {
       input = document.createElement('input');
       input.type = item.type || 'text';
       if (item.type === 'number') { input.step = 'any'; input.min = '0'; }
+      input.id = 'cfg-' + item.key;
+      input.name = item.key;
+      input.value = item.key in values ? values[item.key] : (item.default || '');
+      input.addEventListener('input', updateUnsavedIndicator);
+      input.addEventListener('change', updateUnsavedIndicator);
+      group.appendChild(input);
     }
-    input.id = 'cfg-' + item.key;
-    input.name = item.key;
-    input.value = item.key in values ? values[item.key] : (item.default || '');
-    input.addEventListener('input', updateUnsavedIndicator);
-    input.addEventListener('change', updateUnsavedIndicator);
-    group.appendChild(input);
     container.appendChild(group);
   });
 }
