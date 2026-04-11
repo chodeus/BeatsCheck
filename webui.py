@@ -605,6 +605,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 del updates['lidarr_api_key']
             ok = _write_config_file(config_dir, updates)
             if ok:
+                # Sync updated values to os.environ so other
+                # operations (e.g. delete) see them immediately.
+                for key, val in updates.items():
+                    env_name = key.upper()
+                    os.environ[env_name] = str(val)
                 self._json_response({"ok": True})
             else:
                 self._json_response(

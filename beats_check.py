@@ -1470,9 +1470,9 @@ def _lidarr_request(url, api_key, method="GET", data=None, timeout=30):
                      method, api_path)
         return None
     except (urllib.error.URLError, OSError) as e:
-        logger.error("Lidarr API connection failed (%s /api/%s)",
-                     method, api_path)
-        logger.debug("Lidarr connection error detail: %s", e)
+        # Log error type only — exception may contain hostname
+        logger.error("Lidarr API connection failed (%s /api/%s): %s",
+                     method, api_path, type(e).__name__)
         return None
 
 
@@ -2071,6 +2071,19 @@ def _write_default_config(config_dir):
         print(f"Warning: could not write default config {path}: {e}")
 
 
+# Track env vars set by Docker (before _apply_config_file).
+# Used by _reload_config to know which values should not be
+# overridden by the config file.
+_docker_env_vars = set()
+
+
+def _snapshot_docker_env():
+    """Record which config-related env vars were set by Docker."""
+    for env_name in _CONFIG_KEY_MAP.values():
+        if env_name in os.environ:
+            _docker_env_vars.add(env_name)
+
+
 def _apply_config_file(config_dir):
     """Load beatscheck.conf and set env vars for any values not already
     set in the environment.  This gives env vars priority over the file."""
@@ -2146,6 +2159,7 @@ def _load_config():
         # Write default config template on first run, then load values.
         # Config file values fill in for any env vars not already set.
         _write_default_config(log_dir)
+        _snapshot_docker_env()
         _apply_config_file(log_dir)
         input_folder = os.environ.get("MUSIC_DIR", "/music").rstrip("/")
         output_folder = os.environ.get("OUTPUT_DIR", "/corrupted").rstrip("/")
@@ -2181,6 +2195,87 @@ def _load_config():
         webui=_parse_env_bool("WEBUI", False),
         webui_port=_parse_env_int("WEBUI_PORT", 8484),
     )
+
+
+def _reload_config(cfg):
+    """Re-read beatscheck.conf and update cfg for the next scan.
+
+    Docker env vars (set before startup) always win. Config file values
+    update the os.environ entries that _apply_config_file originally set,
+    then we refresh the cfg namespace from os.environ.
+    """
+    path = os.path.join(cfg.log_dir, "beatscheck.conf")
+    if not os.path.isfile(path):
+        return
+    try:
+        file_vals = {}
+        with open(path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' not in line:
+                    continue
+                key, _, value = line.partition('=')
+                key = key.strip().lower()
+                value = value.strip()
+                if ' #' in value and not (
+                        len(value) >= 2 and value[0] == value[-1]
+                        and value[0] in ('"', "'")):
+                    value = value[:value.index(' #')].rstrip()
+                if (len(value) >= 2 and value[0] == value[-1]
+                        and value[0] in ('"', "'")):
+                    value = value[1:-1]
+                env_name = _CONFIG_KEY_MAP.get(key)
+                if env_name:
+                    file_vals[env_name] = value
+    except OSError:
+        return
+
+    # Update env vars from config file (skip Docker-set vars)
+    for env_name, value in file_vals.items():
+        if env_name not in _docker_env_vars:
+            os.environ[env_name] = value
+
+    # Refresh cfg attributes from env vars
+    cfg.mode = (os.environ.get("MODE") or cfg.mode).lower()
+    try:
+        cfg.workers = max(1, int(os.environ.get(
+            "WORKERS", cfg.workers)))
+    except (ValueError, TypeError):
+        pass
+    try:
+        cfg.run_interval = float(os.environ.get(
+            "RUN_INTERVAL", cfg.run_interval))
+    except (ValueError, TypeError):
+        pass
+    try:
+        cfg.delete_after = float(os.environ.get(
+            "DELETE_AFTER", cfg.delete_after))
+    except (ValueError, TypeError):
+        pass
+    try:
+        cfg.max_auto_delete = int(os.environ.get(
+            "MAX_AUTO_DELETE", cfg.max_auto_delete))
+    except (ValueError, TypeError):
+        pass
+    try:
+        cfg.min_age_minutes = int(os.environ.get(
+            "MIN_FILE_AGE", cfg.min_age_minutes))
+    except (ValueError, TypeError):
+        pass
+    try:
+        cfg.max_log_mb = int(os.environ.get(
+            "MAX_LOG_MB", cfg.max_log_mb))
+    except (ValueError, TypeError):
+        pass
+    cfg.lidarr_url = os.environ.get(
+        "LIDARR_URL", cfg.lidarr_url).rstrip("/")
+    cfg.lidarr_api_key = _load_lidarr_api_key()
+    cfg.lidarr_search = _parse_env_bool(
+        "LIDARR_SEARCH", cfg.lidarr_search)
+    cfg.lidarr_blocklist = _parse_env_bool(
+        "LIDARR_BLOCKLIST", cfg.lidarr_blocklist)
 
 
 def _run_setup_idle(log_dir, lidarr_url=None, lidarr_api_key=None):
@@ -2312,6 +2407,7 @@ def main():
         os.makedirs(cfg.output_folder, exist_ok=True)
 
     while True:
+        _reload_config(cfg)
         _maybe_rotate_logs(cfg)
 
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
