@@ -166,8 +166,7 @@ header {
   justify-content: space-between;
   padding: .6rem 1.2rem;
   background: var(--header-bg);
-  border-bottom: 2px solid transparent;
-  border-image: linear-gradient(90deg, #6a3ec0, #3e7ecf, #3ecfa0, #c8e040, #e8b84a) 1;
+  border-bottom: 1px solid var(--border);
   position: sticky;
   top: 0;
   z-index: 100;
@@ -283,9 +282,7 @@ main {
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-bottom: 3px solid transparent;
-  border-image: linear-gradient(90deg, #6a3ec0, #3e7ecf, #3ecfa0, #c8e040, #e8b84a) 1;
-  border-image-slice: 0 0 1 0;
+  border: 1px solid var(--border);
   border-radius: 4px;
   padding: 1rem 1.1rem;
   transition: box-shadow .2s ease, transform .2s ease;
