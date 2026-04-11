@@ -455,11 +455,11 @@ tbody tr:hover { background: var(--bg-hover); }
   padding-bottom: .15rem;
 }
 .config-section-title {
-  font-size: .9rem;
+  font-size: 1.15rem;
   font-weight: 700;
   color: var(--accent);
-  padding-top: 1.2rem;
-  padding-bottom: .2rem;
+  padding-top: 1.5rem;
+  padding-bottom: .3rem;
   grid-column: 1 / -1;
 }
 .config-section-help {
