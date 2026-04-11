@@ -11,7 +11,10 @@ on:
       - 'entrypoint.sh'
       - 'delete.sh'
       - 'rescan.sh'
+      - 'reset-webui-password.sh'
       - 'beats_check.py'
+      - 'webui.py'
+      - 'static/**'
   pull_request:
     branches:
       - main
@@ -20,7 +23,10 @@ on:
       - 'entrypoint.sh'
       - 'delete.sh'
       - 'rescan.sh'
+      - 'reset-webui-password.sh'
       - 'beats_check.py'
+      - 'webui.py'
+      - 'static/**'
   workflow_dispatch:
 
 concurrency:
