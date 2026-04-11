@@ -343,6 +343,8 @@ async function refreshDashboard() {
     if (bar) bar.setAttribute('aria-valuenow', pct);
 
     setText('progress-text', prog.current + ' / ' + prog.total + ' files (' + pct + '%)');
+    const corruptNum = data.corrupt_count || 0;
+    setText('progress-corrupt', corruptNum > 0 ? corruptNum + ' corrupt found' : '');
     setText('progress-file', prog.file || '');
 
     if (!scanStartTime || scanStartCount > prog.current) {

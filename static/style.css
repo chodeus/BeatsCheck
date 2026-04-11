@@ -5,73 +5,80 @@
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-/* --- Theme Variables --- */
+/* --- Theme Variables (Spectrogram-inspired) ---
+   Dark: deep indigo base, teal-green accent (mid-frequency)
+   Progress: purple → green → yellow gradient (spectrogram heat)
+   Danger: hot red/magenta (clipping), Success: cool green (clean signal)
+*/
 :root,
 [data-theme="dark"] {
-  --bg:          #0f1117;
-  --bg-card:     #1a1d27;
-  --bg-input:    #252833;
-  --bg-hover:    #2a2d3a;
-  --bg-sidebar:  #141620;
-  --border:      #2d3044;
-  --text:        #e4e6ed;
-  --text-muted:  #8b8fa3;
-  --text-dim:    #5c6078;
-  --accent:      #6c8cff;
-  --accent-hover:#8ba3ff;
-  --success:     #4caf7c;
-  --warning:     #e6a23c;
-  --danger:      #e05d5d;
-  --danger-hover:#c94444;
-  --info:        #4a9eff;
-  --progress-bg: #252833;
-  --progress-fg: #6c8cff;
-  --scrollbar:   #2d3044;
-  --header-bg:   #141620;
-  --shadow:      0 2px 8px rgba(0,0,0,.3);
-  /* Log syntax highlighting */
-  --log-critical: #ff375f;
-  --log-error:    #e05d5d;
-  --log-warning:  #e6a23c;
-  --log-info:     #6c8cff;
-  --log-debug:    #5c6078;
-  --log-timestamp:#8b8fa3;
-  --log-path:     #4caf7c;
-  --log-url:      #6c8cff;
-  --log-number:   #c9a0ff;
+  --bg:          #0e1018;
+  --bg-card:     #161822;
+  --bg-input:    #1e2130;
+  --bg-hover:    #262a3a;
+  --bg-sidebar:  #0c0e16;
+  --border:      #252840;
+  --text:        #e0e2ec;
+  --text-muted:  #7e84a0;
+  --text-dim:    #4e5270;
+  --accent:      #3ecfa0;
+  --accent-hover:#56ddb2;
+  --success:     #3ecfa0;
+  --warning:     #e8b84a;
+  --danger:      #e0506a;
+  --danger-hover:#cc3855;
+  --info:        #60a0e8;
+  --progress-bg: #1e2130;
+  --progress-fg: #3ecfa0;
+  --scrollbar:   #252840;
+  --header-bg:   #0c0e16;
+  --shadow:      0 1px 4px rgba(0,0,0,.5);
+  /* Spectrogram gradient for progress bar */
+  --progress-gradient: linear-gradient(90deg, #6a3ec0, #3e7ecf, #3ecfa0, #c8e040, #e8b84a);
+  /* Log syntax — spectrogram palette */
+  --log-critical: #ff3868;
+  --log-error:    #e0506a;
+  --log-warning:  #e8b84a;
+  --log-info:     #60a0e8;
+  --log-debug:    #4e5270;
+  --log-timestamp:#7e84a0;
+  --log-path:     #3ecfa0;
+  --log-url:      #60a0e8;
+  --log-number:   #b080e8;
 }
 
 [data-theme="light"] {
-  --bg:          #f5f6fa;
+  --bg:          #f2f3f8;
   --bg-card:     #ffffff;
-  --bg-input:    #f0f1f5;
-  --bg-hover:    #e8e9f0;
-  --bg-sidebar:  #ffffff;
-  --border:      #d8dae5;
-  --text:        #1a1d27;
-  --text-muted:  #6b7085;
-  --text-dim:    #9a9eb5;
-  --accent:      #4a6cf7;
-  --accent-hover:#3a5be0;
-  --success:     #2e8b57;
-  --warning:     #d4940a;
-  --danger:      #d04545;
-  --danger-hover:#b83838;
-  --info:        #2563eb;
-  --progress-bg: #e0e2ea;
-  --progress-fg: #4a6cf7;
-  --scrollbar:   #c8cad5;
-  --header-bg:   #ffffff;
-  --shadow:      0 2px 8px rgba(0,0,0,.08);
-  --log-critical: #be123c;
-  --log-error:    #d04545;
-  --log-warning:  #b87a00;
-  --log-info:     #2563eb;
-  --log-debug:    #9a9eb5;
-  --log-timestamp:#6b7085;
-  --log-path:     #2e8b57;
-  --log-url:      #4a6cf7;
-  --log-number:   #7c3aed;
+  --bg-input:    #eaecf2;
+  --bg-hover:    #e0e2ec;
+  --bg-sidebar:  #f8f8fc;
+  --border:      #d0d2e0;
+  --text:        #161822;
+  --text-muted:  #5c6080;
+  --text-dim:    #9094b0;
+  --accent:      #1a9e78;
+  --accent-hover:#148a68;
+  --success:     #1a9e78;
+  --warning:     #c49010;
+  --danger:      #c0384e;
+  --danger-hover:#a82e42;
+  --info:        #2870c0;
+  --progress-bg: #d8dae8;
+  --progress-fg: #1a9e78;
+  --scrollbar:   #c0c2d0;
+  --header-bg:   #f8f8fc;
+  --shadow:      0 1px 4px rgba(0,0,0,.06);
+  --progress-gradient: linear-gradient(90deg, #5530a0, #2868b8, #1a9e78, #98b820, #c49010);
+  --log-critical: #a8102e;
+  --log-error:    #c0384e;
+  --log-warning:  #a07800;
+  --log-info:     #2870c0;
+  --log-debug:    #9094b0;
+  --log-timestamp:#5c6080;
+  --log-path:     #1a9e78;
+  --log-url:      #2870c0;
+  --log-number:   #6030b0;
 }
 
 /* --- Accessibility --- */
@@ -243,9 +250,9 @@ main {
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 1rem;
-  box-shadow: var(--shadow);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  padding: 1rem 1.1rem;
 }
 .card-label { font-size: .75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 600; margin-bottom: .3rem; }
 .card-icon { margin-right: .3rem; }
@@ -268,7 +275,7 @@ main {
 }
 .progress-fill {
   height: 100%;
-  background: var(--progress-fg);
+  background: var(--progress-gradient, var(--progress-fg));
   border-radius: 5px;
   min-width: 8px;
   transition: width .3s ease;
@@ -276,6 +283,8 @@ main {
   width: 0%;
 }
 .progress-text { font-size: .85rem; color: var(--text-muted); }
+.progress-corrupt { font-size: .82rem; color: var(--danger); font-weight: 600; margin-top: .15rem; }
+.progress-corrupt:empty { display: none; }
 .progress-eta { font-size: .82rem; color: var(--accent); margin-top: .15rem; }
 .progress-file { font-size: .78rem; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: .2rem; }
 
