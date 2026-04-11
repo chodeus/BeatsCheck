@@ -15,6 +15,7 @@ let scanStartTime = null;
 let scanStartCount = 0;
 let logRawLines = [];  // unfiltered log lines for client-side filtering
 let isAuthenticated = false;
+let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; // 'files' or 'albums'
 
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
@@ -407,6 +408,8 @@ async function loadCorrupt() {
   }
   corruptFiles = data.files || [];
   document.getElementById('corrupt-count').textContent = corruptFiles.length;
+  const viewBtn = document.getElementById('view-toggle-btn');
+  if (viewBtn) viewBtn.textContent = corruptView === 'files' ? 'Group by Album' : 'Show All Files';
   applyCorruptFilters();
 
   // Check if scanning — disable deletes and show banner
@@ -418,6 +421,14 @@ async function loadCorrupt() {
   document.querySelectorAll('#page-corrupt .file-check, #select-all').forEach(c => c.disabled = scanning);
 }
 
+function toggleCorruptView() {
+  corruptView = corruptView === 'files' ? 'albums' : 'files';
+  localStorage.setItem('beatscheck-corrupt-view', corruptView);
+  const btn = document.getElementById('view-toggle-btn');
+  if (btn) btn.textContent = corruptView === 'files' ? 'Group by Album' : 'Show All Files';
+  applyCorruptFilters();
+}
+
 function applyCorruptFilters() {
   const q = (document.getElementById('corrupt-search').value || '').toLowerCase();
   let filtered = corruptFiles;
@@ -426,22 +437,109 @@ function applyCorruptFilters() {
       f.path.toLowerCase().includes(q) || (f.reason || '').toLowerCase().includes(q)
     );
   }
-  if (sortColumn) {
-    filtered = [...filtered].sort((a, b) => {
-      let va, vb;
-      if (sortColumn === 'path') { va = a.path; vb = b.path; }
-      else if (sortColumn === 'reason') { va = a.reason || ''; vb = b.reason || ''; }
-      else if (sortColumn === 'size') { va = a.size || 0; vb = b.size || 0; }
-      else return 0;
-      if (typeof va === 'string') {
-        const cmp = va.localeCompare(vb);
-        return sortDirection === 'asc' ? cmp : -cmp;
-      }
-      return sortDirection === 'asc' ? va - vb : vb - va;
-    });
+  if (corruptView === 'albums') {
+    renderCorruptAlbums(filtered);
+  } else {
+    if (sortColumn) {
+      filtered = [...filtered].sort((a, b) => {
+        let va, vb;
+        if (sortColumn === 'path') { va = a.path; vb = b.path; }
+        else if (sortColumn === 'reason') { va = a.reason || ''; vb = b.reason || ''; }
+        else if (sortColumn === 'size') { va = a.size || 0; vb = b.size || 0; }
+        else return 0;
+        if (typeof va === 'string') {
+          const cmp = va.localeCompare(vb);
+          return sortDirection === 'asc' ? cmp : -cmp;
+        }
+        return sortDirection === 'asc' ? va - vb : vb - va;
+      });
+    }
+    renderCorruptTable(filtered);
+    updateSortIndicators();
   }
-  renderCorruptTable(filtered);
-  updateSortIndicators();
+}
+
+function renderCorruptAlbums(files) {
+  const tbody = document.getElementById('corrupt-tbody');
+  if (files.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No corrupt files found</td></tr>';
+    return;
+  }
+  // Group by parent folder
+  const albums = {};
+  files.forEach(f => {
+    const dir = f.path.split('/').slice(0, -1).join('/');
+    if (!albums[dir]) albums[dir] = [];
+    albums[dir].push(f);
+  });
+  const sorted = Object.entries(albums).sort((a, b) => a[0].localeCompare(b[0]));
+  let html = '';
+  sorted.forEach(([dir, tracks]) => {
+    const albumName = dir.split('/').slice(-2).join(' / ');
+    const totalSize = tracks.reduce((s, f) => s + (f.size || 0), 0);
+    const allMissing = tracks.every(f => f.missing);
+    const albumTotal = tracks[0]?.album_total || tracks.length;
+    const allCorrupt = tracks.length >= albumTotal;
+    const safeDir = escHtml(dir);
+    const countLabel = allCorrupt
+      ? `All ${tracks.length} files corrupt`
+      : `${tracks.length} of ${albumTotal} files corrupt`;
+    html += `<tr class="album-header ${allCorrupt ? 'all-corrupt' : ''}" onclick="toggleAlbumExpand(this)">
+      <td class="col-check"><input type="checkbox" class="album-check" data-dir="${safeDir}" onchange="toggleAlbumSelect(this)" onclick="event.stopPropagation()" aria-label="Select album"></td>
+      <td colspan="2"><strong>${escHtml(albumName)}</strong><br><span class="album-count">${countLabel}</span></td>
+      <td class="col-size">${formatSize(totalSize)}</td>
+      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbum('${safeDir}')" ${allMissing ? 'disabled' : ''}>Delete</button></td>
+    </tr>`;
+    tracks.forEach(f => {
+      const name = f.path.split('/').pop();
+      const safePath = escHtml(f.path);
+      const cls = f.missing ? 'file-missing' : '';
+      html += `<tr class="album-file ${cls}" data-album="${safeDir}" style="display:none">
+        <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
+        <td style="padding-left:2rem"><span style="color:var(--text-dim);font-size:.82rem">${escHtml(name)}</span></td>
+        <td style="font-size:.82rem;color:var(--text-muted)">${escHtml(f.reason || '')}</td>
+        <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
+        <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
+      </tr>`;
+    });
+  });
+  tbody.innerHTML = html;
+}
+
+function toggleAlbumExpand(row) {
+  const dir = row.querySelector('.album-check')?.dataset.dir;
+  if (!dir) return;
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"]`);
+  const visible = files[0]?.style.display !== 'none';
+  files.forEach(f => f.style.display = visible ? 'none' : '');
+  row.classList.toggle('expanded', !visible);
+}
+
+function toggleAlbumSelect(checkbox) {
+  const dir = checkbox.dataset.dir;
+  const checked = checkbox.checked;
+  document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`).forEach(c => c.checked = checked);
+  updateDeleteBtn();
+}
+
+async function deleteAlbum(dir) {
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
+  if (!paths.length || !confirm('Delete all ' + paths.length + ' files in this album?')) return;
+  const btn = event.target;
+  btn.disabled = true;
+  try {
+    const res = await apiPost('delete', { files: paths });
+    if (res && res.count > 0) {
+      showToast('Deleted ' + res.count + ' file(s)', 'success');
+      loadCorrupt();
+      refreshDashboard();
+    } else {
+      showToast('Delete failed', 'error');
+    }
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function sortTable(col) {
@@ -773,15 +871,30 @@ function downloadLogs() {
 
 // --- Rescan ---
 async function triggerRescan(mode, fresh) {
+  // Validate move mode has output directory configured
+  if (mode === 'move') {
+    const cfg = await api('config');
+    if (cfg) {
+      const outputDir = (cfg.config || []).find(e => e.key === 'output_dir');
+      if (!outputDir || !outputDir.value || outputDir.value === '/corrupted') {
+        const hasMount = await api('status');
+        // If output_dir is default and not explicitly set, warn the user
+        if (!outputDir || !outputDir.value) {
+          showToast('Move mode requires an Output Directory. Configure it in Settings first.', 'warning');
+          return;
+        }
+      }
+    }
+  }
   const btns = document.querySelectorAll('.action-bar .btn');
   btns.forEach(b => b.disabled = true);
   const res = await apiPost('rescan', { mode, fresh });
   btns.forEach(b => b.disabled = false);
   if (res && res.ok) {
-    showToast('Rescan triggered (' + mode + (fresh ? ', fresh' : '') + ')', 'success');
+    showToast('Scan triggered (' + mode + (fresh ? ', fresh' : '') + ')', 'success');
     setTimeout(refreshDashboard, 1000);
   } else {
-    showToast('Rescan failed', 'error');
+    showToast('Scan failed', 'error');
   }
 }
 

@@ -573,6 +573,16 @@ tbody tr:hover { background: var(--bg-hover); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* --- Album View --- */
+.album-header { cursor: pointer; background: var(--bg-input); }
+.album-header:hover { background: var(--bg-hover); }
+.album-header td { padding-top: .7rem; padding-bottom: .7rem; }
+.album-header.expanded { border-bottom-color: var(--accent); }
+.album-header .badge { font-size: .7rem; margin-left: .5rem; }
+.album-file { background: var(--bg-card); }
+.album-count { font-size: .78rem; color: var(--text-muted); font-weight: 400; }
+.album-header.all-corrupt .album-count { color: var(--danger); }
+
 /* --- Scan Banner --- */
 .scan-banner {
   background: color-mix(in srgb, var(--warning) 15%, var(--bg-card));

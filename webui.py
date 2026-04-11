@@ -290,6 +290,9 @@ def _read_corrupt_list(config_dir):
         except (json.JSONDecodeError, ValueError):
             pass
 
+    # Count total files per album directory (cached per call)
+    dir_totals = {}
+
     result = []
     for p in paths:
         info = details.get(p, {})
@@ -301,6 +304,16 @@ def _read_corrupt_list(config_dir):
         except OSError:
             entry["size"] = 0
             entry["missing"] = True
+        # Count total files in this album directory
+        d = os.path.dirname(p)
+        if d not in dir_totals:
+            try:
+                dir_totals[d] = len([
+                    f for f in os.listdir(d)
+                    if os.path.isfile(os.path.join(d, f))])
+            except OSError:
+                dir_totals[d] = 0
+        entry["album_total"] = dir_totals[d]
         result.append(entry)
     return result
 

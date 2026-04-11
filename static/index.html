@@ -147,6 +147,7 @@
       </div>
       <div class="table-toolbar">
         <input type="text" id="corrupt-search" placeholder="Search files..." class="input" aria-label="Search corrupt files">
+        <button id="view-toggle-btn" class="btn btn-outline btn-sm" onclick="toggleCorruptView()">Group by Album</button>
         <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete Selected</button>
       </div>
       <div class="table-wrap">
@@ -170,7 +171,7 @@
     <!-- Configuration -->
     <section id="page-config" class="page">
       <h2>Configuration</h2>
-      <p class="subtitle">Edit <code>/config/beatscheck.conf</code> &mdash; changes apply at the start of the next scan cycle.</p>
+      <p class="subtitle">Changes are saved to <code>beatscheck.conf</code> and apply on the next scan.</p>
       <form id="config-form" onsubmit="saveConfig(event)">
         <div id="config-fields"></div>
         <div class="form-actions">
