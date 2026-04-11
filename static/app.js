@@ -106,6 +106,7 @@ function showPage(page) {
 }
 
 function showApp() {
+  document.body.classList.remove('auth-view');
   const sidebar = document.getElementById('sidebar');
   sidebar.style.display = '';
   const logoutBtn = document.getElementById('logout-btn');
