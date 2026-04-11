@@ -244,7 +244,7 @@ nav#sidebar {
   border-left-color: var(--accent);
   background: var(--bg-hover);
 }
-.nav-icon { font-size: 1rem; width: 1.2rem; text-align: center; }
+.nav-icon { font-size: 1.25rem; width: 1.5rem; text-align: center; }
 
 /* Unsaved config indicator */
 .nav-link .unsaved-dot {
