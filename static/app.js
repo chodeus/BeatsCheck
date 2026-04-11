@@ -14,6 +14,7 @@ let configSnapshot = null;  // tracks unsaved changes
 let scanStartTime = null;
 let scanStartCount = 0;
 let logRawLines = [];  // unfiltered log lines for client-side filtering
+let isAuthenticated = false;
 
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
@@ -44,8 +45,15 @@ async function api(path, opts = {}) {
       headers: { 'Content-Type': 'application/json' },
       ...opts,
     });
+    if (res.status === 401) {
+      // Session expired — redirect to login
+      isAuthenticated = false;
+      showAuthPage();
+      return null;
+    }
     if (!res.ok) {
-      console.error('API error:', res.status, res.statusText);
+      const data = await res.json().catch(() => ({}));
+      console.error('API error:', res.status, data.error || res.statusText);
       return null;
     }
     return await res.json();
@@ -57,6 +65,133 @@ async function api(path, opts = {}) {
 
 function apiPost(path, body) {
   return api(path, { method: 'POST', body: JSON.stringify(body) });
+}
+
+// --- Authentication ---
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth-status');
+    const data = await res.json();
+    if (data.setup_required) {
+      showPage('setup');
+      return;
+    }
+    if (!data.authenticated) {
+      showPage('login');
+      return;
+    }
+    isAuthenticated = true;
+    showApp();
+  } catch (e) {
+    showPage('login');
+  }
+}
+
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+  // Hide/show app chrome
+  const sidebar = document.getElementById('sidebar');
+  const header = document.querySelector('header');
+  const logoutBtn = document.getElementById('logout-btn');
+  if (page === 'login' || page === 'setup') {
+    sidebar.style.display = 'none';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+  } else {
+    sidebar.style.display = '';
+    if (logoutBtn) logoutBtn.style.display = '';
+  }
+}
+
+function showApp() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.style.display = '';
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.style.display = '';
+  initRouter();
+}
+
+function showAuthPage() {
+  stopStatusPoll();
+  stopLogPoll();
+  checkAuth();
+}
+
+async function doSetup(e) {
+  e.preventDefault();
+  const username = document.getElementById('setup-username').value.trim();
+  const password = document.getElementById('setup-password').value;
+  const confirm = document.getElementById('setup-confirm').value;
+  const error = document.getElementById('setup-error');
+
+  if (!username) { error.textContent = 'Username is required'; return; }
+  if (password.length < 4) { error.textContent = 'Password must be at least 4 characters'; return; }
+  if (password !== confirm) { error.textContent = 'Passwords do not match'; return; }
+
+  error.textContent = '';
+  const btn = e.target.querySelector('[type="submit"]');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      isAuthenticated = true;
+      showApp();
+    } else {
+      error.textContent = data.error || 'Setup failed';
+    }
+  } catch (err) {
+    error.textContent = 'Connection error';
+  }
+  btn.disabled = false;
+}
+
+async function doLogin(e) {
+  e.preventDefault();
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const error = document.getElementById('login-error');
+
+  if (!username || !password) { error.textContent = 'Username and password required'; return; }
+
+  error.textContent = '';
+  const btn = e.target.querySelector('[type="submit"]');
+  btn.disabled = true;
+
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      isAuthenticated = true;
+      showApp();
+    } else {
+      error.textContent = data.error || 'Login failed';
+    }
+  } catch (err) {
+    error.textContent = 'Connection error';
+  }
+  btn.disabled = false;
+}
+
+async function doLogout() {
+  await apiPost('logout', {});
+  isAuthenticated = false;
+  stopStatusPoll();
+  stopLogPoll();
+  showPage('login');
+  // Clear form fields
+  const fields = ['login-username', 'login-password'];
+  fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
 }
 
 // --- Theme ---
@@ -81,7 +216,6 @@ function updateThemeIcon(theme) {
 
 // --- Navigation ---
 function navigate(page) {
-  // Warn about unsaved config changes
   if (currentPage === 'config' && page !== 'config' && hasUnsavedConfig()) {
     if (!confirm('You have unsaved configuration changes. Leave anyway?')) return;
   }
@@ -94,10 +228,8 @@ function navigate(page) {
   const nav = document.querySelector(`[data-page="${page}"]`);
   if (nav) nav.classList.add('active');
 
-  // Close mobile sidebar
   closeSidebar();
 
-  // Page-specific init + polling control
   if (page === 'dashboard') { startStatusPoll(); }
   else { stopStatusPoll(); }
 
@@ -124,7 +256,6 @@ function initSidebar() {
     getOrCreateOverlay().classList.toggle('visible');
   });
 
-  // Keyboard nav for sidebar
   const sidebar = document.getElementById('sidebar');
   sidebar.addEventListener('keydown', (e) => {
     const links = Array.from(sidebar.querySelectorAll('.nav-link'));
@@ -183,17 +314,14 @@ async function refreshDashboard() {
   const data = await api('status');
   if (!data) return;
 
-  // Version
   document.getElementById('version-badge').textContent = 'v' + (data.version || '?');
 
-  // Status indicator
   const dot = document.getElementById('status-indicator');
   const stxt = document.getElementById('status-text');
   const status = data.status || 'unknown';
   dot.className = 'status-dot ' + status;
   stxt.textContent = status.charAt(0).toUpperCase() + status.slice(1);
 
-  // Cards with change animation
   const summary = data.summary || {};
   setCardValue('dash-status', status.charAt(0).toUpperCase() + status.slice(1));
   setCardValue('dash-mode', (data.mode || '--').toUpperCase());
@@ -203,7 +331,6 @@ async function refreshDashboard() {
     (summary.library_size_human || summary.library_files + ' files') : '--');
   setCardValue('dash-last-scan', summary.finished || '--');
 
-  // Progress with ETA
   const prog = data.scan_progress;
   const section = document.getElementById('scan-progress-section');
   if (prog && status === 'scanning') {
@@ -211,14 +338,12 @@ async function refreshDashboard() {
     const pct = prog.total > 0 ? Math.round((prog.current / prog.total) * 100) : 0;
     document.getElementById('progress-fill').style.width = pct + '%';
 
-    // Update ARIA
     const bar = section.querySelector('.progress-bar');
     if (bar) bar.setAttribute('aria-valuenow', pct);
 
     setText('progress-text', prog.current + ' / ' + prog.total + ' files (' + pct + '%)');
     setText('progress-file', prog.file || '');
 
-    // ETA calculation
     if (!scanStartTime || scanStartCount > prog.current) {
       scanStartTime = Date.now();
       scanStartCount = prog.current;
@@ -313,6 +438,9 @@ function updateSortIndicators() {
     th.classList.remove('sort-asc', 'sort-desc');
     if (th.dataset.sort === sortColumn) {
       th.classList.add('sort-' + sortDirection);
+      th.setAttribute('aria-sort', sortDirection === 'asc' ? 'ascending' : 'descending');
+    } else {
+      th.setAttribute('aria-sort', 'none');
     }
   });
 }
@@ -369,13 +497,18 @@ function updateDeleteBtn() {
 async function deleteSingle(el) {
   const path = el.dataset.path;
   if (!path || !confirm('Delete ' + path + '?')) return;
-  const res = await apiPost('delete', { files: [path] });
-  if (res && res.count > 0) {
-    showToast('Deleted ' + res.count + ' file(s)', 'success');
-    loadCorrupt();
-    refreshDashboard();
-  } else {
-    showToast('Delete failed' + (res && res.errors && res.errors.length ? ': ' + res.errors[0].error : ''), 'error');
+  el.disabled = true;
+  try {
+    const res = await apiPost('delete', { files: [path] });
+    if (res && res.count > 0) {
+      showToast('Deleted ' + res.count + ' file(s)', 'success');
+      loadCorrupt();
+      refreshDashboard();
+    } else {
+      showToast('Delete failed' + (res && res.errors && res.errors.length ? ': ' + res.errors[0].error : ''), 'error');
+    }
+  } finally {
+    el.disabled = false;
   }
 }
 
@@ -384,18 +517,33 @@ async function deleteSelected() {
   const paths = Array.from(checks).map(c => c.dataset.path).filter(Boolean);
   if (paths.length === 0) return;
   if (!confirm('Delete ' + paths.length + ' file(s)?')) return;
-  const res = await apiPost('delete', { files: paths });
-  if (res && res.count > 0) {
-    showToast('Deleted ' + res.count + ' file(s)', 'success');
-    document.getElementById('select-all').checked = false;
-    loadCorrupt();
-    refreshDashboard();
-  } else {
-    showToast('Delete failed', 'error');
+  const btn = document.getElementById('delete-selected-btn');
+  btn.disabled = true;
+  try {
+    const res = await apiPost('delete', { files: paths });
+    if (res && res.count > 0) {
+      showToast('Deleted ' + res.count + ' file(s)', 'success');
+      document.getElementById('select-all').checked = false;
+      loadCorrupt();
+      refreshDashboard();
+    } else {
+      showToast('Delete failed', 'error');
+    }
+  } finally {
+    btn.disabled = false;
   }
 }
 
 // --- Configuration ---
+function buildConfigSnapshot() {
+  const form = document.getElementById('config-form');
+  if (!form) return null;
+  const fd = new FormData(form);
+  const obj = {};
+  for (const [k, v] of fd.entries()) obj[k] = String(v);
+  return JSON.stringify(obj);
+}
+
 async function loadConfig() {
   const data = await api('config');
   if (!data) {
@@ -406,7 +554,7 @@ async function loadConfig() {
   const values = {};
   (data.config || []).forEach(e => { values[e.key] = e.value; });
   renderConfigForm(values);
-  configSnapshot = JSON.stringify(values);
+  configSnapshot = buildConfigSnapshot();
   updateUnsavedIndicator();
 }
 
@@ -462,12 +610,7 @@ function renderConfigForm(values) {
 
 function hasUnsavedConfig() {
   if (!configSnapshot) return false;
-  const form = document.getElementById('config-form');
-  if (!form) return false;
-  const formData = new FormData(form);
-  const current = {};
-  for (const [key, val] of formData.entries()) { current[key] = val; }
-  return JSON.stringify(current) !== configSnapshot;
+  return buildConfigSnapshot() !== configSnapshot;
 }
 
 function updateUnsavedIndicator() {
@@ -503,12 +646,12 @@ async function saveConfig(e) {
     status.textContent = 'Saved!';
     status.className = 'form-status';
     showToast('Configuration saved', 'success');
-    configSnapshot = JSON.stringify(config);
+    configSnapshot = buildConfigSnapshot();
     updateUnsavedIndicator();
   } else {
     status.textContent = 'Save failed';
     status.className = 'form-status error';
-    showToast('Save failed', 'error');
+    showToast('Save failed' + (res && res.error ? ': ' + res.error : ''), 'error');
   }
   setTimeout(() => { status.textContent = ''; }, 3000);
 }
@@ -526,24 +669,22 @@ const LOG_PATTERNS = [
   { regex: /\b(\d+(?:\.\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
 ];
 
-function highlightLogLine(line, searchTerm) {
+function highlightLogLine(line, isSearchMatch) {
   let html = escHtml(line);
   // Apply syntax highlighting
   LOG_PATTERNS.forEach(p => {
     html = html.replace(p.regex, '<span class="' + p.cls + '">$1</span>');
   });
-  // Apply search highlight
-  if (searchTerm) {
-    const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp('(' + escaped + ')', 'gi');
-    html = html.replace(re, '<span class="log-highlight">$1</span>');
+  // Search matches get a whole-line background highlight (safe — no regex on HTML)
+  if (isSearchMatch) {
+    html = '<span class="log-highlight-line">' + html + '</span>';
   }
   return html;
 }
 
 async function refreshLogs() {
   const lines = document.getElementById('log-lines').value || '500';
-  const data = await api('log?lines=' + lines);
+  const data = await api('log?lines=' + encodeURIComponent(lines));
   if (!data) {
     document.getElementById('log-output').innerHTML = '<span class="log-level-error">(failed to load logs)</span>';
     return;
@@ -559,20 +700,18 @@ function renderLogOutput() {
 
   let lines = logRawLines;
 
-  // Filter by level
   if (levelFilter) {
     lines = lines.filter(line => line.includes(levelFilter));
   }
 
-  // Filter by search term
-  if (searchTerm) {
-    const q = searchTerm.toLowerCase();
-    lines = lines.filter(line => line.toLowerCase().includes(q));
+  const hasSearch = searchTerm.length > 0;
+  const searchLower = searchTerm.toLowerCase();
+  if (hasSearch) {
+    lines = lines.filter(line => line.toLowerCase().includes(searchLower));
   }
 
-  // Render with syntax highlighting
   viewer.innerHTML = lines.map(line =>
-    '<div class="log-line">' + highlightLogLine(line, searchTerm) + '</div>'
+    '<div class="log-line">' + highlightLogLine(line, hasSearch) + '</div>'
   ).join('');
 
   if (document.getElementById('log-autoscroll').checked) {
@@ -632,13 +771,12 @@ function showToast(message, type) {
 
   const t = document.createElement('div');
   t.className = 'toast ' + (type || '');
+  t.setAttribute('aria-atomic', 'true');
 
-  // Message text
   const span = document.createElement('span');
   span.textContent = message;
   t.appendChild(span);
 
-  // Close button
   const close = document.createElement('button');
   close.className = 'toast-close';
   close.innerHTML = '&times;';
@@ -646,7 +784,6 @@ function showToast(message, type) {
   close.onclick = () => { if (t.parentNode) t.remove(); };
   t.appendChild(close);
 
-  // Progress bar
   const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const prog = document.createElement('div');
   prog.className = 'toast-progress';
@@ -655,16 +792,13 @@ function showToast(message, type) {
 
   container.appendChild(t);
 
-  // Animate progress bar
   requestAnimationFrame(() => {
     prog.style.transitionDuration = prefersReduced ? '0ms' : duration + 'ms';
     prog.style.width = '0%';
   });
 
-  // Auto-dismiss
   const timer = setTimeout(() => { if (t.parentNode) t.remove(); }, duration);
 
-  // Pause on hover
   t.addEventListener('mouseenter', () => {
     clearTimeout(timer);
     prog.style.transitionDuration = '0ms';
@@ -676,7 +810,6 @@ function showToast(message, type) {
     setTimeout(() => { if (t.parentNode) t.remove(); }, remaining);
   });
 
-  // Cap at 5 toasts
   while (container.children.length > 5) {
     container.removeChild(container.firstChild);
   }
@@ -697,8 +830,16 @@ function stopStatusPoll() {
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initSidebar();
-  initRouter();
+
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+  // Auth forms
+  const setupForm = document.getElementById('setup-form');
+  if (setupForm) setupForm.addEventListener('submit', doSetup);
+  const loginForm = document.getElementById('login-form');
+  if (loginForm) loginForm.addEventListener('submit', doLogin);
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.addEventListener('click', doLogout);
 
   // Log controls
   const logLines = document.getElementById('log-lines');
@@ -713,4 +854,7 @@ document.addEventListener('DOMContentLoaded', () => {
       debounce = setTimeout(renderLogOutput, 200);
     });
   }
+
+  // Start auth check
+  checkAuth();
 });

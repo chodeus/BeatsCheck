@@ -28,6 +28,6 @@
   <Config Name="PGID" Target="PGID" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="UMASK" Target="UMASK" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">002</Config>
   <Config Name="Timezone" Target="TZ" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">UTC</Config>
-  <Config Name="WebUI Port" Target="8484" Default="8484" Mode="tcp" Description="Port for the optional web interface. Enable WebUI by setting webui = true in /config/beatscheck.conf." Type="Port" Display="advanced" Required="false" Mask="false">8484</Config>
+  <Config Name="WebUI Port" Target="8484" Default="8484" Mode="tcp" Description="Port for the optional web interface. Enable WebUI by setting webui = true in /config/beatscheck.conf. On first access, you will create login credentials via a setup wizard. To reset credentials: docker exec BeatsCheck reset-webui-password" Type="Port" Display="advanced" Required="false" Mask="false">8484</Config>
   <TailscaleStateDir/>
 </Container>

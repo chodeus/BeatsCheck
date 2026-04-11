@@ -18,29 +18,75 @@
     <div class="header-right">
       <span id="status-indicator" class="status-dot" role="status" aria-label="Application status"></span>
       <span id="status-text">Connecting...</span>
+      <button id="logout-btn" class="btn btn-outline btn-sm" style="display:none" aria-label="Log out">Logout</button>
       <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark/light theme">&#9790;</button>
     </div>
   </header>
 
   <nav id="sidebar" aria-label="Main navigation">
-    <a href="#dashboard" class="nav-link active" data-page="dashboard" role="menuitem">
+    <a href="#dashboard" class="nav-link active" data-page="dashboard">
       <span class="nav-icon" aria-hidden="true">&#9632;</span> Dashboard
     </a>
-    <a href="#corrupt" class="nav-link" data-page="corrupt" role="menuitem">
+    <a href="#corrupt" class="nav-link" data-page="corrupt">
       <span class="nav-icon" aria-hidden="true">&#9888;</span> Corrupt Files
     </a>
-    <a href="#config" class="nav-link" data-page="config" role="menuitem">
+    <a href="#config" class="nav-link" data-page="config">
       <span class="nav-icon" aria-hidden="true">&#9881;</span> Configuration
     </a>
-    <a href="#logs" class="nav-link" data-page="logs" role="menuitem">
+    <a href="#logs" class="nav-link" data-page="logs">
       <span class="nav-icon" aria-hidden="true">&#9776;</span> Logs
     </a>
   </nav>
 
   <main id="content">
 
+    <!-- Setup (first-run) -->
+    <section id="page-setup" class="page">
+      <div class="auth-container">
+        <h2>Welcome to BeatsCheck</h2>
+        <p class="subtitle">Create your WebUI credentials to get started.</p>
+        <form id="setup-form" class="auth-form">
+          <div class="auth-field">
+            <label for="setup-username">Username</label>
+            <input type="text" id="setup-username" required autocomplete="username" class="input">
+          </div>
+          <div class="auth-field">
+            <label for="setup-password">Password</label>
+            <input type="password" id="setup-password" required minlength="4" autocomplete="new-password" class="input">
+          </div>
+          <div class="auth-field">
+            <label for="setup-confirm">Confirm Password</label>
+            <input type="password" id="setup-confirm" required minlength="4" autocomplete="new-password" class="input">
+          </div>
+          <div id="setup-error" class="auth-error"></div>
+          <button type="submit" class="btn btn-primary auth-submit">Create Account</button>
+        </form>
+        <p class="auth-help">Credentials are stored securely in the container. To reset, run:<br><code>docker exec beatscheck reset-webui-password</code></p>
+      </div>
+    </section>
+
+    <!-- Login -->
+    <section id="page-login" class="page">
+      <div class="auth-container">
+        <h2>BeatsCheck Login</h2>
+        <form id="login-form" class="auth-form">
+          <div class="auth-field">
+            <label for="login-username">Username</label>
+            <input type="text" id="login-username" required autocomplete="username" class="input">
+          </div>
+          <div class="auth-field">
+            <label for="login-password">Password</label>
+            <input type="password" id="login-password" required autocomplete="current-password" class="input">
+          </div>
+          <div id="login-error" class="auth-error"></div>
+          <button type="submit" class="btn btn-primary auth-submit">Log In</button>
+        </form>
+        <p class="auth-help">Forgot your password? Run:<br><code>docker exec beatscheck reset-webui-password</code></p>
+      </div>
+    </section>
+
     <!-- Dashboard -->
-    <section id="page-dashboard" class="page active">
+    <section id="page-dashboard" class="page">
       <h2>Dashboard</h2>
       <div class="card-grid">
         <div class="card">
@@ -102,9 +148,9 @@
           <thead>
             <tr>
               <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" aria-label="Select all files"></th>
-              <th class="sortable" data-sort="path" onclick="sortTable('path')">File <span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort="reason" onclick="sortTable('reason')">Reason <span class="sort-indicator"></span></th>
-              <th class="col-size sortable" data-sort="size" onclick="sortTable('size')">Size <span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort="path" onclick="sortTable('path')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('path')}">File <span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort="reason" onclick="sortTable('reason')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('reason')}">Reason <span class="sort-indicator"></span></th>
+              <th class="col-size sortable" data-sort="size" onclick="sortTable('size')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('size')}">Size <span class="sort-indicator"></span></th>
               <th class="col-action">Action</th>
             </tr>
           </thead>
@@ -154,12 +200,12 @@
           <button class="btn btn-outline btn-sm" onclick="refreshLogs()">Refresh</button>
         </div>
       </div>
-      <div id="log-output" class="log-viewer" role="log" aria-live="polite" aria-label="Log output"></div>
+      <div id="log-output" class="log-viewer" role="log" aria-live="off" aria-label="Log output"></div>
     </section>
 
   </main>
 
-  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
+  <div id="toast-container" aria-live="polite"></div>
 
   <script src="app.js"></script>
 </body>

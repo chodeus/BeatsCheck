@@ -38,12 +38,15 @@ WORKDIR /app
 COPY entrypoint.sh /app/
 COPY delete.sh /app/
 COPY rescan.sh /app/
+COPY reset-webui-password.sh /app/
 COPY static/ /app/static/
 COPY webui.py /app/
 COPY beats_check.py /app/
-RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh && \
+RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
+             /app/reset-webui-password.sh && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
-    ln -s /app/rescan.sh /usr/local/bin/rescan
+    ln -s /app/rescan.sh /usr/local/bin/rescan && \
+    ln -s /app/reset-webui-password.sh /usr/local/bin/reset-webui-password
 
 EXPOSE 8484
 

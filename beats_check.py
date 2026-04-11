@@ -224,9 +224,14 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
                     errors.append({"path": fp,
                                    "error": "Lidarr delete failed"})
         else:
+            # API reported failure but may have partially succeeded
             for fp in lidarr_paths:
-                errors.append({"path": fp,
-                               "error": "Lidarr API delete failed"})
+                if not os.path.exists(fp):
+                    deleted.append(fp)
+                else:
+                    errors.append(
+                        {"path": fp,
+                         "error": "Lidarr API delete failed"})
 
     # Direct delete for non-Lidarr files
     for fp in direct_paths:
@@ -2083,6 +2088,11 @@ def _apply_config_file(config_dir):
                 key, _, value = line.partition('=')
                 key = key.strip().lower()
                 value = value.strip()
+                # Strip inline comments (space+hash outside quotes)
+                if ' #' in value and not (
+                        len(value) >= 2 and value[0] == value[-1]
+                        and value[0] in ('"', "'")):
+                    value = value[:value.index(' #')].rstrip()
                 # Strip surrounding quotes
                 if (len(value) >= 2 and value[0] == value[-1]
                         and value[0] in ('"', "'")):
@@ -2208,6 +2218,41 @@ def _webui_progress(current, total, corrupted, current_file):
         )
 
 
+# --- Main helpers ---
+
+
+def _start_webui(cfg):
+    """Start optional WebUI server in a daemon thread."""
+    global _webui_app_state
+    try:
+        from webui import start_webui, app_state
+        _webui_app_state = app_state
+        app_state.update(version=__version__, mode=cfg.mode,
+                         status="starting")
+        start_webui(cfg.log_dir, cfg.webui_port)
+    except Exception as e:
+        logger.error("WebUI failed to start: %s", e)
+
+
+def _maybe_rotate_logs(cfg):
+    """Rotate log and processed.txt if log exceeds max size."""
+    if cfg.max_log_mb <= 0 or not os.path.exists(cfg.log_file):
+        return
+    try:
+        log_size = os.path.getsize(cfg.log_file)
+        if log_size > cfg.max_log_mb * 1024 * 1024:
+            _rotate_file(cfg.log_file, keep=3)
+            processed = os.path.join(cfg.log_dir, "processed.txt")
+            if os.path.exists(processed):
+                _rotate_file(processed, keep=3)
+            logger.info(
+                "Log rotated (%s > %dMB limit). "
+                "Starting fresh full scan.",
+                format_size(log_size), cfg.max_log_mb)
+    except OSError:
+        pass
+
+
 # --- Main ---
 
 def main():
@@ -2227,17 +2272,8 @@ def main():
 
     logger.info("BeatsCheck v%s starting", __version__)
 
-    # Start optional WebUI
     if cfg.webui:
-        try:
-            global _webui_app_state
-            from webui import start_webui, app_state
-            _webui_app_state = app_state
-            app_state.update(version=__version__, mode=cfg.mode,
-                             status="starting")
-            start_webui(cfg.log_dir, cfg.webui_port)
-        except Exception as e:
-            logger.error("WebUI failed to start: %s", e)
+        _start_webui(cfg)
 
     _log_lidarr_status(cfg.lidarr_url, cfg.lidarr_api_key, cfg.lidarr_search,
                        cfg.lidarr_blocklist)
@@ -2276,18 +2312,7 @@ def main():
         os.makedirs(cfg.output_folder, exist_ok=True)
 
     while True:
-        if cfg.max_log_mb > 0 and os.path.exists(cfg.log_file):
-            try:
-                log_size = os.path.getsize(cfg.log_file)
-                if log_size > cfg.max_log_mb * 1024 * 1024:
-                    _rotate_file(cfg.log_file, keep=3)
-                    processed = os.path.join(cfg.log_dir, "processed.txt")
-                    if os.path.exists(processed):
-                        _rotate_file(processed, keep=3)
-                    logger.info("Log rotated (%s > %dMB limit). Starting fresh full scan.",
-                                format_size(log_size), cfg.max_log_mb)
-            except OSError:
-                pass
+        _maybe_rotate_logs(cfg)
 
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
         run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,

@@ -189,15 +189,41 @@ BeatsCheck includes an optional web interface for monitoring and control. Disabl
    ```
 
 3. Access at `http://your-server:8484`
+4. On first visit, create your login credentials via the setup wizard
 
 ### Features
 
-- **Dashboard** — live scan status, progress bar, library stats
-- **Corrupt Files** — browse, search, and delete corrupt files
-- **Configuration** — edit all settings from the browser
-- **Logs** — real-time log viewer with auto-scroll
+- **Authentication** — first-run setup wizard, session-based login with PBKDF2-hashed passwords
+- **Dashboard** — live scan status, progress bar with ETA, library stats
+- **Corrupt Files** — sortable/searchable table with individual and bulk delete
+- **Configuration** — edit all settings from the browser (config key allowlist enforced)
+- **Logs** — real-time log viewer with syntax highlighting, level filter, search, copy/download
 - **Dark/Light mode** — toggle with one click, preference saved
 - **Mobile responsive** — full functionality on phones and tablets
+- **Accessible** — keyboard navigation, ARIA labels, skip-to-content, reduced motion support
+
+### Resetting Credentials
+
+If you forget your WebUI password:
+
+```bash
+docker exec beatscheck reset-webui-password
+```
+
+This removes the credential file. The next visit to the WebUI will show the setup wizard to create new credentials.
+
+### WebUI Security
+
+- **Authentication required** — all API endpoints require a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies)
+- **Setup wizard** — credentials created on first access, stored hashed in `/config/webui_auth.json`
+- **Config allowlist** — only known configuration keys are accepted (arbitrary key injection blocked)
+- **Thread-safe config writes** — concurrent requests cannot corrupt the config file
+- **Delete validation** — files must be in `corrupt.txt` and inside the music directory; symlinks rejected
+- **Path traversal protection** — static file serving validates all paths against the static directory
+- **API key masking** — Lidarr API key shown as `********` in the UI
+- **No external dependencies** — built on Python stdlib only (no supply chain risk)
+
+**Important:** The WebUI is designed for trusted LAN / Docker bridge networks. For remote access, use a reverse proxy with HTTPS and authentication (Nginx, Caddy, Traefik). Do not expose the WebUI port directly to the internet.
 
 ## Docker Usage
 
@@ -351,6 +377,7 @@ The third argument is the log file path. All state files (`processed.txt`, `corr
 | `corrupt_tracking.json` | Path-to-first-seen timestamps — used by `DELETE_AFTER` auto-delete |
 | `summary.json` | Machine-readable scan results for notification scripts |
 | `search_queue.json` | Pending Lidarr album search queue — drained during idle (5/hour) |
+| `webui_auth.json` | WebUI login credentials (username + PBKDF2-hashed password) |
 | `.scanning` | Lock file (exists only during active scans, uses `flock`) |
 | `.heartbeat` | Timestamp updated during scans and idle — used by Docker healthcheck |
 

@@ -32,6 +32,10 @@ services:
       ## /config/beatscheck.conf — auto-created on first run.
     ## WebUI: uncomment to enable the web interface.
     ## Also set webui = true in /config/beatscheck.conf
+    ## On first access you'll create login credentials via a setup wizard.
+    ## To reset credentials: docker exec beatscheck reset-webui-password
+    ## WARNING: Do not expose the WebUI port directly to the internet.
+    ## Use a reverse proxy with HTTPS (Nginx, Caddy, Traefik) for remote access.
     # ports:
     #   - "8484:8484"
     ## Optional: limit CPU usage to avoid impacting other services
