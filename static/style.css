@@ -458,9 +458,16 @@ tbody tr:hover { background: var(--bg-hover); }
   font-size: .9rem;
   font-weight: 700;
   color: var(--accent);
-  padding-top: .8rem;
-  padding-bottom: .3rem;
+  padding-top: 1.2rem;
+  padding-bottom: .2rem;
   grid-column: 1 / -1;
+}
+.config-section-help {
+  font-size: .8rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+  grid-column: 1 / -1;
+  margin-bottom: .3rem;
 }
 .form-actions { margin-top: 1.2rem; display: flex; align-items: center; gap: .8rem; }
 .form-status { font-size: .85rem; color: var(--success); }
@@ -582,6 +589,8 @@ tbody tr:hover { background: var(--bg-hover); }
 .album-file { background: var(--bg-card); }
 .album-count { font-size: .78rem; color: var(--text-muted); font-weight: 400; }
 .album-header.all-corrupt .album-count { color: var(--danger); }
+.album-actions { display: flex; gap: .4rem; flex-wrap: wrap; }
+.col-actions { white-space: nowrap; }
 
 /* --- Scan Banner --- */
 .scan-banner {

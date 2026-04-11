@@ -1999,122 +1999,121 @@ _DEFAULT_CONFIG = """\
 #######################################################
 ##                                                   ##
 ##  Change the values below to configure BeatsCheck. ##
-##  Lines starting with # are ignored (commented     ##
-##  out). Remove the # to enable a setting.          ##
+##  Lines starting with # are ignored — remove the   ##
+##  # to enable a setting.                           ##
 ##                                                   ##
-##  You can also change these settings from the      ##
-##  WebUI if it is enabled (see bottom of this       ##
-##  file). Changes apply at the next scan cycle.     ##
+##  Settings can also be changed from the WebUI      ##
+##  (enable at the bottom of this file).             ##
 ##                                                   ##
 ##  https://github.com/chodeus/BeatsCheck            ##
 #######################################################
 
 
-##----- Scan Settings ----------------------------------
+##----- Scanning ---------------------------------------
+## How and when BeatsCheck scans your library.
 
-## mode — what BeatsCheck does when it scans
+## mode — what happens when BeatsCheck runs
 ##   setup  = sit idle, don't scan (default)
 ##   report = scan and log corrupt files (nothing deleted)
-##   move   = scan and move corrupt files to quarantine folder
-##   delete = interactive review and delete
+##   move   = move corrupt files to a quarantine folder
 mode = setup
 
-## workers — how many files to check at the same time
-##   Use more workers for faster scans (uses more CPU)
-##   2 = conservative, 4 = balanced, 8+ = fast
+## workers — files checked in parallel
+##   More = faster scans but more CPU. 2-4 recommended.
 workers = 4
 
-## run_interval — hours between scans
-##   0   = scan once then wait for manual rescan
-##   24  = scan once per day
-##   168 = scan once per week
+## run_interval — hours between automatic scans
+##   0   = scan once then wait (trigger manually or via WebUI)
+##   24  = daily
+##   168 = weekly
 run_interval = 0
 
-## delete_after — automatically delete corrupt files
-##   after this many days (gives you time to review first)
-##   0 = never auto-delete (manual only)
+## min_file_age — skip files modified in the last N minutes
+##   Avoids flagging files being actively downloaded.
+min_file_age = 30
+
+
+##----- When Corrupt Files Are Found -------------------
+## By default, corrupt files are only logged — nothing
+## is deleted unless you configure auto-delete here or
+## use the Corrupt Files page in the WebUI.
+
+## delete_after — auto-delete corrupt files after N days
+##   Gives you time to review before anything is removed.
+##   0 = never auto-delete (delete manually via WebUI)
 ##   7 = delete after 7 days
 delete_after = 0
 
 ## max_auto_delete — safety limit
-##   If more than this many files would be deleted in
-##   one run, abort to prevent accidental mass deletion.
-##   0 = no limit
+##   Abort if more than N files would be auto-deleted
+##   in one run. Prevents mass deletion from filesystem
+##   issues. 0 = no limit.
 max_auto_delete = 50
 
-## min_file_age — skip recently modified files (minutes)
-##   Prevents flagging files being actively downloaded.
-##   30 = ignore files changed in the last 30 minutes
-min_file_age = 30
-
-## log_level — how much detail to log
-##   DEBUG = everything (verbose, useful for troubleshooting)
-##   INFO  = normal operation
-##   WARNING = only warnings and errors
-##   ERROR = only errors
-log_level = INFO
-
-## max_log_mb — rotate log when it exceeds this size (MB)
-##   When rotated, a fresh full rescan is triggered.
-##   0 = never rotate
-max_log_mb = 50
-
-## output_dir — quarantine folder for move mode
-##   Must match a volume mounted in the container.
-##   Only needed if using mode = move
+## output_dir — quarantine folder (move mode only)
+##   Must match a mounted volume in the container.
 # output_dir = /corrupted
 
 
-##----- Lidarr Integration ----------------------------
+##----- Lidarr (Automatic Re-download) ----------------
+## Connect to Lidarr so deleted corrupt files are
+## automatically re-downloaded as clean copies.
 ##
-## To use Lidarr integration, remove the # from the
-## lidarr_url and lidarr_api_key lines below and fill
-## in your values.
+## To enable: remove the # from lidarr_url and
+## lidarr_api_key below and fill in your values.
 ##
-## When configured, BeatsCheck deletes corrupt files
-## through the Lidarr API so Lidarr can clean its
-## database and automatically re-download.
+## How it works:
+##   1. Corrupt files are deleted via the Lidarr API
+##   2. Monitored albums are automatically re-searched
+##      by Lidarr (no extra config needed)
+##   3. Blocklist prevents re-downloading the same
+##      bad release
 ##
 ## Your API key is stored securely here — it won't
 ## appear in docker inspect or process listings.
-##
 
-## lidarr_url — your Lidarr instance address
-##   Example: http://lidarr:8686 or http://192.168.1.100:8686
+## lidarr_url — your Lidarr address
+##   e.g. http://lidarr:8686 or http://192.168.1.100:8686
 # lidarr_url = http://lidarr:8686
 
-## lidarr_api_key — find this in Lidarr under
-##   Settings > General > API Key
+## lidarr_api_key — find in Lidarr: Settings > General
 # lidarr_api_key =
 
-## lidarr_search — re-download after deleting corrupt files
-##   true  = queue a search so Lidarr re-downloads (5/hour)
-##   false = don't search, just delete
-# lidarr_search = false
-
-## lidarr_blocklist — prevent re-downloading the same bad copy
-##   true  = blocklist the corrupt release before deleting
-##   false = just delete without blocklisting
+## lidarr_blocklist — blocklist the corrupt release so
+##   Lidarr downloads a different copy
+##   true = blocklist before deleting, false = just delete
 # lidarr_blocklist = false
 
+## lidarr_search — search for unmonitored albums after
+##   auto-delete. Monitored albums are searched
+##   automatically by Lidarr — this is only for albums
+##   you've stopped monitoring.
+# lidarr_search = false
 
-##----- Web UI -----------------------------------------
+
+##----- Logging ----------------------------------------
+
+## log_level — how much detail to log
+##   INFO = normal, DEBUG = verbose, WARNING/ERROR = quiet
+log_level = INFO
+
+## max_log_mb — rotate log at this size (MB)
+##   Rotation triggers a fresh full rescan. 0 = never.
+max_log_mb = 50
+
+
+##----- Web Interface ----------------------------------
+## Enable the WebUI for monitoring, config, and managing
+## corrupt files from your browser.
 ##
-## Enable the built-in web interface for monitoring
-## and control. Access it at http://your-server:8484
-##
-## You also need to publish the port in Docker:
-##   ports: 8484:8484  (in docker-compose or Unraid)
-##
+## Also publish the port in Docker (e.g. ports: 8484:8484)
 ## On first visit you'll create a username and password.
-##
 
-## webui — enable or disable the web interface
-##   true  = start the web server
-##   false = no web interface
+## webui — enable or disable
+##   true = start web server, false = no web interface
 webui = false
 
-## webui_port — port number for the web interface
+## webui_port — port number
 webui_port = 8484
 """
 

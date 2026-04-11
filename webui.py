@@ -299,6 +299,8 @@ def _read_corrupt_list(config_dir):
         if isinstance(info, str):
             info = {"reason": info}
         entry = {"path": p, "reason": info.get("reason", "")}
+        if isinstance(info, dict) and "trackfileId" in info:
+            entry["has_lidarr_id"] = True
         try:
             entry["size"] = os.path.getsize(p)
         except OSError:
@@ -349,6 +351,56 @@ def _read_summary(config_dir):
             return json.load(f)
     except (json.JSONDecodeError, ValueError):
         return {}
+
+
+def _ignore_corrupt_files(config_dir, files):
+    """Remove files from corrupt.txt and corrupt_details.json
+    without deleting the actual files. They'll reappear if the
+    next scan finds them corrupt again."""
+    corrupt_path = os.path.join(config_dir, "corrupt.txt")
+    details_path = os.path.join(config_dir, "corrupt_details.json")
+    tracking_path = os.path.join(config_dir, "corrupt_tracking.json")
+    ignore_set = set(files)
+
+    # Remove from corrupt.txt
+    if os.path.isfile(corrupt_path):
+        with open(corrupt_path, 'r', encoding='utf-8') as f:
+            remaining = [line.strip() for line in f
+                         if line.strip()
+                         and line.strip() not in ignore_set]
+        tmp = corrupt_path + ".tmp"
+        with open(tmp, 'w', encoding='utf-8') as f:
+            for p in remaining:
+                f.write(p + '\n')
+        os.rename(tmp, corrupt_path)
+
+    # Remove from corrupt_details.json
+    if os.path.isfile(details_path):
+        try:
+            with open(details_path, 'r', encoding='utf-8') as f:
+                details = json.load(f)
+            for fp in files:
+                details.pop(fp, None)
+            tmp = details_path + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(details, f, indent=2)
+            os.rename(tmp, details_path)
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # Remove from corrupt_tracking.json
+    if os.path.isfile(tracking_path):
+        try:
+            with open(tracking_path, 'r', encoding='utf-8') as f:
+                tracking = json.load(f)
+            for fp in files:
+                tracking.pop(fp, None)
+            tmp = tracking_path + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(tracking, f, indent=2)
+            os.rename(tmp, tracking_path)
+        except (json.JSONDecodeError, OSError):
+            pass
 
 
 def _trigger_rescan(config_dir, mode="report", fresh=False):
@@ -579,6 +631,19 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             {"ok": True},
             cookies=[self._session_cookie("", max_age=0)])
 
+    def _handle_ignore(self, config_dir):
+        """Handle POST /api/ignore — remove files from corrupt list."""
+        body = self._read_body()
+        if body is None:
+            return
+        files = body.get('files', [])
+        if not files:
+            self._json_response(
+                {"error": "no files specified"}, 400)
+            return
+        _ignore_corrupt_files(config_dir, files)
+        self._json_response({"ok": True})
+
     def do_POST(self):
         config_dir = self.server.config_dir
 
@@ -670,6 +735,9 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             result = delete_corrupt_files(
                 files, config_dir, music_dir=music_dir)
             self._json_response(result)
+
+        elif self.path == '/api/ignore':
+            self._handle_ignore(config_dir)
 
         else:
             self._json_response({"error": "not found"}, 404)

@@ -156,13 +156,12 @@
             <tr>
               <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" aria-label="Select all files"></th>
               <th class="sortable" data-sort="path" onclick="sortTable('path')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('path')}">File <span class="sort-indicator"></span></th>
-              <th class="sortable" data-sort="reason" onclick="sortTable('reason')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('reason')}">Reason <span class="sort-indicator"></span></th>
               <th class="col-size sortable" data-sort="size" onclick="sortTable('size')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('size')}">Size <span class="sort-indicator"></span></th>
-              <th class="col-action">Action</th>
+              <th class="col-actions">Actions</th>
             </tr>
           </thead>
           <tbody id="corrupt-tbody">
-            <tr><td colspan="5" class="empty-state">No corrupt files found</td></tr>
+            <tr><td colspan="4" class="empty-state">No corrupt files found</td></tr>
           </tbody>
         </table>
       </div>

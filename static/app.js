@@ -19,24 +19,48 @@ let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; //
 
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
-  { section: 'Scan Settings' },
-  { key: 'mode',             label: 'Mode',             type: 'select', options: ['setup','report','move','delete'], default: 'setup', desc: 'Scan mode' },
-  { key: 'workers',          label: 'Workers',          type: 'number', default: '4',     desc: 'Parallel ffmpeg workers' },
-  { key: 'run_interval',     label: 'Run Interval',     type: 'number', default: '0',     desc: 'Hours between scans (0 = once)' },
-  { key: 'delete_after',     label: 'Delete After',     type: 'number', default: '0',     desc: 'Days before auto-delete (0 = never)' },
-  { key: 'max_auto_delete',  label: 'Max Auto Delete',  type: 'number', default: '50',    desc: 'Safety limit — abort if more than N files flagged (0 = no limit)' },
-  { key: 'min_file_age',     label: 'Min File Age',     type: 'number', default: '30',    desc: 'Skip files modified within N minutes' },
-  { key: 'log_level',        label: 'Log Level',        type: 'select', options: ['DEBUG','INFO','WARNING','ERROR'], default: 'INFO', desc: 'Logging detail level' },
-  { key: 'max_log_mb',       label: 'Max Log Size (MB)', type: 'number', default: '50',   desc: 'Rotate log at this size (0 = never)' },
-  { key: 'output_dir',       label: 'Output Directory', type: 'text',   default: '/corrupted', desc: 'Quarantine folder for move mode' },
-  { section: 'Lidarr Integration' },
-  { key: 'lidarr_url',       label: 'Lidarr URL',       type: 'text',   default: '',      desc: 'e.g. http://lidarr:8686' },
-  { key: 'lidarr_api_key',   label: 'Lidarr API Key',   type: 'password', default: '',    desc: 'Settings > General in Lidarr' },
-  { key: 'lidarr_search',    label: 'Lidarr Search',    type: 'select', options: ['false','true'], default: 'false', desc: 'Re-download after deleting corrupt files' },
-  { key: 'lidarr_blocklist', label: 'Lidarr Blocklist', type: 'select', options: ['false','true'], default: 'false', desc: 'Blocklist corrupt releases before deleting' },
-  { section: 'Web UI' },
-  { key: 'webui',      label: 'WebUI Enabled', type: 'select', options: ['false','true'], default: 'false', desc: 'Enable web interface (restart required)' },
-  { key: 'webui_port', label: 'WebUI Port',    type: 'number', default: '8484', desc: 'Port for web interface (restart required)' },
+  { section: 'Scanning',
+    help: 'How and when BeatsCheck scans your music library for corruption.' },
+  { key: 'mode',             label: 'Scan Mode',        type: 'select', options: ['setup','report','move'], default: 'setup',
+    desc: 'setup = idle (no scanning), report = scan and log only, move = quarantine corrupt files' },
+  { key: 'workers',          label: 'Workers',          type: 'number', default: '4',
+    desc: 'Number of files checked in parallel. More = faster but uses more CPU (2-4 recommended)' },
+  { key: 'run_interval',     label: 'Scan Interval',    type: 'number', default: '0',
+    desc: 'Hours between automatic scans. 0 = scan once then wait. 24 = daily. 168 = weekly' },
+  { key: 'min_file_age',     label: 'Min File Age',     type: 'number', default: '30',
+    desc: 'Skip files modified in the last N minutes (avoids flagging active downloads)' },
+
+  { section: 'When Corrupt Files Are Found',
+    help: 'What happens after a scan finds corrupt files. By default, corrupt files are only logged — nothing is deleted unless you configure it here or use the Corrupt Files page.' },
+  { key: 'delete_after',     label: 'Auto-Delete After',type: 'number', default: '0',
+    desc: 'Automatically delete corrupt files after this many days. 0 = never (use Corrupt Files page to delete manually). 7 = one week review window' },
+  { key: 'max_auto_delete',  label: 'Safety Limit',     type: 'number', default: '50',
+    desc: 'Abort auto-delete if more than this many files would be removed in one run. Prevents mass deletion from filesystem issues. 0 = no limit' },
+  { key: 'output_dir',       label: 'Quarantine Folder', type: 'text',  default: '/corrupted',
+    desc: 'Only for move mode — corrupt files are moved here instead of deleted. Must match a mounted volume' },
+
+  { section: 'Lidarr (Automatic Re-download)',
+    help: 'Connect to Lidarr so deleted corrupt files are automatically re-downloaded. Monitored albums are re-searched by Lidarr after deletion — no extra config needed.' },
+  { key: 'lidarr_url',       label: 'Lidarr URL',       type: 'text',   default: '',
+    desc: 'Your Lidarr address, e.g. http://lidarr:8686 or http://192.168.1.100:8686' },
+  { key: 'lidarr_api_key',   label: 'API Key',          type: 'password', default: '',
+    desc: 'Find this in Lidarr under Settings > General > API Key' },
+  { key: 'lidarr_blocklist', label: 'Blocklist',        type: 'select', options: ['false','true'], default: 'false',
+    desc: 'Blocklist the corrupt release before deleting so Lidarr downloads a different copy' },
+  { key: 'lidarr_search',    label: 'Search Unmonitored', type: 'select', options: ['false','true'], default: 'false',
+    desc: 'Queue search for unmonitored albums after auto-delete. Monitored albums are searched automatically by Lidarr' },
+
+  { section: 'Logging' },
+  { key: 'log_level',        label: 'Log Level',        type: 'select', options: ['DEBUG','INFO','WARNING','ERROR'], default: 'INFO',
+    desc: 'INFO = normal. DEBUG = verbose (for troubleshooting). WARNING/ERROR = quiet' },
+  { key: 'max_log_mb',       label: 'Max Log Size (MB)', type: 'number', default: '50',
+    desc: 'Rotate log when it exceeds this size. Triggers a fresh full rescan. 0 = never rotate' },
+
+  { section: 'Web Interface' },
+  { key: 'webui',      label: 'Enabled',       type: 'select', options: ['false','true'], default: 'false',
+    desc: 'Enable the web interface (requires container restart to take effect)' },
+  { key: 'webui_port', label: 'Port',           type: 'number', default: '8484',
+    desc: 'Port number for the web interface (requires container restart)' },
 ];
 
 // --- API helpers ---
@@ -484,11 +508,16 @@ function renderCorruptAlbums(files) {
     const countLabel = allCorrupt
       ? `All ${tracks.length} files corrupt`
       : `${tracks.length} of ${albumTotal} files corrupt`;
+    const hasLidarr = tracks.some(f => f.has_lidarr_id);
     html += `<tr class="album-header ${allCorrupt ? 'all-corrupt' : ''}" onclick="toggleAlbumExpand(this)">
       <td class="col-check"><input type="checkbox" class="album-check" data-dir="${safeDir}" onchange="toggleAlbumSelect(this)" onclick="event.stopPropagation()" aria-label="Select album"></td>
-      <td colspan="2"><strong>${escHtml(albumName)}</strong><br><span class="album-count">${countLabel}</span></td>
+      <td><strong>${escHtml(albumName)}</strong><br><span class="album-count">${countLabel}</span></td>
       <td class="col-size">${formatSize(totalSize)}</td>
-      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbum('${safeDir}')" ${allMissing ? 'disabled' : ''}>Delete</button></td>
+      <td class="col-actions album-actions">
+        ${hasLidarr ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();deleteAlbumRedownload('${safeDir}')" ${allMissing ? 'disabled' : ''} title="Delete via Lidarr and re-download">Re-download</button>` : ''}
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbum('${safeDir}')" ${allMissing ? 'disabled' : ''} title="Delete files permanently">Delete</button>
+        <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();ignoreAlbum('${safeDir}')" title="Hide until next scan">Ignore</button>
+      </td>
     </tr>`;
     tracks.forEach(f => {
       const name = f.path.split('/').pop();
@@ -496,10 +525,10 @@ function renderCorruptAlbums(files) {
       const cls = f.missing ? 'file-missing' : '';
       html += `<tr class="album-file ${cls}" data-album="${safeDir}" style="display:none">
         <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
-        <td style="padding-left:2rem"><span style="color:var(--text-dim);font-size:.82rem">${escHtml(name)}</span></td>
-        <td style="font-size:.82rem;color:var(--text-muted)">${escHtml(f.reason || '')}</td>
+        <td><span style="padding-left:1.5rem;color:var(--text-dim);font-size:.82rem">${escHtml(name)}</span>
+          <span style="font-size:.78rem;color:var(--text-muted);margin-left:.5rem">${escHtml(f.reason || '')}</span></td>
         <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
-        <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
+        <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
       </tr>`;
     });
   });
@@ -525,9 +554,9 @@ function toggleAlbumSelect(checkbox) {
 async function deleteAlbum(dir) {
   const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
   const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
-  if (!paths.length || !confirm('Delete all ' + paths.length + ' files in this album?')) return;
-  const btn = event.target;
-  btn.disabled = true;
+  if (!paths.length || !confirm('Permanently delete ' + paths.length + ' corrupt file(s) from this album?')) return;
+  const btns = document.querySelectorAll(`tr.album-header .btn`);
+  btns.forEach(b => b.disabled = true);
   try {
     const res = await apiPost('delete', { files: paths });
     if (res && res.count > 0) {
@@ -535,10 +564,45 @@ async function deleteAlbum(dir) {
       loadCorrupt();
       refreshDashboard();
     } else {
-      showToast('Delete failed', 'error');
+      showToast('Delete failed' + (res?.errors?.length ? ': ' + res.errors[0].error : ''), 'error');
     }
   } finally {
-    btn.disabled = false;
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+async function deleteAlbumRedownload(dir) {
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
+  if (!paths.length) return;
+  if (!confirm('Delete ' + paths.length + ' corrupt file(s) via Lidarr?\n\nLidarr will blocklist the bad release and re-download a clean copy for monitored albums.')) return;
+  const btns = document.querySelectorAll(`tr.album-header .btn`);
+  btns.forEach(b => b.disabled = true);
+  try {
+    const res = await apiPost('delete', { files: paths });
+    if (res && res.count > 0) {
+      showToast('Deleted ' + res.count + ' file(s) — Lidarr will re-download monitored albums', 'success');
+      loadCorrupt();
+      refreshDashboard();
+    } else {
+      showToast('Delete failed' + (res?.errors?.length ? ': ' + res.errors[0].error : ''), 'error');
+    }
+  } finally {
+    btns.forEach(b => b.disabled = false);
+  }
+}
+
+async function ignoreAlbum(dir) {
+  // Remove all files in this album from corrupt.txt (hide until next scan)
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
+  if (!paths.length) return;
+  const res = await apiPost('ignore', { files: paths });
+  if (res && res.ok) {
+    showToast('Album ignored — will reappear if found corrupt on next scan', 'info');
+    loadCorrupt();
+  } else {
+    showToast('Ignore failed', 'error');
   }
 }
 
@@ -569,7 +633,7 @@ function updateSortIndicators() {
 function renderCorruptTable(files) {
   const tbody = document.getElementById('corrupt-tbody');
   if (files.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No corrupt files found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No corrupt files found</td></tr>';
     return;
   }
   tbody.innerHTML = files.map(f => {
@@ -577,12 +641,12 @@ function renderCorruptTable(files) {
     const name = f.path.split('/').pop();
     const dir = f.path.split('/').slice(0, -1).join('/');
     const safePath = escHtml(f.path);
+    const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--text-muted)">${escHtml(f.reason)}</span>` : '';
     return `<tr class="${cls}">
       <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
-      <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong><br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
-      <td style="font-size:.82rem;color:var(--text-muted)">${escHtml(f.reason || '')}</td>
+      <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong>${reason}<br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
       <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
-      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''} aria-label="Delete ${escHtml(name)}">Delete</button></td>
+      <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''} aria-label="Delete ${escHtml(name)}">Delete</button></td>
     </tr>`;
   }).join('');
 }
@@ -688,6 +752,12 @@ function renderConfigForm(values) {
       title.className = 'config-section-title';
       title.textContent = item.section;
       container.appendChild(title);
+      if (item.help) {
+        const help = document.createElement('p');
+        help.className = 'config-section-help';
+        help.textContent = item.help;
+        container.appendChild(help);
+      }
       return;
     }
     const group = document.createElement('div');
