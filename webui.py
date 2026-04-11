@@ -629,6 +629,15 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             ok = _trigger_rescan(config_dir, mode, fresh)
             self._json_response({"ok": ok})
 
+        elif self.path == '/api/cancel':
+            try:
+                from beats_check import cancel_scan
+                cancel_scan()
+                self._json_response({"ok": True})
+            except ImportError:
+                self._json_response(
+                    {"error": "cancel not available"}, 500)
+
         elif self.path == '/api/delete':
             body = self._read_body()
             if body is None:

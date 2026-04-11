@@ -118,6 +118,9 @@ body {
   min-height: 100vh;
 }
 
+body.auth-view { grid-template-columns: 1fr; }
+body.auth-view main { max-width: 500px; margin: 0 auto; }
+
 /* --- Header --- */
 header {
   grid-column: 1 / -1;
@@ -267,6 +270,8 @@ main {
   height: 100%;
   background: var(--progress-fg);
   border-radius: 5px;
+  min-width: 8px;
+  transition: width .3s ease;
   transition: width .4s ease;
   width: 0%;
 }

@@ -19,23 +19,23 @@ let isAuthenticated = false;
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
   { section: 'Scan Settings' },
-  { key: 'mode',             label: 'Mode',             type: 'select', options: ['setup','report','move','delete'], desc: 'Scan mode' },
-  { key: 'workers',          label: 'Workers',          type: 'number', desc: 'Parallel ffmpeg workers' },
-  { key: 'run_interval',     label: 'Run Interval',     type: 'number', desc: 'Hours between scans (0=once)' },
-  { key: 'delete_after',     label: 'Delete After',     type: 'number', desc: 'Days before auto-delete (0=never)' },
-  { key: 'max_auto_delete',  label: 'Max Auto Delete',  type: 'number', desc: 'Safety threshold (0=no limit)' },
-  { key: 'min_file_age',     label: 'Min File Age',     type: 'number', desc: 'Skip files newer than N minutes' },
-  { key: 'log_level',        label: 'Log Level',        type: 'select', options: ['DEBUG','INFO','WARNING','ERROR'] },
-  { key: 'max_log_mb',       label: 'Max Log MB',       type: 'number', desc: 'Rotate log at N MB (0=never)' },
-  { key: 'output_dir',       label: 'Output Dir',       type: 'text',   desc: 'Quarantine path (move mode)' },
+  { key: 'mode',             label: 'Mode',             type: 'select', options: ['setup','report','move','delete'], default: 'setup', desc: 'Scan mode' },
+  { key: 'workers',          label: 'Workers',          type: 'number', default: '4',     desc: 'Parallel ffmpeg workers' },
+  { key: 'run_interval',     label: 'Run Interval',     type: 'number', default: '0',     desc: 'Hours between scans (0 = once)' },
+  { key: 'delete_after',     label: 'Delete After',     type: 'number', default: '0',     desc: 'Days before auto-delete (0 = never)' },
+  { key: 'max_auto_delete',  label: 'Max Auto Delete',  type: 'number', default: '50',    desc: 'Safety limit — abort if more than N files flagged (0 = no limit)' },
+  { key: 'min_file_age',     label: 'Min File Age',     type: 'number', default: '30',    desc: 'Skip files modified within N minutes' },
+  { key: 'log_level',        label: 'Log Level',        type: 'select', options: ['DEBUG','INFO','WARNING','ERROR'], default: 'INFO', desc: 'Logging detail level' },
+  { key: 'max_log_mb',       label: 'Max Log Size (MB)', type: 'number', default: '50',   desc: 'Rotate log at this size (0 = never)' },
+  { key: 'output_dir',       label: 'Output Directory', type: 'text',   default: '/corrupted', desc: 'Quarantine folder for move mode' },
   { section: 'Lidarr Integration' },
-  { key: 'lidarr_url',       label: 'Lidarr URL',       type: 'text',   desc: 'e.g. http://lidarr:8686' },
-  { key: 'lidarr_api_key',   label: 'Lidarr API Key',   type: 'password', desc: 'Settings > General in Lidarr' },
-  { key: 'lidarr_search',    label: 'Lidarr Search',    type: 'select', options: ['false','true'], desc: 'Auto-search after delete' },
-  { key: 'lidarr_blocklist', label: 'Lidarr Blocklist', type: 'select', options: ['false','true'], desc: 'Blocklist corrupt releases' },
+  { key: 'lidarr_url',       label: 'Lidarr URL',       type: 'text',   default: '',      desc: 'e.g. http://lidarr:8686' },
+  { key: 'lidarr_api_key',   label: 'Lidarr API Key',   type: 'password', default: '',    desc: 'Settings > General in Lidarr' },
+  { key: 'lidarr_search',    label: 'Lidarr Search',    type: 'select', options: ['false','true'], default: 'false', desc: 'Re-download after deleting corrupt files' },
+  { key: 'lidarr_blocklist', label: 'Lidarr Blocklist', type: 'select', options: ['false','true'], default: 'false', desc: 'Blocklist corrupt releases before deleting' },
   { section: 'Web UI' },
-  { key: 'webui',      label: 'WebUI Enabled', type: 'select', options: ['false','true'], desc: 'Enable web interface (restart required)' },
-  { key: 'webui_port', label: 'WebUI Port',    type: 'number', desc: 'Port for web interface (restart required)' },
+  { key: 'webui',      label: 'WebUI Enabled', type: 'select', options: ['false','true'], default: 'false', desc: 'Enable web interface (restart required)' },
+  { key: 'webui_port', label: 'WebUI Port',    type: 'number', default: '8484', desc: 'Port for web interface (restart required)' },
 ];
 
 // --- API helpers ---
@@ -91,16 +91,17 @@ function showPage(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const el = document.getElementById('page-' + page);
   if (el) el.classList.add('active');
-  // Hide/show app chrome
+  // Hide/show app chrome for auth pages
   const sidebar = document.getElementById('sidebar');
-  const header = document.querySelector('header');
   const logoutBtn = document.getElementById('logout-btn');
   if (page === 'login' || page === 'setup') {
     sidebar.style.display = 'none';
     if (logoutBtn) logoutBtn.style.display = 'none';
+    document.body.classList.add('auth-view');
   } else {
     sidebar.style.display = '';
     if (logoutBtn) logoutBtn.style.display = '';
+    document.body.classList.remove('auth-view');
   }
 }
 
@@ -363,6 +364,17 @@ async function refreshDashboard() {
     section.style.display = 'none';
     scanStartTime = null;
   }
+
+  // Disable rescan buttons while scanning, show cancel button
+  const isScanning = status === 'scanning';
+  document.querySelectorAll('.action-bar .btn:not(#cancel-scan-btn)').forEach(b => {
+    b.disabled = isScanning;
+  });
+  const cancelBtn = document.getElementById('cancel-scan-btn');
+  if (cancelBtn) {
+    cancelBtn.style.display = isScanning ? '' : 'none';
+    cancelBtn.disabled = false;
+  }
 }
 
 function setCardValue(id, val) {
@@ -573,7 +585,7 @@ function renderConfigForm(values) {
     group.className = 'config-group';
     const label = document.createElement('label');
     label.setAttribute('for', 'cfg-' + item.key);
-    label.textContent = item.key;
+    label.textContent = item.label;
     label.title = item.desc || '';
     group.appendChild(label);
 
@@ -600,7 +612,7 @@ function renderConfigForm(values) {
     }
     input.id = 'cfg-' + item.key;
     input.name = item.key;
-    input.value = item.key in values ? values[item.key] : '';
+    input.value = item.key in values ? values[item.key] : (item.default || '');
     input.addEventListener('input', updateUnsavedIndicator);
     input.addEventListener('change', updateUnsavedIndicator);
     group.appendChild(input);
@@ -759,6 +771,18 @@ async function triggerRescan(mode, fresh) {
     setTimeout(refreshDashboard, 1000);
   } else {
     showToast('Rescan failed', 'error');
+  }
+}
+
+async function cancelScan() {
+  const btn = document.getElementById('cancel-scan-btn');
+  btn.disabled = true;
+  const res = await apiPost('cancel', {});
+  btn.disabled = false;
+  if (res && res.ok) {
+    showToast('Scan cancel requested — finishing current files...', 'warning');
+  } else {
+    showToast('Cancel failed', 'error');
   }
 }
 

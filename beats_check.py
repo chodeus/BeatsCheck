@@ -23,6 +23,7 @@ AUDIO_EXTENSIONS = {
 }
 
 shutdown_requested = False
+scan_cancelled = False
 logger = logging.getLogger("beatscheck")
 
 
@@ -32,6 +33,13 @@ def handle_shutdown(signum, frame):
     global shutdown_requested
     shutdown_requested = True
     logger.info("Shutdown requested, finishing in-progress files...")
+
+
+def cancel_scan():
+    """Cancel the current scan. Called from WebUI."""
+    global scan_cancelled
+    scan_cancelled = True
+    logger.info("Scan cancel requested.")
 
 
 def _decode_mountinfo_path(path):
@@ -658,9 +666,11 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
             if checked % 10 == 0 or checked == total:
                 _webui_progress(checked, total, corrupted, file_path)
 
+        _stop = shutdown_requested or scan_cancelled
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for f in files_to_check:
-                if shutdown_requested:
+                _stop = shutdown_requested or scan_cancelled
+                if _stop:
                     break
                 pending[pool.submit(check_audio_file, f)] = f
                 # Drain completed futures to bound memory usage
@@ -669,15 +679,18 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                         pending, return_when=concurrent.futures.FIRST_COMPLETED)
                     for fut in done:
                         _process_future(fut)
-                    if shutdown_requested:
+                    _stop = shutdown_requested or scan_cancelled
+                    if _stop:
                         break
 
-            if shutdown_requested:
+            _stop = shutdown_requested or scan_cancelled
+            if _stop:
                 pool.shutdown(wait=True, cancel_futures=True)
             else:
                 # Drain remaining futures
                 for future in as_completed(pending.copy()):
-                    if shutdown_requested:
+                    _stop = shutdown_requested or scan_cancelled
+                    if _stop:
                         pool.shutdown(wait=True, cancel_futures=True)
                         break
                     _process_future(future)
@@ -2467,6 +2480,8 @@ def main():
         os.makedirs(cfg.output_folder, exist_ok=True)
 
     while True:
+        global scan_cancelled
+        scan_cancelled = False
         _reload_config(cfg)
         _maybe_rotate_logs(cfg)
 
