@@ -7,31 +7,33 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <a href="#content" class="skip-link">Skip to content</a>
+
   <header>
     <div class="header-left">
-      <button id="menu-toggle" class="icon-btn mobile-only" aria-label="Menu">&#9776;</button>
+      <button id="menu-toggle" class="icon-btn mobile-only" aria-label="Toggle navigation menu">&#9776;</button>
       <h1>BeatsCheck</h1>
       <span id="version-badge" class="badge">v1.0.0</span>
     </div>
     <div class="header-right">
-      <span id="status-indicator" class="status-dot"></span>
+      <span id="status-indicator" class="status-dot" role="status" aria-label="Application status"></span>
       <span id="status-text">Connecting...</span>
-      <button id="theme-toggle" class="icon-btn" aria-label="Toggle theme">&#9790;</button>
+      <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark/light theme">&#9790;</button>
     </div>
   </header>
 
-  <nav id="sidebar">
-    <a href="#dashboard" class="nav-link active" data-page="dashboard">
-      <span class="nav-icon">&#9632;</span> Dashboard
+  <nav id="sidebar" aria-label="Main navigation">
+    <a href="#dashboard" class="nav-link active" data-page="dashboard" role="menuitem">
+      <span class="nav-icon" aria-hidden="true">&#9632;</span> Dashboard
     </a>
-    <a href="#corrupt" class="nav-link" data-page="corrupt">
-      <span class="nav-icon">&#9888;</span> Corrupt Files
+    <a href="#corrupt" class="nav-link" data-page="corrupt" role="menuitem">
+      <span class="nav-icon" aria-hidden="true">&#9888;</span> Corrupt Files
     </a>
-    <a href="#config" class="nav-link" data-page="config">
-      <span class="nav-icon">&#9881;</span> Configuration
+    <a href="#config" class="nav-link" data-page="config" role="menuitem">
+      <span class="nav-icon" aria-hidden="true">&#9881;</span> Configuration
     </a>
-    <a href="#logs" class="nav-link" data-page="logs">
-      <span class="nav-icon">&#9776;</span> Logs
+    <a href="#logs" class="nav-link" data-page="logs" role="menuitem">
+      <span class="nav-icon" aria-hidden="true">&#9776;</span> Logs
     </a>
   </nav>
 
@@ -42,27 +44,27 @@
       <h2>Dashboard</h2>
       <div class="card-grid">
         <div class="card">
-          <div class="card-label">Status</div>
+          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9679;</span> Status</div>
           <div id="dash-status" class="card-value">--</div>
         </div>
         <div class="card">
-          <div class="card-label">Mode</div>
+          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9881;</span> Mode</div>
           <div id="dash-mode" class="card-value">--</div>
         </div>
         <div class="card">
-          <div class="card-label">Corrupt Files</div>
+          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9888;</span> Corrupt Files</div>
           <div id="dash-corrupt" class="card-value">--</div>
         </div>
         <div class="card">
-          <div class="card-label">Library Size</div>
+          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9836;</span> Library Size</div>
           <div id="dash-library" class="card-value">--</div>
         </div>
         <div class="card">
-          <div class="card-label">Last Scan</div>
+          <div class="card-label"><span class="card-icon" aria-hidden="true">&#8635;</span> Last Scan</div>
           <div id="dash-last-scan" class="card-value">--</div>
         </div>
         <div class="card">
-          <div class="card-label">Uptime</div>
+          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9201;</span> Uptime</div>
           <div id="dash-uptime" class="card-value">--</div>
         </div>
       </div>
@@ -70,10 +72,11 @@
       <!-- Progress bar (visible during scan) -->
       <div id="scan-progress-section" class="card" style="display:none;">
         <div class="card-label">Scan Progress</div>
-        <div class="progress-bar">
+        <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
           <div id="progress-fill" class="progress-fill"></div>
         </div>
         <div id="progress-text" class="progress-text">0 / 0 files</div>
+        <div id="progress-eta" class="progress-eta"></div>
         <div id="progress-file" class="progress-file"></div>
       </div>
 
@@ -91,17 +94,17 @@
     <section id="page-corrupt" class="page">
       <h2>Corrupt Files <span id="corrupt-count" class="badge">0</span></h2>
       <div class="table-toolbar">
-        <input type="text" id="corrupt-search" placeholder="Search files..." class="input">
-        <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled>Delete Selected</button>
+        <input type="text" id="corrupt-search" placeholder="Search files..." class="input" aria-label="Search corrupt files">
+        <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete Selected</button>
       </div>
       <div class="table-wrap">
-        <table id="corrupt-table">
+        <table id="corrupt-table" aria-label="Corrupt files list">
           <thead>
             <tr>
-              <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)"></th>
-              <th>File</th>
-              <th>Reason</th>
-              <th class="col-size">Size</th>
+              <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" aria-label="Select all files"></th>
+              <th class="sortable" data-sort="path" onclick="sortTable('path')">File <span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort="reason" onclick="sortTable('reason')">Reason <span class="sort-indicator"></span></th>
+              <th class="col-size sortable" data-sort="size" onclick="sortTable('size')">Size <span class="sort-indicator"></span></th>
               <th class="col-action">Action</th>
             </tr>
           </thead>
@@ -130,12 +133,33 @@
       <h2>Logs</h2>
       <div class="log-toolbar">
         <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
-        <button class="btn btn-outline btn-sm" onclick="refreshLogs()">Refresh</button>
+        <select id="log-lines" class="input log-lines-select" aria-label="Number of log lines">
+          <option value="100">100 lines</option>
+          <option value="500" selected>500 lines</option>
+          <option value="1000">1000 lines</option>
+          <option value="5000">All</option>
+        </select>
+        <select id="log-level-filter" class="input log-lines-select" aria-label="Filter by log level">
+          <option value="">All Levels</option>
+          <option value="CRITICAL">Critical</option>
+          <option value="ERROR">Error</option>
+          <option value="WARNING">Warning</option>
+          <option value="INFO">Info</option>
+          <option value="DEBUG">Debug</option>
+        </select>
+        <input type="text" id="log-search" placeholder="Search logs..." class="input log-search-input" aria-label="Search logs">
+        <div class="log-toolbar-actions">
+          <button class="btn btn-outline btn-sm" onclick="copyLogs()" aria-label="Copy logs to clipboard">Copy</button>
+          <button class="btn btn-outline btn-sm" onclick="downloadLogs()" aria-label="Download log file">Download</button>
+          <button class="btn btn-outline btn-sm" onclick="refreshLogs()">Refresh</button>
+        </div>
       </div>
-      <pre id="log-output" class="log-viewer"></pre>
+      <div id="log-output" class="log-viewer" role="log" aria-live="polite" aria-label="Log output"></div>
     </section>
 
   </main>
+
+  <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
   <script src="app.js"></script>
 </body>

@@ -1,5 +1,6 @@
 /* ============================================================
    BeatsCheck WebUI — Frontend Application
+   Patterns adapted from DAPS experimental frontend
    ============================================================ */
 
 // --- State ---
@@ -7,6 +8,12 @@ let currentPage = 'dashboard';
 let corruptFiles = [];
 let pollTimer = null;
 let logTimer = null;
+let sortColumn = localStorage.getItem('beatscheck-sort-col') || null;
+let sortDirection = localStorage.getItem('beatscheck-sort-dir') || 'asc';
+let configSnapshot = null;  // tracks unsaved changes
+let scanStartTime = null;
+let scanStartCount = 0;
+let logRawLines = [];  // unfiltered log lines for client-side filtering
 
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
@@ -74,6 +81,11 @@ function updateThemeIcon(theme) {
 
 // --- Navigation ---
 function navigate(page) {
+  // Warn about unsaved config changes
+  if (currentPage === 'config' && page !== 'config' && hasUnsavedConfig()) {
+    if (!confirm('You have unsaved configuration changes. Leave anyway?')) return;
+  }
+
   currentPage = page;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
@@ -110,6 +122,21 @@ function initSidebar() {
   toggle.addEventListener('click', () => {
     document.getElementById('sidebar').classList.toggle('open');
     getOrCreateOverlay().classList.toggle('visible');
+  });
+
+  // Keyboard nav for sidebar
+  const sidebar = document.getElementById('sidebar');
+  sidebar.addEventListener('keydown', (e) => {
+    const links = Array.from(sidebar.querySelectorAll('.nav-link'));
+    const idx = links.indexOf(document.activeElement);
+    if (idx === -1) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      links[(idx + 1) % links.length].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      links[(idx - 1 + links.length) % links.length].focus();
+    }
   });
 }
 
@@ -150,6 +177,8 @@ function formatSize(bytes) {
   return bytes + ' B';
 }
 
+let prevCardValues = {};
+
 async function refreshDashboard() {
   const data = await api('status');
   if (!data) return;
@@ -164,29 +193,63 @@ async function refreshDashboard() {
   dot.className = 'status-dot ' + status;
   stxt.textContent = status.charAt(0).toUpperCase() + status.slice(1);
 
-  // Cards
-  setText('dash-status', status.charAt(0).toUpperCase() + status.slice(1));
-  setText('dash-mode', (data.mode || '--').toUpperCase());
-  setText('dash-uptime', formatUptime(data.uptime));
-
+  // Cards with change animation
   const summary = data.summary || {};
-  setText('dash-corrupt', summary.corrupted != null ? summary.corrupted : '--');
-  setText('dash-library', summary.library_size_human || summary.library_files ?
+  setCardValue('dash-status', status.charAt(0).toUpperCase() + status.slice(1));
+  setCardValue('dash-mode', (data.mode || '--').toUpperCase());
+  setCardValue('dash-uptime', formatUptime(data.uptime));
+  setCardValue('dash-corrupt', summary.corrupted != null ? summary.corrupted : '--');
+  setCardValue('dash-library', summary.library_size_human || summary.library_files ?
     (summary.library_size_human || summary.library_files + ' files') : '--');
-  setText('dash-last-scan', summary.finished || '--');
+  setCardValue('dash-last-scan', summary.finished || '--');
 
-  // Progress
+  // Progress with ETA
   const prog = data.scan_progress;
   const section = document.getElementById('scan-progress-section');
   if (prog && status === 'scanning') {
     section.style.display = '';
     const pct = prog.total > 0 ? Math.round((prog.current / prog.total) * 100) : 0;
     document.getElementById('progress-fill').style.width = pct + '%';
+
+    // Update ARIA
+    const bar = section.querySelector('.progress-bar');
+    if (bar) bar.setAttribute('aria-valuenow', pct);
+
     setText('progress-text', prog.current + ' / ' + prog.total + ' files (' + pct + '%)');
     setText('progress-file', prog.file || '');
+
+    // ETA calculation
+    if (!scanStartTime || scanStartCount > prog.current) {
+      scanStartTime = Date.now();
+      scanStartCount = prog.current;
+    }
+    const elapsed = (Date.now() - scanStartTime) / 1000;
+    const done = prog.current - scanStartCount;
+    if (done > 10 && prog.total > prog.current) {
+      const rate = done / elapsed;
+      const remaining = (prog.total - prog.current) / rate;
+      const eta = formatUptime(Math.round(remaining));
+      const rateStr = Math.round(rate * 60);
+      setText('progress-eta', rateStr + ' files/min \u2022 ~' + eta + ' remaining');
+    } else {
+      setText('progress-eta', 'Calculating...');
+    }
   } else {
     section.style.display = 'none';
+    scanStartTime = null;
   }
+}
+
+function setCardValue(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const strVal = String(val);
+  if (prevCardValues[id] !== undefined && prevCardValues[id] !== strVal) {
+    el.classList.add('changed');
+    setTimeout(() => el.classList.remove('changed'), 600);
+  }
+  prevCardValues[id] = strVal;
+  el.textContent = val;
 }
 
 function setText(id, val) {
@@ -204,7 +267,54 @@ async function loadCorrupt() {
   }
   corruptFiles = data.files || [];
   document.getElementById('corrupt-count').textContent = corruptFiles.length;
-  renderCorruptTable(corruptFiles);
+  applyCorruptFilters();
+}
+
+function applyCorruptFilters() {
+  const q = (document.getElementById('corrupt-search').value || '').toLowerCase();
+  let filtered = corruptFiles;
+  if (q) {
+    filtered = filtered.filter(f =>
+      f.path.toLowerCase().includes(q) || (f.reason || '').toLowerCase().includes(q)
+    );
+  }
+  if (sortColumn) {
+    filtered = [...filtered].sort((a, b) => {
+      let va, vb;
+      if (sortColumn === 'path') { va = a.path; vb = b.path; }
+      else if (sortColumn === 'reason') { va = a.reason || ''; vb = b.reason || ''; }
+      else if (sortColumn === 'size') { va = a.size || 0; vb = b.size || 0; }
+      else return 0;
+      if (typeof va === 'string') {
+        const cmp = va.localeCompare(vb);
+        return sortDirection === 'asc' ? cmp : -cmp;
+      }
+      return sortDirection === 'asc' ? va - vb : vb - va;
+    });
+  }
+  renderCorruptTable(filtered);
+  updateSortIndicators();
+}
+
+function sortTable(col) {
+  if (sortColumn === col) {
+    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortColumn = col;
+    sortDirection = 'asc';
+  }
+  localStorage.setItem('beatscheck-sort-col', sortColumn);
+  localStorage.setItem('beatscheck-sort-dir', sortDirection);
+  applyCorruptFilters();
+}
+
+function updateSortIndicators() {
+  document.querySelectorAll('thead th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.sort === sortColumn) {
+      th.classList.add('sort-' + sortDirection);
+    }
+  });
 }
 
 function renderCorruptTable(files) {
@@ -219,11 +329,11 @@ function renderCorruptTable(files) {
     const dir = f.path.split('/').slice(0, -1).join('/');
     const safePath = escHtml(f.path);
     return `<tr class="${cls}">
-      <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()"></td>
+      <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
       <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong><br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
       <td style="font-size:.82rem;color:var(--text-muted)">${escHtml(f.reason || '')}</td>
       <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
-      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
+      <td class="col-action"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''} aria-label="Delete ${escHtml(name)}">Delete</button></td>
     </tr>`;
   }).join('');
 }
@@ -238,12 +348,10 @@ function escHtml(s) {
 document.addEventListener('DOMContentLoaded', () => {
   const search = document.getElementById('corrupt-search');
   if (search) {
+    let debounceTimer;
     search.addEventListener('input', () => {
-      const q = search.value.toLowerCase();
-      const filtered = corruptFiles.filter(f =>
-        f.path.toLowerCase().includes(q) || (f.reason || '').toLowerCase().includes(q)
-      );
-      renderCorruptTable(filtered);
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(applyCorruptFilters, 150);
     });
   }
 });
@@ -298,6 +406,8 @@ async function loadConfig() {
   const values = {};
   (data.config || []).forEach(e => { values[e.key] = e.value; });
   renderConfigForm(values);
+  configSnapshot = JSON.stringify(values);
+  updateUnsavedIndicator();
 }
 
 function renderConfigForm(values) {
@@ -343,9 +453,37 @@ function renderConfigForm(values) {
     input.id = 'cfg-' + item.key;
     input.name = item.key;
     input.value = item.key in values ? values[item.key] : '';
+    input.addEventListener('input', updateUnsavedIndicator);
+    input.addEventListener('change', updateUnsavedIndicator);
     group.appendChild(input);
     container.appendChild(group);
   });
+}
+
+function hasUnsavedConfig() {
+  if (!configSnapshot) return false;
+  const form = document.getElementById('config-form');
+  if (!form) return false;
+  const formData = new FormData(form);
+  const current = {};
+  for (const [key, val] of formData.entries()) { current[key] = val; }
+  return JSON.stringify(current) !== configSnapshot;
+}
+
+function updateUnsavedIndicator() {
+  const navLink = document.querySelector('[data-page="config"]');
+  if (!navLink) return;
+  let dot = navLink.querySelector('.unsaved-dot');
+  if (hasUnsavedConfig()) {
+    if (!dot) {
+      dot = document.createElement('span');
+      dot.className = 'unsaved-dot';
+      dot.title = 'Unsaved changes';
+      navLink.appendChild(dot);
+    }
+  } else {
+    if (dot) dot.remove();
+  }
 }
 
 async function saveConfig(e) {
@@ -365,6 +503,8 @@ async function saveConfig(e) {
     status.textContent = 'Saved!';
     status.className = 'form-status';
     showToast('Configuration saved', 'success');
+    configSnapshot = JSON.stringify(config);
+    updateUnsavedIndicator();
   } else {
     status.textContent = 'Save failed';
     status.className = 'form-status error';
@@ -374,14 +514,67 @@ async function saveConfig(e) {
 }
 
 // --- Logs ---
+const LOG_PATTERNS = [
+  { regex: /\b(CRITICAL)\b/g,  cls: 'log-level-critical' },
+  { regex: /\b(ERROR)\b/g,     cls: 'log-level-error' },
+  { regex: /\b(WARNING)\b/g,   cls: 'log-level-warning' },
+  { regex: /\b(INFO)\b/g,      cls: 'log-level-info' },
+  { regex: /\b(DEBUG)\b/g,     cls: 'log-level-debug' },
+  { regex: /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)/g, cls: 'log-timestamp' },
+  { regex: /(https?:\/\/\S+)/g, cls: 'log-url' },
+  { regex: /(\/(?:[\w.-]+\/)+[\w.-]+)/g, cls: 'log-path' },
+  { regex: /\b(\d+(?:\.\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
+];
+
+function highlightLogLine(line, searchTerm) {
+  let html = escHtml(line);
+  // Apply syntax highlighting
+  LOG_PATTERNS.forEach(p => {
+    html = html.replace(p.regex, '<span class="' + p.cls + '">$1</span>');
+  });
+  // Apply search highlight
+  if (searchTerm) {
+    const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('(' + escaped + ')', 'gi');
+    html = html.replace(re, '<span class="log-highlight">$1</span>');
+  }
+  return html;
+}
+
 async function refreshLogs() {
-  const data = await api('log?lines=500');
+  const lines = document.getElementById('log-lines').value || '500';
+  const data = await api('log?lines=' + lines);
   if (!data) {
-    document.getElementById('log-output').textContent = '(failed to load logs)';
+    document.getElementById('log-output').innerHTML = '<span class="log-level-error">(failed to load logs)</span>';
     return;
   }
+  logRawLines = (data.log || '').split('\n');
+  renderLogOutput();
+}
+
+function renderLogOutput() {
   const viewer = document.getElementById('log-output');
-  viewer.textContent = data.log || '(no logs yet)';
+  const levelFilter = document.getElementById('log-level-filter').value;
+  const searchTerm = document.getElementById('log-search').value.trim();
+
+  let lines = logRawLines;
+
+  // Filter by level
+  if (levelFilter) {
+    lines = lines.filter(line => line.includes(levelFilter));
+  }
+
+  // Filter by search term
+  if (searchTerm) {
+    const q = searchTerm.toLowerCase();
+    lines = lines.filter(line => line.toLowerCase().includes(q));
+  }
+
+  // Render with syntax highlighting
+  viewer.innerHTML = lines.map(line =>
+    '<div class="log-line">' + highlightLogLine(line, searchTerm) + '</div>'
+  ).join('');
+
   if (document.getElementById('log-autoscroll').checked) {
     viewer.scrollTop = viewer.scrollHeight;
   }
@@ -396,9 +589,28 @@ function stopLogPoll() {
   if (logTimer) { clearInterval(logTimer); logTimer = null; }
 }
 
+function copyLogs() {
+  const text = logRawLines.join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => showToast('Logs copied to clipboard', 'success'),
+    () => showToast('Failed to copy logs', 'error')
+  );
+}
+
+function downloadLogs() {
+  const text = logRawLines.join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'beatscheck-' + new Date().toISOString().slice(0, 10) + '.log';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Log file downloaded', 'info');
+}
+
 // --- Rescan ---
 async function triggerRescan(mode, fresh) {
-  // Disable all rescan buttons during request
   const btns = document.querySelectorAll('.action-bar .btn');
   btns.forEach(b => b.disabled = true);
   const res = await apiPost('rescan', { mode, fresh });
@@ -412,14 +624,62 @@ async function triggerRescan(mode, fresh) {
 }
 
 // --- Toast notifications ---
+const TOAST_DURATIONS = { success: 4000, error: 6000, warning: 5000, info: 4000 };
+
 function showToast(message, type) {
-  const existing = document.querySelector('.toast');
-  if (existing) existing.remove();
+  const container = document.getElementById('toast-container');
+  const duration = TOAST_DURATIONS[type] || 4000;
+
   const t = document.createElement('div');
   t.className = 'toast ' + (type || '');
-  t.textContent = message;
-  document.body.appendChild(t);
-  setTimeout(() => { if (t.parentNode) t.remove(); }, 4000);
+
+  // Message text
+  const span = document.createElement('span');
+  span.textContent = message;
+  t.appendChild(span);
+
+  // Close button
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.innerHTML = '&times;';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.onclick = () => { if (t.parentNode) t.remove(); };
+  t.appendChild(close);
+
+  // Progress bar
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const prog = document.createElement('div');
+  prog.className = 'toast-progress';
+  prog.style.width = '100%';
+  t.appendChild(prog);
+
+  container.appendChild(t);
+
+  // Animate progress bar
+  requestAnimationFrame(() => {
+    prog.style.transitionDuration = prefersReduced ? '0ms' : duration + 'ms';
+    prog.style.width = '0%';
+  });
+
+  // Auto-dismiss
+  const timer = setTimeout(() => { if (t.parentNode) t.remove(); }, duration);
+
+  // Pause on hover
+  t.addEventListener('mouseenter', () => {
+    clearTimeout(timer);
+    prog.style.transitionDuration = '0ms';
+  });
+  t.addEventListener('mouseleave', () => {
+    const remaining = (parseFloat(getComputedStyle(prog).width) / t.offsetWidth) * duration;
+    prog.style.transitionDuration = remaining + 'ms';
+    prog.style.width = '0%';
+    setTimeout(() => { if (t.parentNode) t.remove(); }, remaining);
+  });
+
+  // Cap at 5 toasts
+  while (container.children.length > 5) {
+    container.removeChild(container.firstChild);
+  }
 }
 
 // --- Polling ---
@@ -439,4 +699,18 @@ document.addEventListener('DOMContentLoaded', () => {
   initSidebar();
   initRouter();
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+  // Log controls
+  const logLines = document.getElementById('log-lines');
+  const logLevel = document.getElementById('log-level-filter');
+  const logSearch = document.getElementById('log-search');
+  if (logLines) logLines.addEventListener('change', () => { if (currentPage === 'logs') refreshLogs(); });
+  if (logLevel) logLevel.addEventListener('change', renderLogOutput);
+  if (logSearch) {
+    let debounce;
+    logSearch.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(renderLogOutput, 200);
+    });
+  }
 });
