@@ -2475,21 +2475,47 @@ def main():
 
     if not os.path.isdir(cfg.input_folder):
         logger.error("Music directory not found: %s", cfg.input_folder)
-        sys.exit(1)
-
-    if cfg.mode == "move":
-        if not cfg.output_folder or cfg.output_folder == "/corrupted":
-            if not os.path.isdir("/corrupted"):
-                logger.error("Move mode requires the Corrupted Output path to be configured.")
-                logger.error("Set the OUTPUT_DIR variable or mount a volume to /corrupted.")
-                sys.exit(1)
-        os.makedirs(cfg.output_folder, exist_ok=True)
+        logger.error("Check your volume mount. Container will stay idle.")
+        cfg.mode = "setup"
 
     while True:
         global scan_cancelled
         scan_cancelled = False
         _reload_config(cfg)
         _maybe_rotate_logs(cfg)
+
+        # Validate paths before scanning
+        if not os.path.isdir(cfg.input_folder):
+            logger.error("Music directory not found: %s",
+                         cfg.input_folder)
+            _webui_update(cfg, status="idle", mode=cfg.mode)
+            result = _idle_wait(
+                cfg.log_dir, None, cfg.lidarr_url,
+                cfg.lidarr_api_key)
+            if result is False:
+                break
+            if isinstance(result, str) and result in ("report", "move"):
+                cfg.mode = result
+            continue
+
+        if cfg.mode == "move":
+            move_ok = True
+            if not cfg.output_folder:
+                logger.error("Move mode requires output_dir to be "
+                             "configured. Falling back to report mode.")
+                move_ok = False
+            elif not os.path.isdir(
+                    os.path.dirname(cfg.output_folder.rstrip("/"))):
+                logger.error(
+                    "Output directory parent does not exist: %s. "
+                    "Check your volume mount. Falling back to "
+                    "report mode.", cfg.output_folder)
+                move_ok = False
+            if not move_ok:
+                cfg.mode = "report"
+                _webui_update(cfg, mode="report")
+            else:
+                os.makedirs(cfg.output_folder, exist_ok=True)
 
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
         run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
