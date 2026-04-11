@@ -141,6 +141,9 @@
     <!-- Corrupt Files -->
     <section id="page-corrupt" class="page">
       <h2>Corrupt Files <span id="corrupt-count" class="badge">0</span></h2>
+      <div id="corrupt-scan-banner" class="scan-banner" style="display:none">
+        A scan is in progress — deleting is disabled until the scan completes.
+      </div>
       <div class="table-toolbar">
         <input type="text" id="corrupt-search" placeholder="Search files..." class="input" aria-label="Search corrupt files">
         <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete Selected</button>

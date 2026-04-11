@@ -405,6 +405,14 @@ async function loadCorrupt() {
   corruptFiles = data.files || [];
   document.getElementById('corrupt-count').textContent = corruptFiles.length;
   applyCorruptFilters();
+
+  // Check if scanning — disable deletes and show banner
+  const status = await api('status');
+  const scanning = status && status.status === 'scanning';
+  const banner = document.getElementById('corrupt-scan-banner');
+  if (banner) banner.style.display = scanning ? '' : 'none';
+  document.querySelectorAll('#page-corrupt .btn-danger').forEach(b => b.disabled = scanning);
+  document.querySelectorAll('#page-corrupt .file-check, #select-all').forEach(c => c.disabled = scanning);
 }
 
 function applyCorruptFilters() {

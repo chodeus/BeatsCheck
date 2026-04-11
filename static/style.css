@@ -524,6 +524,17 @@ tbody tr:hover { background: var(--bg-hover); }
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* --- Scan Banner --- */
+.scan-banner {
+  background: color-mix(in srgb, var(--warning) 15%, var(--bg-card));
+  border: 1px solid var(--warning);
+  border-radius: 8px;
+  padding: .7rem 1rem;
+  font-size: .85rem;
+  color: var(--warning);
+  margin-bottom: .8rem;
+}
+
 /* --- Auth Pages --- */
 .auth-container {
   max-width: 400px;
