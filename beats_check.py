@@ -1975,66 +1975,126 @@ def setup_logging(log_level):
 
 _DEFAULT_CONFIG = """\
 #######################################################
-##       BeatsCheck Configuration File               ##
+##       BeatsCheck Configuration                    ##
 #######################################################
-##  Edit values below to configure BeatsCheck.       ##
-##  Environment variables override all values here.  ##
+##                                                   ##
+##  Change the values below to configure BeatsCheck. ##
+##  Lines starting with # are ignored (commented     ##
+##  out). Remove the # to enable a setting.          ##
+##                                                   ##
+##  You can also change these settings from the      ##
+##  WebUI if it is enabled (see bottom of this       ##
+##  file). Changes apply at the next scan cycle.     ##
+##                                                   ##
 ##  https://github.com/chodeus/BeatsCheck            ##
 #######################################################
-## Boolean values: true, false, yes, no, 1, 0
 
-## Quarantine destination for move mode (must match a mounted volume)
-# output_dir = "/corrupted"
 
-## Scan mode: setup (idle), report (log only), move (quarantine), delete
-mode = "setup"
+##----- Scan Settings ----------------------------------
 
-## Parallel ffmpeg decode workers (2=conservative, 4=balanced, 8+=fast)
+## mode — what BeatsCheck does when it scans
+##   setup  = sit idle, don't scan (default)
+##   report = scan and log corrupt files (nothing deleted)
+##   move   = scan and move corrupt files to quarantine folder
+##   delete = interactive review and delete
+mode = setup
+
+## workers — how many files to check at the same time
+##   Use more workers for faster scans (uses more CPU)
+##   2 = conservative, 4 = balanced, 8+ = fast
 workers = 4
 
-## Hours between scans (0=once, 168=weekly, 24=daily)
+## run_interval — hours between scans
+##   0   = scan once then wait for manual rescan
+##   24  = scan once per day
+##   168 = scan once per week
 run_interval = 0
 
-## Auto-delete corrupt files after N days (0=never)
+## delete_after — automatically delete corrupt files
+##   after this many days (gives you time to review first)
+##   0 = never auto-delete (manual only)
+##   7 = delete after 7 days
 delete_after = 0
 
-## Safety: abort auto-delete if more than N files flagged (0=no limit)
+## max_auto_delete — safety limit
+##   If more than this many files would be deleted in
+##   one run, abort to prevent accidental mass deletion.
+##   0 = no limit
 max_auto_delete = 50
 
-## Skip files modified within N minutes (avoids flagging active downloads)
+## min_file_age — skip recently modified files (minutes)
+##   Prevents flagging files being actively downloaded.
+##   30 = ignore files changed in the last 30 minutes
 min_file_age = 30
 
-## Log level: DEBUG, INFO, WARNING, ERROR
-log_level = "INFO"
+## log_level — how much detail to log
+##   DEBUG = everything (verbose, useful for troubleshooting)
+##   INFO  = normal operation
+##   WARNING = only warnings and errors
+##   ERROR = only errors
+log_level = INFO
 
-## Rotate log when log exceeds N MB (0=never)
+## max_log_mb — rotate log when it exceeds this size (MB)
+##   When rotated, a fresh full rescan is triggered.
+##   0 = never rotate
 max_log_mb = 50
 
-##----- Lidarr Integration (optional) ----------------
-## When configured, BeatsCheck uses the Lidarr API to
-## delete corrupt files so Lidarr can clean its database
-## and optionally re-download.
-## Storing credentials here keeps them out of
-## 'docker inspect' output and process listings.
+## output_dir — quarantine folder for move mode
+##   Must match a volume mounted in the container.
+##   Only needed if using mode = move
+# output_dir = /corrupted
 
-## Lidarr instance URL
-# lidarr_url = "http://lidarr:8686"
 
-## Lidarr API key (Settings > General in Lidarr)
-# lidarr_api_key = ""
+##----- Lidarr Integration ----------------------------
+##
+## To use Lidarr integration, remove the # from the
+## lidarr_url and lidarr_api_key lines below and fill
+## in your values.
+##
+## When configured, BeatsCheck deletes corrupt files
+## through the Lidarr API so Lidarr can clean its
+## database and automatically re-download.
+##
+## Your API key is stored securely here — it won't
+## appear in docker inspect or process listings.
+##
 
-## Queue album search after auto-delete so Lidarr re-downloads (5/hour)
+## lidarr_url — your Lidarr instance address
+##   Example: http://lidarr:8686 or http://192.168.1.100:8686
+# lidarr_url = http://lidarr:8686
+
+## lidarr_api_key — find this in Lidarr under
+##   Settings > General > API Key
+# lidarr_api_key =
+
+## lidarr_search — re-download after deleting corrupt files
+##   true  = queue a search so Lidarr re-downloads (5/hour)
+##   false = don't search, just delete
 # lidarr_search = false
 
-## Blocklist corrupt release so Lidarr won't re-download the same copy
+## lidarr_blocklist — prevent re-downloading the same bad copy
+##   true  = blocklist the corrupt release before deleting
+##   false = just delete without blocklisting
 # lidarr_blocklist = false
 
-##----- Web UI (optional) ---------------------------------
-## Enable the built-in web interface for monitoring and control.
-## Requires a port to be published (e.g. -p 8484:8484).
+
+##----- Web UI -----------------------------------------
+##
+## Enable the built-in web interface for monitoring
+## and control. Access it at http://your-server:8484
+##
+## You also need to publish the port in Docker:
+##   ports: 8484:8484  (in docker-compose or Unraid)
+##
+## On first visit you'll create a username and password.
+##
+
+## webui — enable or disable the web interface
+##   true  = start the web server
+##   false = no web interface
 webui = false
 
-## Port for the web interface
+## webui_port — port number for the web interface
 webui_port = 8484
 """
 
