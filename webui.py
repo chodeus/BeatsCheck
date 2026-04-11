@@ -570,6 +570,24 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 "version": state["version"],
             })
 
+        elif self.path == '/api/paths':
+            # List available directories for path dropdowns
+            roots = ['/data', '/music']
+            paths = []
+            for d in roots:
+                if os.path.isdir(d):
+                    try:
+                        children = sorted([
+                            os.path.join(d, n)
+                            for n in os.listdir(d)
+                            if os.path.isdir(os.path.join(d, n))
+                            and not n.startswith('.')])
+                    except OSError:
+                        children = []
+                    paths.append(
+                        {"path": d, "children": children})
+            self._json_response({"paths": paths})
+
         else:
             self._json_response({"error": "not found"}, 404)
 
@@ -731,7 +749,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 self._json_response(
                     {"error": "delete not available"}, 500)
                 return
-            music_dir = os.environ.get("MUSIC_DIR", "/music")
+            music_dir = os.environ.get("MUSIC_DIR", "/data")
             result = delete_corrupt_files(
                 files, config_dir, music_dir=music_dir)
             self._json_response(result)

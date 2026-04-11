@@ -20,8 +20,8 @@ ENV PUID=99 \
     UMASK=002 \
     TZ=UTC \
     PYTHONUNBUFFERED=1 \
-    MUSIC_DIR=/music \
-    OUTPUT_DIR=/corrupted \
+    MUSIC_DIR=/data \
+    OUTPUT_DIR=/data/corrupted \
     CONFIG_DIR=/config
 
 RUN apk --no-cache upgrade && \
@@ -50,7 +50,7 @@ RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
 
 EXPOSE 8484
 
-VOLUME ["/music", "/corrupted", "/config"]
+VOLUME ["/data", "/config"]
 
 STOPSIGNAL SIGTERM
 

@@ -36,7 +36,7 @@ const CONFIG_SCHEMA = [
     desc: 'Automatically delete corrupt files after this many days. 0 = never (use Corrupt Files page to delete manually). 7 = one week review window' },
   { key: 'max_auto_delete',  label: 'Safety Limit',     type: 'number', default: '50',
     desc: 'Abort auto-delete if more than this many files would be removed in one run. Prevents mass deletion from filesystem issues. 0 = no limit' },
-  { key: 'output_dir',       label: 'Quarantine Folder', type: 'text',  default: '/corrupted',
+  { key: 'output_dir',       label: 'Quarantine Folder', type: 'text',  default: '/data/corrupted',
     desc: 'Only for move mode — corrupt files are moved here instead of deleted. Must match a mounted volume' },
 
   { section: 'Lidarr (Automatic Re-download)',

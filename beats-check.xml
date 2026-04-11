@@ -21,9 +21,8 @@
   <DonateText/>
   <DonateLink/>
   <Requires/>
-  <Config Name="Music Library" Target="/music" Default="" Mode="ro" Description="Path to your music library. Mounted read-only by default. Change to rw if using move or delete modes." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/media/music</Config>
+  <Config Name="Data" Target="/data" Default="" Mode="ro" Description="Mount your media/data folder — same path you use for Lidarr/Sonarr. Read-only for report mode, change to rw for move or delete." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data</Config>
   <Config Name="Config" Target="/config" Default="" Mode="rw" Description="Persistent storage for logs, scan results, tracking data, and beatscheck.conf settings file." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/beatscheck</Config>
-  <Config Name="Corrupted Output" Target="/corrupted" Default="" Mode="rw" Description="Only needed for move mode. Corrupt files are moved here preserving folder structure. Leave empty if using report or delete modes." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="PUID" Target="PUID" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
   <Config Name="PGID" Target="PGID" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
   <Config Name="UMASK" Target="UMASK" Default="" Mode="" Description="" Type="Variable" Display="advanced" Required="false" Mask="false">002</Config>

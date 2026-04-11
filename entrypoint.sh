@@ -44,9 +44,8 @@ for cmd in ffmpeg python3; do
 done
 
 # Ensure writable dirs exist and are owned correctly
-mkdir -p /config /corrupted
+mkdir -p /config
 chown -R "${PUID}:${PGID}" /config
-chown "${PUID}:${PGID}" /corrupted
 
 umask "${UMASK}"
 

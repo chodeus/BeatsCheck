@@ -13,13 +13,11 @@ services:
     container_name: beatscheck
     restart: unless-stopped
     volumes:
-      ## Music library — mount read-only for safety (report mode).
-      ## Change to rw if using move or delete modes.
-      - /path/to/music:/music:ro
+      ## Music/media library — same path you use in Lidarr/Sonarr.
+      ## Mount read-only for report mode, rw for move or delete.
+      - /mnt/user/data:/data:ro
       ## Persistent config: logs, corrupt.txt, tracking data
       - /path/to/config:/config
-      ## Only needed for move mode — corrupt files quarantined here
-      # - /path/to/corrupted:/corrupted
       ## Auto-detect host timezone (no TZ env var needed if mounted)
       - /etc/localtime:/etc/localtime:ro
     environment:

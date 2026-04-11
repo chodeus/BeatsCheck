@@ -78,7 +78,7 @@ Found 5 corrupt files across 3 folders (142.5 MB)
 
   Choice: i
 
-  [1/3] /music/Artist Name/Album Name/
+  [1/3] /data/Artist Name/Album Name/
            track01.flac (45.2 MB)
              -> invalid residual | decode_frame() failed | Decoding error: Invalid data found
            track05.flac (512 B)
@@ -167,7 +167,7 @@ These Docker-level settings are configured as environment variables:
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
 
-Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/music`, `/corrupted`, `/config` and are set via Docker volume mounts.
+Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/corrupted`, `/config` and are set via Docker volume mounts.
 
 ## Web UI
 
@@ -243,7 +243,7 @@ docker compose up -d
 ```bash
 # Scan (report mode, run once)
 docker run --rm \
-  -v /path/to/music:/music:ro \
+  -v /path/to/music:/data:ro \
   -v /path/to/config:/config \
   -e MODE=report \
   -e WORKERS=6 \
@@ -253,7 +253,7 @@ docker run --rm \
 # Daemon mode (weekly scans, stays running)
 docker run -d --restart unless-stopped \
   --name beatscheck \
-  -v /path/to/music:/music:ro \
+  -v /path/to/music:/data:ro \
   -v /path/to/config:/config \
   -e MODE=report \
   -e RUN_INTERVAL=168 \
@@ -419,7 +419,7 @@ With `LIDARR_SEARCH=true` and auto-delete, unmonitored album IDs are written to 
 
 **Path handling:**
 
-BeatsCheck runs in a container where music is mounted at `/music`, while Lidarr sees the same files at a different host path (e.g. `/data/media/music/Artist/Album/`). At scan time, corrupt files are matched to Lidarr trackfiles by comparing path components from the right (suffix matching). This works regardless of how the music directory is mounted in each container.
+BeatsCheck runs in a container where music is mounted at `/data`, while Lidarr sees the same files at the same or different mount path. When both containers mount the same host path to `/data`, the paths match exactly. At scan time, corrupt files are matched to Lidarr trackfiles by comparing path components from the right (suffix matching). This works regardless of how the music directory is mounted in each container.
 
 **Error handling:**
 

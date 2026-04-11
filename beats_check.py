@@ -2051,8 +2051,8 @@ delete_after = 0
 max_auto_delete = 50
 
 ## output_dir — quarantine folder (move mode only)
-##   Must match a mounted volume in the container.
-# output_dir = /corrupted
+##   Must be within a mounted volume (e.g. /data/corrupted)
+# output_dir = /data/corrupted
 
 
 ##----- Lidarr (Automatic Re-download) ----------------
@@ -2240,8 +2240,8 @@ def _load_config():
         _write_default_config(log_dir)
         _snapshot_docker_env()
         _apply_config_file(log_dir)
-        input_folder = os.environ.get("MUSIC_DIR", "/music").rstrip("/")
-        output_folder = os.environ.get("OUTPUT_DIR", "/corrupted").rstrip("/")
+        input_folder = os.environ.get("MUSIC_DIR", "/data").rstrip("/")
+        output_folder = os.environ.get("OUTPUT_DIR", "/data/corrupted").rstrip("/")
         log_file = os.path.join(log_dir, "beats_check.log")
 
     mode = (os.environ.get("MODE") or "setup").lower()
