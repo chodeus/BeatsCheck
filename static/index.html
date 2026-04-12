@@ -131,11 +131,13 @@
       <div class="action-bar">
         <h3>Actions</h3>
         <div class="btn-group">
-          <button onclick="triggerRescan('report', false)" class="btn btn-primary">Scan (Report)</button>
-          <button onclick="triggerRescan('move', false)" class="btn btn-secondary">Scan (Move)</button>
-          <button onclick="triggerRescan('report', true)" class="btn btn-outline">Fresh Scan</button>
+          <button onclick="triggerRescan('report')" class="btn btn-primary">Scan (Report)</button>
+          <button onclick="triggerRescan('move')" class="btn btn-secondary">Scan (Move)</button>
           <button id="cancel-scan-btn" onclick="cancelScan()" class="btn btn-danger" style="display:none">Cancel Scan</button>
         </div>
+        <label class="fresh-scan-toggle">
+          <input type="checkbox" id="fresh-scan-check"> Fresh scan (ignore resume cache)
+        </label>
       </div>
     </section>
 
@@ -149,6 +151,7 @@
         <input type="text" id="corrupt-search" placeholder="Search files..." class="input" aria-label="Search corrupt files">
         <button id="view-toggle-btn" class="btn btn-outline btn-sm" onclick="toggleCorruptView()">Group by Album</button>
         <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete Selected</button>
+        <button class="btn btn-outline btn-sm" onclick="clearCorruptList()" aria-label="Clear corrupt list">Clear List</button>
       </div>
       <div class="table-wrap">
         <table id="corrupt-table" aria-label="Corrupt files list">

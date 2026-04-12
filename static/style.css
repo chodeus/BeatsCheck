@@ -329,6 +329,8 @@ main {
 .action-bar { margin-top: 1rem; }
 .action-bar h3 { font-size: .95rem; font-weight: 600; margin-bottom: .6rem; color: var(--text-muted); }
 .btn-group { display: flex; gap: .5rem; flex-wrap: wrap; }
+.fresh-scan-toggle { display: flex; align-items: center; gap: .4rem; margin-top: .5rem; font-size: .82rem; color: var(--text-muted); cursor: pointer; }
+.fresh-scan-toggle input { cursor: pointer; }
 
 /* --- Buttons --- */
 .btn {

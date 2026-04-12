@@ -594,6 +594,22 @@ async function deleteAlbumRedownload(dir) {
   }
 }
 
+async function clearCorruptList() {
+  const paths = corruptFiles.map(f => f.path).filter(Boolean);
+  if (!paths.length) {
+    showToast('No corrupt files to clear', 'info');
+    return;
+  }
+  if (!confirm('Clear all ' + paths.length + ' file(s) from the corrupt list?\n\nThey will reappear if found corrupt on the next scan.')) return;
+  const res = await apiPost('ignore', { files: paths });
+  if (res && res.ok) {
+    showToast('Corrupt list cleared', 'success');
+    loadCorrupt();
+  } else {
+    showToast('Clear failed', 'error');
+  }
+}
+
 async function ignoreAlbum(dir) {
   // Remove all files in this album from corrupt.txt (hide until next scan)
   const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
@@ -1047,7 +1063,8 @@ function downloadLogs() {
 }
 
 // --- Rescan ---
-async function triggerRescan(mode, fresh) {
+async function triggerRescan(mode) {
+  const fresh = document.getElementById('fresh-scan-check').checked;
   // Validate move mode has output directory configured
   if (mode === 'move') {
     const cfg = await api('config');

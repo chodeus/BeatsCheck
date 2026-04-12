@@ -2323,6 +2323,10 @@ def _reload_config(cfg):
             os.environ[env_name] = value
 
     # Refresh cfg attributes from env vars
+    cfg.input_folder = os.environ.get(
+        "MUSIC_DIR", cfg.input_folder).rstrip("/")
+    cfg.output_folder = os.environ.get(
+        "OUTPUT_DIR", cfg.output_folder).rstrip("/")
     cfg.mode = (os.environ.get("MODE") or cfg.mode).lower()
     try:
         cfg.workers = max(1, int(os.environ.get(
