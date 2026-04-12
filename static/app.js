@@ -443,8 +443,8 @@ async function loadCorrupt() {
   const scanning = status && status.status === 'scanning';
   const banner = document.getElementById('corrupt-scan-banner');
   if (banner) banner.style.display = scanning ? '' : 'none';
-  document.querySelectorAll('#page-corrupt .btn-danger').forEach(b => b.disabled = scanning);
-  document.querySelectorAll('#page-corrupt .file-check, #select-all').forEach(c => c.disabled = scanning);
+  document.querySelectorAll('#page-corrupt .btn-danger, #page-corrupt .btn-primary').forEach(b => b.disabled = scanning);
+  document.querySelectorAll('#page-corrupt .file-check, #page-corrupt .album-check, #select-all').forEach(c => c.disabled = scanning);
 }
 
 function toggleCorruptView() {
@@ -526,7 +526,7 @@ function renderCorruptAlbums(files) {
       const safePath = escHtml(f.path);
       const cls = f.missing ? 'file-missing' : '';
       html += `<tr class="album-file ${cls}" data-album="${safeDir}" style="display:none">
-        <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
+        <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
         <td><span style="padding-left:1.5rem;color:var(--text-dim);font-size:.82rem">${escHtml(name)}</span>
           <span style="font-size:.78rem;color:var(--text-muted);margin-left:.5rem">${escHtml(f.reason || '')}</span></td>
         <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
@@ -661,7 +661,7 @@ function renderCorruptTable(files) {
     const safePath = escHtml(f.path);
     const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--text-muted)">${escHtml(f.reason)}</span>` : '';
     return `<tr class="${cls}">
-      <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
+      <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
       <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong>${reason}<br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
       <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
       <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''} aria-label="Delete ${escHtml(name)}">Delete</button></td>
@@ -689,12 +689,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
 function toggleSelectAll(el) {
   document.querySelectorAll('.file-check').forEach(c => c.checked = el.checked);
+  document.querySelectorAll('.album-check').forEach(c => c.checked = el.checked);
   updateDeleteBtn();
 }
 
 function updateDeleteBtn() {
-  const any = document.querySelectorAll('.file-check:checked').length > 0;
+  const checked = document.querySelectorAll('.file-check:checked');
+  const any = checked.length > 0;
   document.getElementById('delete-selected-btn').disabled = !any;
+  const redownloadBtn = document.getElementById('redownload-selected-btn');
+  if (redownloadBtn) {
+    const anyLidarr = Array.from(checked).some(c => c.dataset.lidarr);
+    redownloadBtn.disabled = !anyLidarr;
+  }
 }
 
 async function deleteSingle(el) {
@@ -731,6 +738,31 @@ async function deleteSelected() {
       refreshDashboard();
     } else {
       showToast('Delete failed', 'error');
+    }
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function redownloadSelected() {
+  const checks = document.querySelectorAll('.file-check:checked');
+  const paths = Array.from(checks).filter(c => c.dataset.lidarr).map(c => c.dataset.path).filter(Boolean);
+  if (paths.length === 0) return;
+  const skipped = checks.length - paths.length;
+  let msg = 'Delete ' + paths.length + ' file(s) via Lidarr?\n\nLidarr will blocklist the bad release and re-download a clean copy for monitored albums.';
+  if (skipped > 0) msg += '\n\n' + skipped + ' file(s) without Lidarr IDs will be skipped.';
+  if (!confirm(msg)) return;
+  const btn = document.getElementById('redownload-selected-btn');
+  btn.disabled = true;
+  try {
+    const res = await apiPost('delete', { files: paths });
+    if (res && res.count > 0) {
+      showToast('Deleted ' + res.count + ' file(s) — Lidarr will re-download monitored albums', 'success');
+      document.getElementById('select-all').checked = false;
+      loadCorrupt();
+      refreshDashboard();
+    } else {
+      showToast('Re-download failed' + (res?.errors?.length ? ': ' + res.errors[0].error : ''), 'error');
     }
   } finally {
     btn.disabled = false;

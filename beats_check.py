@@ -217,12 +217,13 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
 
     deleted = []
 
-    # Delete Lidarr-tracked files via API (search=False for prompt return)
+    # Delete Lidarr-tracked files via API, waiting between albums
+    # so we don't flood Lidarr/indexers with simultaneous searches
     if lidarr_paths:
         count, _ = _lidarr_delete_corrupt(
             lidarr_url, lidarr_key, lidarr_paths, log_file,
             log_dir=config_dir, blocklist=lidarr_blocklist,
-            search=False)
+            search=True)
         if count > 0:
             # Check which files were actually removed
             for fp in lidarr_paths:
