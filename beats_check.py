@@ -714,6 +714,24 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                     _process_future(future)
 
         elapsed = time.time() - start_time
+
+        if scan_cancelled or shutdown_requested:
+            summary = (
+                f"\n{'='*60}\n"
+                f"Scan cancelled: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"Duration: {format_eta(elapsed)}\n"
+                f"Library: {len(all_files)} files"
+                f" ({format_size(total_library_size)})\n"
+                f"Files checked: {checked} of {total}\n"
+                f"Corrupted: {corrupted}"
+                f" ({format_size(corrupt_size)})\n"
+                f"{'='*60}\n"
+            )
+            logger.info(summary.strip())
+            log.write(summary)
+            log.flush()
+            return corrupted
+
         summary = (
             f"\n{'='*60}\n"
             f"Scan finished: {time.strftime('%Y-%m-%d %H:%M:%S')}\n"
