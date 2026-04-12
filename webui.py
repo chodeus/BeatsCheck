@@ -9,6 +9,7 @@ import re
 import secrets
 import threading
 import time
+import urllib.parse
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -172,7 +173,7 @@ _ALLOWED_CONFIG_KEYS = frozenset({
     'music_dir', 'output_dir', 'mode', 'workers', 'run_interval', 'delete_after',
     'max_auto_delete', 'min_file_age', 'log_level', 'max_log_mb',
     'lidarr_url', 'lidarr_api_key', 'lidarr_search', 'lidarr_blocklist',
-    'webui', 'webui_port',
+    'webui', 'webui_port', 'host_data_path',
 })
 
 _config_write_lock = threading.Lock()
@@ -593,7 +594,8 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                         p.split('=', 1) for p in
                         self.path.split('?', 1)[1].split('&')
                         if '=' in p)
-                    parent = params.get('dir', '/data')
+                    parent = urllib.parse.unquote(
+                        params.get('dir', '/data'))
                 except (ValueError, TypeError):
                     pass
             # Security: only allow browsing under /data

@@ -16,6 +16,7 @@ let scanStartCount = 0;
 let logRawLines = [];  // unfiltered log lines for client-side filtering
 let isAuthenticated = false;
 let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; // 'files' or 'albums'
+let hostDataPath = '';  // host path for /data mount (cosmetic display in folder picker)
 
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
@@ -51,6 +52,10 @@ const CONFIG_SCHEMA = [
     desc: 'Blocklist the corrupt release before deleting so Lidarr downloads a different copy' },
   { key: 'lidarr_search',    label: 'Search Unmonitored', type: 'select', options: ['false','true'], default: 'false',
     desc: 'Queue search for unmonitored albums after auto-delete. Monitored albums are searched automatically by Lidarr' },
+
+  { section: 'Display' },
+  { key: 'host_data_path', label: 'Host Data Path', type: 'text', default: '',
+    desc: 'Your host path for the /data mount (e.g. /mnt/user/data/media/music). If set, the folder picker shows this path instead of /data. Cosmetic only' },
 
   { section: 'Logging' },
   { key: 'log_level',        label: 'Log Level',        type: 'select', options: ['DEBUG','INFO','WARNING','ERROR'], default: 'INFO',
@@ -721,6 +726,21 @@ async function deleteSelected() {
   }
 }
 
+// --- Path Display Helpers ---
+function containerToDisplay(containerPath) {
+  if (!hostDataPath) return containerPath;
+  if (containerPath === '/data') return hostDataPath;
+  if (containerPath.startsWith('/data/')) return hostDataPath + containerPath.slice(5);
+  return containerPath;
+}
+
+function displayToContainer(displayPath) {
+  if (!hostDataPath) return displayPath;
+  if (displayPath === hostDataPath) return '/data';
+  if (displayPath.startsWith(hostDataPath + '/')) return '/data' + displayPath.slice(hostDataPath.length);
+  return displayPath;
+}
+
 // --- Folder Picker ---
 function createFolderPicker(inputId, currentVal) {
   const wrapper = document.createElement('div');
@@ -732,8 +752,8 @@ function createFolderPicker(inputId, currentVal) {
   display.className = 'input folder-picker-value';
   display.id = inputId;
   display.name = inputId.replace('cfg-', '');
-  display.value = currentVal || '/data';
-  display.readOnly = true;
+  display.value = containerToDisplay(currentVal || '/data');
+  display.addEventListener('input', updateUnsavedIndicator);
 
   const browseBtn = document.createElement('button');
   browseBtn.type = 'button';
@@ -782,7 +802,7 @@ async function loadFolderLevel(browser, dir, display) {
   }
   // Current dir — select button
   html += `<div class="folder-item folder-current" data-path="${escHtml(dir)}">
-    <strong>${escHtml(dir)}</strong>
+    <strong>${escHtml(containerToDisplay(dir))}</strong>
     <button class="btn btn-primary btn-sm folder-select-btn" type="button">Select</button>
   </div>`;
   // Children
@@ -808,7 +828,7 @@ async function loadFolderLevel(browser, dir, display) {
   browser.querySelectorAll('.folder-select-btn').forEach(btn => {
     btn.onclick = (e) => {
       e.stopPropagation();
-      display.value = btn.closest('.folder-current').dataset.path;
+      display.value = containerToDisplay(btn.closest('.folder-current').dataset.path);
       browser.style.display = 'none';
       updateUnsavedIndicator();
     };
@@ -834,6 +854,7 @@ async function loadConfig() {
   }
   const values = {};
   (data.config || []).forEach(e => { values[e.key] = e.value; });
+  hostDataPath = (values.host_data_path || '').replace(/\/+$/, '');
   renderConfigForm(values);
   configSnapshot = buildConfigSnapshot();
   updateUnsavedIndicator();
@@ -932,8 +953,9 @@ async function saveConfig(e) {
   const form = document.getElementById('config-form');
   const formData = new FormData(form);
   const config = {};
+  const pathKeys = new Set(CONFIG_SCHEMA.filter(i => i.type === 'path').map(i => i.key));
   for (const [key, val] of formData.entries()) {
-    config[key] = val;
+    config[key] = pathKeys.has(key) ? displayToContainer(val) : val;
   }
   const status = document.getElementById('config-status');
   const submitBtn = form.querySelector('[type="submit"]');
