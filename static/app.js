@@ -451,9 +451,11 @@ async function loadCorrupt() {
   const infoBanner = document.getElementById('corrupt-info-banner');
   if (infoBanner) {
     if (hasAnyLidarr) {
-      const cfg = await api('config');
-      const blocklist = cfg && cfg.lidarr_blocklist === 'true';
-      const searchUnmon = cfg && cfg.lidarr_search === 'true';
+      const cfgData = await api('config');
+      const cfgEntries = cfgData && cfgData.config ? cfgData.config : [];
+      const cfgVal = key => { const e = cfgEntries.find(c => c.key === key); return e ? e.value : ''; };
+      const blocklist = cfgVal('lidarr_blocklist') === 'true';
+      const searchUnmon = cfgVal('lidarr_search') === 'true';
       const blTag = blocklist
         ? '<span class="info-tag on">Enabled</span>'
         : '<span class="info-tag off">Disabled</span>';
