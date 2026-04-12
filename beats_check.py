@@ -692,12 +692,21 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
 
             _stop = shutdown_requested or scan_cancelled
             if _stop:
+                running = sum(1 for f in pending if f.running())
+                logger.info("Cancelling — waiting for %d in-progress "
+                            "file(s) to finish.", running)
                 pool.shutdown(wait=True, cancel_futures=True)
             else:
                 # Drain remaining futures
                 for future in as_completed(pending.copy()):
                     _stop = shutdown_requested or scan_cancelled
                     if _stop:
+                        running = sum(1 for f in pending
+                                      if f.running())
+                        logger.info(
+                            "Cancelling — waiting for %d "
+                            "in-progress file(s) to finish.",
+                            running)
                         pool.shutdown(wait=True, cancel_futures=True)
                         break
                     _process_future(future)
