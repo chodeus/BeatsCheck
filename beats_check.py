@@ -175,8 +175,8 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
     # Resolve music_dir realpath once for containment checks
     music_real = os.path.realpath(music_dir) if music_dir else None
 
-    # Validate all paths first
-    validated = []
+    # Validate all paths first — store {original: realpath} for safe ops
+    validated = {}
     errors = []
     for fp in paths:
         if fp not in allowed:
@@ -192,7 +192,7 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
         if not os.path.isfile(real):
             errors.append({"path": fp, "error": "not found"})
             continue
-        validated.append(fp)
+        validated[fp] = real
 
     if not validated:
         return {"deleted": [], "errors": errors, "count": 0}
@@ -227,7 +227,7 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
         if count > 0:
             # Check which files were actually removed
             for fp in lidarr_paths:
-                if not os.path.exists(fp):
+                if not os.path.exists(validated[fp]):
                     deleted.append(fp)
                 else:
                     errors.append({"path": fp,
@@ -235,7 +235,7 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
         else:
             # API reported failure but may have partially succeeded
             for fp in lidarr_paths:
-                if not os.path.exists(fp):
+                if not os.path.exists(validated[fp]):
                     deleted.append(fp)
                 else:
                     errors.append(
@@ -245,7 +245,7 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
     # Direct delete for non-Lidarr files
     for fp in direct_paths:
         try:
-            os.remove(fp)
+            os.remove(validated[fp])
             deleted.append(fp)
         except OSError as e:
             errors.append({"path": fp, "error": str(e)})
@@ -630,10 +630,10 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
             file_path = pending.pop(future)
             try:
                 file_path, is_corrupt, reason = future.result()
-            except Exception as e:
-                logger.error("Unexpected error checking %s: %s",
-                             file_path, e)
-                log.write(f"ERROR: {file_path} - {e}\n")
+            except Exception as exc:
+                logger.exception("Unexpected error checking %s",
+                                 file_path)
+                log.write(f"ERROR: {file_path} - {exc}\n")
                 log.flush()
                 checked += 1
                 return
@@ -1697,31 +1697,40 @@ def _lidarr_delete_trackfiles_bulk(base_url, api_key, track_file_ids):
     return _lidarr_request(url, api_key, method="DELETE", data=data)
 
 
-def _lidarr_wait_for_search(base_url, api_key, log_dir=None):
-    """Wait for any active AlbumSearch commands in Lidarr to complete.
+def _lidarr_wait_for_search(base_url, api_key, log_dir=None,
+                            since_id=0):
+    """Wait for new AlbumSearch commands (id > since_id) to complete.
     Called after each album deletion so Lidarr finishes searching
     before the next album is deleted. Polls every 10s, 5 min timeout.
+    If no new search appears within 30s, returns early.
     Returns the completion message from the last search command."""
     heartbeat_path = os.path.join(log_dir, ".heartbeat") if log_dir else None
     last_message = None
     timeout = time.time() + 300
+    appear_deadline = time.time() + 30
+    found_new = False
     while time.time() < timeout and not shutdown_requested:
         result = _lidarr_request(
             f"{base_url}/api/v1/command", api_key)
         if result is None:
             return last_message
         search_cmds = [c for c in result
-                       if c.get("name") == "AlbumSearch"]
+                       if c.get("name") == "AlbumSearch"
+                       and c.get("id", 0) > since_id]
         active = [c for c in search_cmds
                   if c.get("status", "").lower()
                   in ("queued", "started")]
-        if not active:
+        if search_cmds:
+            found_new = True
+        if found_new and not active:
             # Capture completion message from finished searches
             for c in search_cmds:
                 msg = c.get("message", "")
                 if msg:
                     last_message = msg
             return last_message
+        if not found_new and time.time() > appear_deadline:
+            return None  # search never appeared — move on
         if heartbeat_path:
             _write_heartbeat(heartbeat_path)
         time.sleep(10)
@@ -1764,7 +1773,25 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
         # Process one album at a time
         for i, (album_id, tf_ids) in enumerate(
                 album_to_tfids.items(), 1):
-            prefix = f"  [{i}/{total_albums}] Album {album_id}"
+            # Fetch album details for logging
+            album_info = _lidarr_get_album(
+                base_url, api_key, album_id)
+            album_title = (album_info.get("title", "")
+                           if album_info else "")
+            artist_obj = (album_info.get("artist", {})
+                          if album_info else {})
+            artist_name = (artist_obj.get("artistName", "")
+                           if artist_obj else "")
+            label = (f"{artist_name} — {album_title}"
+                     if artist_name and album_title
+                     else album_title or str(album_id))
+            prefix = f"  [{i}/{total_albums}] {label}"
+
+            # 30s delay between albums to avoid flooding indexers
+            if i > 1 and not shutdown_requested:
+                logger.debug("%s: waiting 30s before next album",
+                             prefix)
+                time.sleep(30)
 
             # Blocklist before deletion
             if blocklist:
@@ -1774,10 +1801,22 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                     logger.error("%s: blocklist failed — skipping",
                                  prefix)
                     log.write(f"ERROR: Blocklist failed for album "
-                              f"{album_id} — skipped\n")
+                              f"{album_id} ({label}) — skipped\n")
                     continue
                 if bl_ok:
                     logger.debug("%s: blocklisted", prefix)
+
+            # Snapshot max AlbumSearch command ID before delete
+            max_search_id = 0
+            if search:
+                cmds = _lidarr_request(
+                    f"{base_url}/api/v1/command", api_key)
+                if cmds:
+                    for c in cmds:
+                        if (c.get("name") == "AlbumSearch"
+                                and c.get("id", 0)
+                                > max_search_id):
+                            max_search_id = c["id"]
 
             # Bulk delete this album's trackfiles
             result = _lidarr_delete_trackfiles_bulk(
@@ -1785,22 +1824,20 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
             if result is not None:
                 deleted += len(tf_ids)
                 affected_albums.append(album_id)
-                log.write(f"LIDARR DELETE: album {album_id} — "
+                log.write(f"LIDARR DELETE: {label} — "
                           f"{len(tf_ids)} track files\n")
 
                 if search:
-                    # Check monitored status and wait for search
-                    album = _lidarr_get_album(
-                        base_url, api_key, album_id)
-                    monitored = (album.get("monitored", True)
-                                 if album else True)
+                    monitored = (album_info.get("monitored", True)
+                                 if album_info else True)
                     if monitored:
                         logger.info(
                             "%s: deleted %d trackfiles — "
                             "waiting for search",
                             prefix, len(tf_ids))
                         msg = _lidarr_wait_for_search(
-                            base_url, api_key, log_dir)
+                            base_url, api_key, log_dir,
+                            since_id=max_search_id)
                         if msg:
                             logger.info("%s: %s", prefix, msg)
                         else:
@@ -1819,8 +1856,8 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
             else:
                 logger.error("%s: bulk delete failed — skipping",
                              prefix)
-                log.write(f"ERROR: Bulk delete failed for album "
-                          f"{album_id}\n")
+                log.write(f"ERROR: Bulk delete failed for "
+                          f"{label}\n")
 
         # Direct delete for files not tracked by Lidarr
         for path in non_lidarr_paths:
@@ -1832,6 +1869,13 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
             except OSError as e:
                 log.write(f"ERROR deleting {path}: {e}\n")
                 logger.error("  ERROR: %s - %s", path, e)
+
+    # Log completion summary
+    if deleted:
+        logger.info("  Lidarr delete complete: %d files deleted "
+                    "across %d albums", deleted, len(affected_albums))
+    elif album_to_tfids:
+        logger.error("  Lidarr delete complete: all albums failed")
 
     return (deleted, affected_albums)
 
@@ -2199,35 +2243,42 @@ def _snapshot_docker_env():
             _docker_env_vars.add(env_name)
 
 
+def _parse_config_lines(path):
+    """Parse beatscheck.conf into {key: value} dict.
+    Handles inline comments and surrounding quotes."""
+    result = {}
+    if not os.path.isfile(path):
+        return result
+    with open(path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            if '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            key = key.strip().lower()
+            value = value.strip()
+            if ' #' in value and not (
+                    len(value) >= 2 and value[0] == value[-1]
+                    and value[0] in ('"', "'")):
+                value = value[:value.index(' #')].rstrip()
+            if (len(value) >= 2 and value[0] == value[-1]
+                    and value[0] in ('"', "'")):
+                value = value[1:-1]
+            result[key] = value
+    return result
+
+
 def _apply_config_file(config_dir):
     """Load beatscheck.conf and set env vars for any values not already
     set in the environment.  This gives env vars priority over the file."""
     path = os.path.join(config_dir, "beatscheck.conf")
-    if not os.path.isfile(path):
-        return
     try:
-        with open(path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if '=' not in line:
-                    continue
-                key, _, value = line.partition('=')
-                key = key.strip().lower()
-                value = value.strip()
-                # Strip inline comments (space+hash outside quotes)
-                if ' #' in value and not (
-                        len(value) >= 2 and value[0] == value[-1]
-                        and value[0] in ('"', "'")):
-                    value = value[:value.index(' #')].rstrip()
-                # Strip surrounding quotes
-                if (len(value) >= 2 and value[0] == value[-1]
-                        and value[0] in ('"', "'")):
-                    value = value[1:-1]
-                env_name = _CONFIG_KEY_MAP.get(key)
-                if env_name and env_name not in os.environ:
-                    os.environ[env_name] = value
+        for key, value in _parse_config_lines(path).items():
+            env_name = _CONFIG_KEY_MAP.get(key)
+            if env_name and env_name not in os.environ:
+                os.environ[env_name] = value
     except OSError as e:
         print(f"Warning: could not read config file {path}: {e}")
 
@@ -2312,6 +2363,14 @@ def _load_config():
     )
 
 
+def _env_safe(name, fallback, converter):
+    """Read an env var and convert it, returning fallback on failure."""
+    try:
+        return converter(os.environ.get(name, fallback))
+    except (ValueError, TypeError):
+        return fallback
+
+
 def _reload_config(cfg):
     """Re-read beatscheck.conf and update cfg for the next scan.
 
@@ -2320,30 +2379,12 @@ def _reload_config(cfg):
     then we refresh the cfg namespace from os.environ.
     """
     path = os.path.join(cfg.log_dir, "beatscheck.conf")
-    if not os.path.isfile(path):
-        return
     try:
         file_vals = {}
-        with open(path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if not line or line.startswith('#'):
-                    continue
-                if '=' not in line:
-                    continue
-                key, _, value = line.partition('=')
-                key = key.strip().lower()
-                value = value.strip()
-                if ' #' in value and not (
-                        len(value) >= 2 and value[0] == value[-1]
-                        and value[0] in ('"', "'")):
-                    value = value[:value.index(' #')].rstrip()
-                if (len(value) >= 2 and value[0] == value[-1]
-                        and value[0] in ('"', "'")):
-                    value = value[1:-1]
-                env_name = _CONFIG_KEY_MAP.get(key)
-                if env_name:
-                    file_vals[env_name] = value
+        for key, value in _parse_config_lines(path).items():
+            env_name = _CONFIG_KEY_MAP.get(key)
+            if env_name:
+                file_vals[env_name] = value
     except OSError:
         return
 
@@ -2358,36 +2399,16 @@ def _reload_config(cfg):
     cfg.output_folder = os.environ.get(
         "OUTPUT_DIR", cfg.output_folder).rstrip("/")
     cfg.mode = (os.environ.get("MODE") or cfg.mode).lower()
-    try:
-        cfg.workers = max(1, int(os.environ.get(
-            "WORKERS", cfg.workers)))
-    except (ValueError, TypeError):
-        pass
-    try:
-        cfg.run_interval = float(os.environ.get(
-            "RUN_INTERVAL", cfg.run_interval))
-    except (ValueError, TypeError):
-        pass
-    try:
-        cfg.delete_after = float(os.environ.get(
-            "DELETE_AFTER", cfg.delete_after))
-    except (ValueError, TypeError):
-        pass
-    try:
-        cfg.max_auto_delete = int(os.environ.get(
-            "MAX_AUTO_DELETE", cfg.max_auto_delete))
-    except (ValueError, TypeError):
-        pass
-    try:
-        cfg.min_age_minutes = int(os.environ.get(
-            "MIN_FILE_AGE", cfg.min_age_minutes))
-    except (ValueError, TypeError):
-        pass
-    try:
-        cfg.max_log_mb = int(os.environ.get(
-            "MAX_LOG_MB", cfg.max_log_mb))
-    except (ValueError, TypeError):
-        pass
+    cfg.workers = max(1, _env_safe("WORKERS", cfg.workers, int))
+    cfg.run_interval = _env_safe(
+        "RUN_INTERVAL", cfg.run_interval, float)
+    cfg.delete_after = _env_safe(
+        "DELETE_AFTER", cfg.delete_after, float)
+    cfg.max_auto_delete = _env_safe(
+        "MAX_AUTO_DELETE", cfg.max_auto_delete, int)
+    cfg.min_age_minutes = _env_safe(
+        "MIN_FILE_AGE", cfg.min_age_minutes, int)
+    cfg.max_log_mb = _env_safe("MAX_LOG_MB", cfg.max_log_mb, int)
     cfg.lidarr_url = os.environ.get(
         "LIDARR_URL", cfg.lidarr_url).rstrip("/")
     cfg.lidarr_api_key = _load_lidarr_api_key()
@@ -2444,8 +2465,8 @@ def _start_webui(cfg):
         app_state.update(version=__version__, mode=cfg.mode,
                          status="starting")
         start_webui(cfg.log_dir, cfg.webui_port)
-    except Exception as e:
-        logger.error("WebUI failed to start: %s", e)
+    except Exception:
+        logger.exception("WebUI failed to start")
 
 
 def _maybe_rotate_logs(cfg):

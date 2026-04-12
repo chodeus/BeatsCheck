@@ -16,6 +16,7 @@ let scanStartCount = 0;
 let logRawLines = [];  // unfiltered log lines for client-side filtering
 let isAuthenticated = false;
 let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; // 'files' or 'albums'
+let corruptLoadId = 0;  // monotonic ID to discard stale loadCorrupt() responses
 
 // --- Config metadata for form rendering ---
 const CONFIG_SCHEMA = [
@@ -426,7 +427,9 @@ function setText(id, val) {
 
 // --- Corrupt Files ---
 async function loadCorrupt() {
+  const thisLoad = ++corruptLoadId;
   const data = await api('corrupt');
+  if (thisLoad !== corruptLoadId) return;  // stale response
   if (!data) {
     document.getElementById('corrupt-tbody').innerHTML =
       '<tr><td colspan="5" class="empty-state">Failed to load data</td></tr>';

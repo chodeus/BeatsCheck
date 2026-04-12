@@ -167,16 +167,25 @@ def _cleanup_sessions():
 
 _API_KEY_MASK = "********"
 
-# Valid config keys (mirrors _CONFIG_KEY_MAP in beats_check.py).
-# Hardcoded to avoid circular import.
-_ALLOWED_CONFIG_KEYS = frozenset({
-    'music_dir', 'output_dir', 'mode', 'workers', 'run_interval', 'delete_after',
-    'max_auto_delete', 'min_file_age', 'log_level', 'max_log_mb',
-    'lidarr_url', 'lidarr_api_key', 'lidarr_search', 'lidarr_blocklist',
-    'webui', 'webui_port',
-})
+# Import the canonical config key mapping from beats_check.py to avoid
+# maintaining a duplicate list of allowed config keys.
+from beats_check import _CONFIG_KEY_MAP  # noqa: E402
+_ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
 
 _config_write_lock = threading.Lock()
+
+
+def _parse_query(path):
+    """Extract query parameters from a URL path as a dict."""
+    if '?' not in path:
+        return {}
+    try:
+        return dict(
+            p.split('=', 1) for p in
+            path.split('?', 1)[1].split('&')
+            if '=' in p)
+    except (ValueError, TypeError):
+        return {}
 
 
 def _strip_inline_comment(value):
@@ -213,6 +222,14 @@ def _read_config_file(config_dir):
     return entries
 
 
+def _format_config_value(val):
+    """Quote a config value unless it's a plain number or boolean."""
+    s = str(val)
+    if re.match(r'^(\d+(?:\.\d+)?|true|false)$', s):
+        return s
+    return f'"{s}"'
+
+
 def _write_config_file(config_dir, updates):
     """Update beatscheck.conf preserving comments and structure.
     Uses atomic write (tmp + rename) to prevent corruption.
@@ -237,23 +254,15 @@ def _write_config_file(config_dir, updates):
             if active_match:
                 key = active_match.group(1).lower()
                 if key in new_vals:
-                    val = new_vals[key]
-                    if not re.match(
-                            r'^(\d+\.?\d*|true|false)$',
-                            str(val)):
-                        val = f'"{val}"'
-                    result.append(f"{key} = {val}\n")
+                    result.append(
+                        f"{key} = {_format_config_value(new_vals[key])}\n")
                     written_keys.add(key)
                     continue
             elif commented_match:
                 key = commented_match.group(1).lower()
                 if key in new_vals:
-                    val = new_vals[key]
-                    if not re.match(
-                            r'^(\d+\.?\d*|true|false)$',
-                            str(val)):
-                        val = f'"{val}"'
-                    result.append(f"{key} = {val}\n")
+                    result.append(
+                        f"{key} = {_format_config_value(new_vals[key])}\n")
                     written_keys.add(key)
                     continue
 
@@ -261,10 +270,8 @@ def _write_config_file(config_dir, updates):
 
         for key, val in new_vals.items():
             if key not in written_keys:
-                if not re.match(
-                        r'^(\d+\.?\d*|true|false)$', str(val)):
-                    val = f'"{val}"'
-                result.append(f"{key} = {val}\n")
+                result.append(
+                    f"{key} = {_format_config_value(val)}\n")
 
         tmp_path = path + ".tmp"
         with open(tmp_path, 'w') as f:
@@ -406,12 +413,15 @@ def _ignore_corrupt_files(config_dir, files):
 
 def _list_dir(path):
     """List immediate subdirectories of a path. Used by folder picker."""
-    if not os.path.isdir(path):
+    real = os.path.realpath(path)
+    if not real.startswith(os.path.realpath('/data')):
+        return []
+    if not os.path.isdir(real):
         return []
     try:
         return sorted([
-            os.path.join(path, n) for n in os.listdir(path)
-            if os.path.isdir(os.path.join(path, n))
+            os.path.join(path, n) for n in os.listdir(real)
+            if os.path.isdir(os.path.join(real, n))
             and not n.startswith('.')])
     except OSError:
         return []
@@ -484,7 +494,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             return None
         try:
             return json.loads(self.rfile.read(length))
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             self._json_response({"error": "invalid JSON"}, 400)
             return None
 
@@ -559,45 +569,21 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
         elif self.path == '/api/log' \
                 or self.path.startswith('/api/log?'):
-            lines = 200
-            if '?' in self.path:
-                try:
-                    params = dict(
-                        p.split('=', 1) for p in
-                        self.path.split('?', 1)[1].split('&')
-                        if '=' in p)
-                    lines = max(1, min(
-                        int(params.get('lines', 200)), 10000))
-                except (ValueError, TypeError):
-                    lines = 200
+            params = _parse_query(self.path)
+            try:
+                lines = max(1, min(
+                    int(params.get('lines', 200)), 10000))
+            except (ValueError, TypeError):
+                lines = 200
             text = _read_log_tail(config_dir, lines)
             self._json_response({"log": text})
-
-        elif self.path == '/api/stats':
-            summary = _read_summary(config_dir)
-            state = app_state.snapshot()
-            self._json_response({
-                "summary": summary,
-                "status": state["status"],
-                "mode": state["mode"],
-                "uptime": state["uptime"],
-                "version": state["version"],
-            })
 
         elif self.path == '/api/paths' \
                 or self.path.startswith('/api/paths?'):
             # Folder picker — list children of a directory
-            parent = '/data'
-            if '?' in self.path:
-                try:
-                    params = dict(
-                        p.split('=', 1) for p in
-                        self.path.split('?', 1)[1].split('&')
-                        if '=' in p)
-                    parent = urllib.parse.unquote(
-                        params.get('dir', '/data'))
-                except (ValueError, TypeError):
-                    pass
+            params = _parse_query(self.path)
+            parent = urllib.parse.unquote(
+                params.get('dir', '/data'))
             # Security: only allow browsing under /data
             real = os.path.realpath(parent)
             data_real = os.path.realpath('/data')

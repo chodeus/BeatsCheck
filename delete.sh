@@ -1,7 +1,7 @@
 #!/bin/sh
 # Convenience wrapper for interactive delete inside a running container.
 # Usage: docker exec -it beatscheck delete
-MUSIC_DIR=${MUSIC_DIR:-/music}
+MUSIC_DIR=${MUSIC_DIR:-/data}
 
 if [ ! -w "$MUSIC_DIR" ]; then
     echo "ERROR: Music directory ($MUSIC_DIR) is read-only."
