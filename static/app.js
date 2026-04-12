@@ -445,6 +445,49 @@ async function loadCorrupt() {
   if (banner) banner.style.display = scanning ? '' : 'none';
   document.querySelectorAll('#page-corrupt .btn-danger, #page-corrupt .btn-primary').forEach(b => b.disabled = scanning);
   document.querySelectorAll('#page-corrupt .file-check, #page-corrupt .album-check, #select-all').forEach(c => c.disabled = scanning);
+
+  // Show Lidarr info banner if any files have Lidarr IDs
+  const hasAnyLidarr = corruptFiles.some(f => f.has_lidarr_id);
+  const infoBanner = document.getElementById('corrupt-info-banner');
+  if (infoBanner) {
+    if (hasAnyLidarr) {
+      const cfg = await api('config');
+      const blocklist = cfg && cfg.lidarr_blocklist === 'true';
+      const searchUnmon = cfg && cfg.lidarr_search === 'true';
+      const blTag = blocklist
+        ? '<span class="info-tag on">Enabled</span>'
+        : '<span class="info-tag off">Disabled</span>';
+      const collapsed = localStorage.getItem('beatscheck-info-collapsed') === '1';
+      const lines = [];
+      lines.push('<strong>Re-download</strong> — deletes files via Lidarr'
+        + (blocklist ? ', blocklists the bad release,' : '')
+        + ' and waits for each album to finish searching before proceeding.');
+      lines.push('Monitored albums are automatically re-searched by Lidarr.'
+        + (searchUnmon ? ' Unmonitored albums will also be searched.' : ' Unmonitored albums will <em>not</em> be re-downloaded.'));
+      lines.push('<strong>Delete</strong> — permanently removes files'
+        + (hasAnyLidarr ? ' (Lidarr-tracked files are deleted via API, triggering the same search behavior).' : '.'));
+      lines.push('Blocklist: ' + blTag
+        + (blocklist ? ' — bad releases will be blocklisted to prevent re-grabbing the same corrupt version.' : ' — Lidarr may re-grab the same release. Enable in Settings to prevent this.'));
+      infoBanner.innerHTML = '<div class="info-banner-header" onclick="toggleInfoBanner()">'
+        + '<strong>Lidarr Delete Info</strong>'
+        + '<button class="info-banner-toggle" aria-label="Toggle info">' + (collapsed ? '&#9654;' : '&#9660;') + '</button>'
+        + '</div>'
+        + '<div class="info-banner-body' + (collapsed ? ' collapsed' : '') + '">' + lines.join('<br>') + '</div>';
+      infoBanner.style.display = '';
+    } else {
+      infoBanner.style.display = 'none';
+    }
+  }
+}
+
+function toggleInfoBanner() {
+  const body = document.querySelector('.info-banner-body');
+  const toggle = document.querySelector('.info-banner-toggle');
+  if (!body || !toggle) return;
+  const collapsed = !body.classList.contains('collapsed');
+  body.classList.toggle('collapsed', collapsed);
+  toggle.innerHTML = collapsed ? '&#9654;' : '&#9660;';
+  localStorage.setItem('beatscheck-info-collapsed', collapsed ? '1' : '0');
 }
 
 function toggleCorruptView() {

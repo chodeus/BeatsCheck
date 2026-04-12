@@ -635,6 +635,48 @@ tbody tr:hover { background: var(--bg-hover); }
   margin-bottom: .8rem;
 }
 
+.info-banner {
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-card));
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  border-radius: 8px;
+  padding: .7rem 1rem;
+  font-size: .82rem;
+  color: var(--text-dim);
+  margin-bottom: .8rem;
+  line-height: 1.5;
+}
+.info-banner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  user-select: none;
+}
+.info-banner-header strong { color: var(--text); font-size: .85rem; }
+.info-banner-toggle {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: .8rem;
+  cursor: pointer;
+  padding: .1rem .4rem;
+  border-radius: 4px;
+}
+.info-banner-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--text) 10%, transparent); }
+.info-banner-body { margin-top: .5rem; }
+.info-banner-body.collapsed { display: none; }
+.info-banner strong { color: var(--text); }
+.info-banner .info-tag {
+  display: inline-block;
+  padding: .1rem .45rem;
+  border-radius: 4px;
+  font-size: .75rem;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.info-tag.on  { background: color-mix(in srgb, var(--success) 20%, transparent); color: var(--success); }
+.info-tag.off { background: color-mix(in srgb, var(--text-muted) 20%, transparent); color: var(--text-muted); }
+
 /* --- Auth Pages --- */
 .auth-container {
   max-width: 400px;
