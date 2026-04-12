@@ -2120,12 +2120,6 @@ webui = false
 
 ## webui_port — port number
 webui_port = 8484
-
-## host_data_path — host path for /data mount
-##   If set, the folder picker displays this path instead of /data.
-##   Purely cosmetic — doesn't change how scanning works.
-##   Example: /mnt/user/data/media/music
-# host_data_path =
 """
 
 # Maps config-file keys (lowercase) to environment variable names.
@@ -2146,7 +2140,6 @@ _CONFIG_KEY_MAP = {
     'lidarr_blocklist': 'LIDARR_BLOCKLIST',
     'webui': 'WEBUI',
     'webui_port': 'WEBUI_PORT',
-    'host_data_path': 'HOST_DATA_PATH',
 }
 
 

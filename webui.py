@@ -173,7 +173,7 @@ _ALLOWED_CONFIG_KEYS = frozenset({
     'music_dir', 'output_dir', 'mode', 'workers', 'run_interval', 'delete_after',
     'max_auto_delete', 'min_file_age', 'log_level', 'max_log_mb',
     'lidarr_url', 'lidarr_api_key', 'lidarr_search', 'lidarr_blocklist',
-    'webui', 'webui_port', 'host_data_path',
+    'webui', 'webui_port',
 })
 
 _config_write_lock = threading.Lock()
