@@ -972,6 +972,7 @@ async function saveConfig(e) {
 
 // --- Logs ---
 const LOG_PATTERNS = [
+  { regex: /\b(CORRUPT:)/g,  cls: 'log-corrupt' },
   { regex: /\b(CRITICAL)\b/g,  cls: 'log-level-critical' },
   { regex: /\b(ERROR)\b/g,     cls: 'log-level-error' },
   { regex: /\b(WARNING)\b/g,   cls: 'log-level-warning' },
@@ -979,7 +980,8 @@ const LOG_PATTERNS = [
   { regex: /\b(DEBUG)\b/g,     cls: 'log-level-debug' },
   { regex: /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)/g, cls: 'log-timestamp' },
   { regex: /(https?:\/\/\S+)/g, cls: 'log-url' },
-  { regex: /(\/(?:[\w.-]+\/)+[\w.-]+)/g, cls: 'log-path' },
+  { regex: /(\/data\/[^\n]+?\.\w{2,5})(?=\s|$)/g, cls: 'log-path' },
+  { regex: /(\/config\/[\w./-]+)/g, cls: 'log-path' },
   { regex: /\b(\d+(?:\.\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
 ];
 

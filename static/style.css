@@ -512,6 +512,7 @@ tbody tr:hover { background: var(--bg-hover); }
 .log-path           { color: var(--log-path); }
 .log-url            { color: var(--log-url); text-decoration: underline; }
 .log-number         { color: var(--log-number); }
+.log-corrupt        { color: var(--log-error); font-weight: 700; }
 .log-highlight      { background: var(--warning); color: #000; border-radius: 2px; padding: 0 2px; }
 .log-highlight-line { background: color-mix(in srgb, var(--warning) 15%, transparent); border-radius: 2px; }
 

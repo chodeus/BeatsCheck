@@ -673,11 +673,19 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
             if checked % 10 == 0 or checked == total:
                 _webui_progress(checked, total, corrupted, file_path)
 
-        _stop = shutdown_requested or scan_cancelled
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for f in files_to_check:
-                _stop = shutdown_requested or scan_cancelled
-                if _stop:
+                if shutdown_requested or scan_cancelled:
+                    remaining = sum(1 for ft in pending
+                                    if ft.running())
+                    logger.info(
+                        "Cancelling — waiting for %d in-progress "
+                        "file(s) to finish.", remaining)
+                    pool.shutdown(wait=True, cancel_futures=True)
+                    # Process results from completed futures
+                    for fut in list(pending):
+                        if fut.done() and not fut.cancelled():
+                            _process_future(fut)
                     break
                 pending[pool.submit(check_audio_file, f)] = f
                 # Drain completed futures to bound memory usage
@@ -686,28 +694,22 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                         pending, return_when=concurrent.futures.FIRST_COMPLETED)
                     for fut in done:
                         _process_future(fut)
-                    _stop = shutdown_requested or scan_cancelled
-                    if _stop:
+                    if shutdown_requested or scan_cancelled:
                         break
-
-            _stop = shutdown_requested or scan_cancelled
-            if _stop:
-                running = sum(1 for f in pending if f.running())
-                logger.info("Cancelling — waiting for %d in-progress "
-                            "file(s) to finish.", running)
-                pool.shutdown(wait=True, cancel_futures=True)
             else:
-                # Drain remaining futures
+                # Normal completion — drain remaining futures
                 for future in as_completed(pending.copy()):
-                    _stop = shutdown_requested or scan_cancelled
-                    if _stop:
-                        running = sum(1 for f in pending
-                                      if f.running())
+                    if shutdown_requested or scan_cancelled:
+                        remaining = sum(1 for ft in pending
+                                        if ft.running())
                         logger.info(
                             "Cancelling — waiting for %d "
                             "in-progress file(s) to finish.",
-                            running)
+                            remaining)
                         pool.shutdown(wait=True, cancel_futures=True)
+                        for fut in list(pending):
+                            if fut.done() and not fut.cancelled():
+                                _process_future(fut)
                         break
                     _process_future(future)
 
@@ -2446,6 +2448,39 @@ def _maybe_rotate_logs(cfg):
         pass
 
 
+def _validate_move_mode(cfg):
+    """Validate output_dir for move mode. Falls back to report if invalid.
+    Returns True if move mode is valid and ready."""
+    if not cfg.output_folder:
+        logger.error("Move mode requires output_dir to be "
+                     "configured. Falling back to report mode.")
+        return False
+    if not os.path.isdir(
+            os.path.dirname(cfg.output_folder.rstrip("/"))):
+        logger.error(
+            "Output directory parent does not exist: %s. "
+            "Check your volume mount. Falling back to "
+            "report mode.", cfg.output_folder)
+        return False
+    os.makedirs(cfg.output_folder, exist_ok=True)
+    return True
+
+
+def _wait_after_cancel(cfg):
+    """After a cancelled scan, go idle and wait for next rescan trigger.
+    Returns True if shutdown requested (caller should break)."""
+    logger.info("Scan cancelled. Container is idle.")
+    _webui_update(cfg, status="idle", scan_progress=None)
+    result = _idle_wait(
+        cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
+    if result is False:
+        return True
+    if isinstance(result, str) and result in ("report", "move"):
+        cfg.mode = result
+        logger.info("Mode changed to: %s", cfg.mode)
+    return False
+
+
 # --- Main ---
 
 def main():
@@ -2518,28 +2553,19 @@ def main():
             continue
 
         if cfg.mode == "move":
-            move_ok = True
-            if not cfg.output_folder:
-                logger.error("Move mode requires output_dir to be "
-                             "configured. Falling back to report mode.")
-                move_ok = False
-            elif not os.path.isdir(
-                    os.path.dirname(cfg.output_folder.rstrip("/"))):
-                logger.error(
-                    "Output directory parent does not exist: %s. "
-                    "Check your volume mount. Falling back to "
-                    "report mode.", cfg.output_folder)
-                move_ok = False
-            if not move_ok:
+            if not _validate_move_mode(cfg):
                 cfg.mode = "report"
                 _webui_update(cfg, mode="report")
-            else:
-                os.makedirs(cfg.output_folder, exist_ok=True)
 
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
         run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
                  cfg.log_dir, cfg.mode, cfg.workers, cfg.min_age_minutes,
                  cfg.lidarr_url, cfg.lidarr_api_key)
+
+        if scan_cancelled:
+            if _wait_after_cancel(cfg):
+                break
+            continue
 
         if cfg.delete_after > 0:
             run_auto_delete(
