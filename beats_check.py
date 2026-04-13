@@ -2,6 +2,7 @@ import concurrent.futures
 import fcntl
 import json
 import logging
+import logging.handlers
 import os
 import re
 import shutil
@@ -1149,6 +1150,7 @@ def _run_interactive_delete(folders, total_folders, corrupt_details,
         log.write(f"Interactive delete started: "
                   f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         log.write(f"{'='*60}\n")
+        log.flush()
 
         for i, (folder, corrupt_files) in enumerate(folders.items(), 1):
             existing = [f for f in corrupt_files if os.path.exists(f)]
@@ -1279,19 +1281,23 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
         log.write(f"\n{'='*60}\n")
         log.write(f"Mass delete: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
         log.write(f"{'='*60}\n")
+        log.flush()
 
         for fp in existing:
             try:
                 os.remove(fp)
                 deleted += 1
                 log.write(f"DELETED: {fp}\n")
+                log.flush()
                 print(f"  Deleted: {fp}")
             except OSError as e:
                 log.write(f"ERROR: {fp} - {e}\n")
+                log.flush()
                 print(f"  ERROR: {fp} - {e}")
 
         log.write(f"Mass delete complete: "
                   f"{deleted}/{len(existing)} deleted\n")
+        log.flush()
 
     print(f"\n{deleted}/{len(existing)} files deleted")
 
@@ -1466,15 +1472,18 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
         with open(log_file, 'a', encoding='utf-8') as log:
             log.write(f"\nAuto-delete ({delete_after_days}d threshold): "
                       f"{len(direct_delete_paths)} files\n")
+            log.flush()
             for path in direct_delete_paths:
                 try:
                     os.remove(path)
                     deleted += 1
                     tracking.pop(path, None)
                     log.write(f"AUTO-DELETED: {path}\n")
+                    log.flush()
                     logger.info("  Deleted: %s", path)
                 except OSError as e:
                     log.write(f"ERROR auto-deleting {path}: {e}\n")
+                    log.flush()
                     logger.error("  ERROR: %s - %s", path, e)
 
     logger.info("  %d/%d files deleted", deleted, len(to_delete))
@@ -1802,6 +1811,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                                  prefix)
                     log.write(f"ERROR: Blocklist failed for album "
                               f"{album_id} ({label}) — skipped\n")
+                    log.flush()
                     continue
                 if bl_ok:
                     logger.debug("%s: blocklisted", prefix)
@@ -1826,6 +1836,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                 affected_albums.append(album_id)
                 log.write(f"LIDARR DELETE: {label} — "
                           f"{len(tf_ids)} track files\n")
+                log.flush()
 
                 if search:
                     monitored = (album_info.get("monitored", True)
@@ -1858,6 +1869,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                              prefix)
                 log.write(f"ERROR: Bulk delete failed for "
                           f"{label}\n")
+                log.flush()
 
         # Direct delete for files not tracked by Lidarr
         for path in non_lidarr_paths:
@@ -1865,9 +1877,11 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                 os.remove(path)
                 deleted += 1
                 log.write(f"DIRECT DELETE (not in Lidarr): {path}\n")
+                log.flush()
                 logger.info("  Deleted (not in Lidarr): %s", path)
             except OSError as e:
                 log.write(f"ERROR deleting {path}: {e}\n")
+                log.flush()
                 logger.error("  ERROR: %s - %s", path, e)
 
     # Log completion summary
@@ -2050,8 +2064,8 @@ def _search_queue_drain_one(log_dir, base_url, api_key):
 
 # --- Config ---
 
-def setup_logging(log_level):
-    """Configure logging with console handler."""
+def setup_logging(log_level, log_file=None):
+    """Configure logging with console handler and optional file handler."""
     level = getattr(logging, log_level.upper(), logging.INFO)
 
     root = logging.getLogger()
@@ -2065,6 +2079,13 @@ def setup_logging(log_level):
     )
     console.setFormatter(console_fmt)
     root.addHandler(console)
+
+    if log_file:
+        file_handler = logging.handlers.WatchedFileHandler(
+            log_file, encoding='utf-8')
+        file_handler.setLevel(level)
+        file_handler.setFormatter(console_fmt)
+        root.addHandler(file_handler)
 
 
 _DEFAULT_CONFIG = """\
@@ -2536,7 +2557,7 @@ def main():
 
     os.makedirs(cfg.log_dir, exist_ok=True)
 
-    setup_logging(cfg.log_level)
+    setup_logging(cfg.log_level, log_file=cfg.log_file)
 
     logger.info("BeatsCheck v%s starting", __version__)
 
