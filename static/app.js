@@ -354,8 +354,8 @@ async function refreshDashboard() {
 
   const summary = data.summary || {};
   setCardValue('dash-status', status.charAt(0).toUpperCase() + status.slice(1));
-  const dashStatusEl = document.getElementById('dash-status');
-  if (dashStatusEl) dashStatusEl.className = 'card-value status-' + status;
+  const dashStatusIcon = document.getElementById('dash-status-icon');
+  if (dashStatusIcon) dashStatusIcon.className = 'card-icon status-icon-' + status;
   setCardValue('dash-mode', (data.mode || '--').toUpperCase());
   setCardValue('dash-uptime', formatUptime(data.uptime));
   setCardValue('dash-corrupt', summary.corrupted != null ? summary.corrupted : '--');
