@@ -441,7 +441,8 @@ def collect_audio_files(input_folder, min_age_minutes=30):
     age_threshold = time.time() - (min_age_minutes * 60)
     files = []
     skipped_young = 0
-    for root, _, filenames in os.walk(input_folder, followlinks=False):
+    for root, dirs, filenames in os.walk(input_folder, followlinks=False):
+        dirs.sort()
         for f in sorted(filenames):
             file_path = os.path.join(root, f)
             real_path = os.path.realpath(file_path)
