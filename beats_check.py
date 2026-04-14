@@ -2762,7 +2762,6 @@ def main():
 
 
 if __name__ == "__main__":
-    import sys
     # Register as 'beats_check' so that ``from beats_check import …``
     # in webui.py finds THIS running instance instead of re-importing
     # the file as a second module with separate global state.
