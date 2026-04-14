@@ -384,7 +384,9 @@ async function refreshDashboard() {
     }
     const elapsed = (Date.now() - scanStartTime) / 1000;
     const done = prog.current - scanStartCount;
-    if (done > 10 && prog.total > prog.current) {
+    if (prog.current >= prog.total) {
+      setText('progress-eta', 'Finalizing...');
+    } else if (done > 10) {
       const rate = done / elapsed;
       const remaining = (prog.total - prog.current) / rate;
       const eta = formatUptime(Math.round(remaining));
