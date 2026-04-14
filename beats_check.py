@@ -2633,6 +2633,42 @@ def _wait_after_cancel(cfg):
     return False
 
 
+def _post_scan_wait(cfg):
+    """Wait for next scan after a completed or failed cycle.
+    Returns True if shutdown requested (caller should break)."""
+    if cfg.run_interval <= 0:
+        logger.info("Scan complete. Container is idle. "
+                    "Rescan with: rescan [report|move]")
+        result = _idle_wait(
+            cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
+        if result is False:
+            return True
+        if isinstance(result, str) and result in ("report", "move"):
+            cfg.mode = result
+            logger.info("Mode changed to: %s", cfg.mode)
+        return False
+
+    next_run = time.strftime(
+        '%Y-%m-%d %H:%M:%S',
+        time.localtime(time.time() + cfg.run_interval * 3600)
+    )
+    logger.info(
+        "Next scan at %s (%sh interval). Waiting...",
+        next_run, cfg.run_interval
+    )
+    result = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
+                        cfg.lidarr_url, cfg.lidarr_api_key)
+    if result is False:
+        if shutdown_requested:
+            return True
+        logger.info("Scheduled scan starting.")
+    else:
+        if isinstance(result, str) and result in ("report", "move"):
+            cfg.mode = result
+            logger.info("Mode changed to: %s", cfg.mode)
+    return False
+
+
 # --- Main ---
 
 def main():
@@ -2710,41 +2746,14 @@ def main():
                 _webui_update(cfg, mode="report")
 
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
+        scan_failed = False
         try:
             run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
                      cfg.log_dir, cfg.mode, cfg.workers, cfg.min_age_minutes,
                      cfg.lidarr_url, cfg.lidarr_api_key)
         except Exception:
             logger.exception("Scan failed unexpectedly")
-            _webui_update(cfg, status="idle", scan_progress=None)
-            if shutdown_requested:
-                break
-            if cfg.run_interval <= 0:
-                result = _idle_wait(
-                    cfg.log_dir, None, cfg.lidarr_url,
-                    cfg.lidarr_api_key)
-                if result is False:
-                    break
-                if isinstance(result, str) and result in ("report", "move"):
-                    cfg.mode = result
-                continue
-            else:
-                next_run = time.strftime(
-                    '%Y-%m-%d %H:%M:%S',
-                    time.localtime(time.time() + cfg.run_interval * 3600)
-                )
-                logger.info("Next scan at %s (%sh interval). Waiting...",
-                            next_run, cfg.run_interval)
-                result = _idle_wait(cfg.log_dir,
-                                    cfg.run_interval * 3600,
-                                    cfg.lidarr_url, cfg.lidarr_api_key)
-                if result is False:
-                    if shutdown_requested:
-                        break
-                else:
-                    if isinstance(result, str) and result in ("report", "move"):
-                        cfg.mode = result
-                continue
+            scan_failed = True
 
         if scan_cancelled:
             if _wait_after_cancel(cfg):
@@ -2754,7 +2763,7 @@ def main():
         # Mark scan complete immediately so the UI reflects idle status
         _webui_update(cfg, status="idle", scan_progress=None)
 
-        if cfg.delete_after > 0:
+        if not scan_failed and cfg.delete_after > 0:
             try:
                 run_auto_delete(
                     cfg.log_dir, cfg.log_file, cfg.delete_after,
@@ -2766,37 +2775,8 @@ def main():
         if shutdown_requested:
             break
 
-        if cfg.run_interval <= 0:
-            logger.info("Scan complete. Container is idle. "
-                        "Rescan with: rescan [report|move]")
-            result = _idle_wait(
-                cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
-            if result is False:
-                break
-            if isinstance(result, str) and result in ("report", "move"):
-                cfg.mode = result
-                logger.info("Mode changed to: %s", cfg.mode)
-            continue
-
-        next_run = time.strftime(
-            '%Y-%m-%d %H:%M:%S',
-            time.localtime(time.time() + cfg.run_interval * 3600)
-        )
-        logger.info(
-            "Next scan at %s (%sh interval). Waiting...",
-            next_run, cfg.run_interval
-        )
-
-        result = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
-                            cfg.lidarr_url, cfg.lidarr_api_key)
-        if result is False:
-            if shutdown_requested:
-                break
-            logger.info("Scheduled scan starting.")
-        else:
-            if isinstance(result, str) and result in ("report", "move"):
-                cfg.mode = result
-                logger.info("Mode changed to: %s", cfg.mode)
+        if _post_scan_wait(cfg):
+            break
 
 
 if __name__ == "__main__":
