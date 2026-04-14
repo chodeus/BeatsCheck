@@ -551,6 +551,12 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         if self.path == '/api/status':
             state = app_state.snapshot()
             summary = _read_summary(config_dir)
+            # Merge live library size from scan into summary so the
+            # dashboard shows it immediately, not only after scan ends
+            for key in ('library_size_human', 'library_files'):
+                val = state.get(key)
+                if val is not None:
+                    summary[key] = val
             state["summary"] = summary
             self._json_response(state)
 
