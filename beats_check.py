@@ -550,9 +550,11 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
     # Clean stale entries from corrupt.txt (e.g. files moved in move mode)
     current_corrupt = _load_lines_as_set(corrupt_list_path)
     live_corrupt = [p for p in current_corrupt if os.path.exists(p)]
-    with open(corrupt_list_path, 'w', encoding='utf-8') as f:
+    tmp_corrupt = corrupt_list_path + ".tmp"
+    with open(tmp_corrupt, 'w', encoding='utf-8') as f:
         for p in live_corrupt:
             f.write(p + "\n")
+    os.rename(tmp_corrupt, corrupt_list_path)
 
     # Write machine-readable summary
     summary_path = os.path.join(log_dir, "summary.json")
@@ -2708,20 +2710,58 @@ def main():
                 _webui_update(cfg, mode="report")
 
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
-        run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
-                 cfg.log_dir, cfg.mode, cfg.workers, cfg.min_age_minutes,
-                 cfg.lidarr_url, cfg.lidarr_api_key)
+        try:
+            run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
+                     cfg.log_dir, cfg.mode, cfg.workers, cfg.min_age_minutes,
+                     cfg.lidarr_url, cfg.lidarr_api_key)
+        except Exception:
+            logger.exception("Scan failed unexpectedly")
+            _webui_update(cfg, status="idle", scan_progress=None)
+            if shutdown_requested:
+                break
+            if cfg.run_interval <= 0:
+                result = _idle_wait(
+                    cfg.log_dir, None, cfg.lidarr_url,
+                    cfg.lidarr_api_key)
+                if result is False:
+                    break
+                if isinstance(result, str) and result in ("report", "move"):
+                    cfg.mode = result
+                continue
+            else:
+                next_run = time.strftime(
+                    '%Y-%m-%d %H:%M:%S',
+                    time.localtime(time.time() + cfg.run_interval * 3600)
+                )
+                logger.info("Next scan at %s (%sh interval). Waiting...",
+                            next_run, cfg.run_interval)
+                result = _idle_wait(cfg.log_dir,
+                                    cfg.run_interval * 3600,
+                                    cfg.lidarr_url, cfg.lidarr_api_key)
+                if result is False:
+                    if shutdown_requested:
+                        break
+                else:
+                    if isinstance(result, str) and result in ("report", "move"):
+                        cfg.mode = result
+                continue
 
         if scan_cancelled:
             if _wait_after_cancel(cfg):
                 break
             continue
 
+        # Mark scan complete immediately so the UI reflects idle status
+        _webui_update(cfg, status="idle", scan_progress=None)
+
         if cfg.delete_after > 0:
-            run_auto_delete(
-                cfg.log_dir, cfg.log_file, cfg.delete_after,
-                cfg.max_auto_delete, cfg.lidarr_url, cfg.lidarr_api_key,
-                cfg.lidarr_search, cfg.lidarr_blocklist)
+            try:
+                run_auto_delete(
+                    cfg.log_dir, cfg.log_file, cfg.delete_after,
+                    cfg.max_auto_delete, cfg.lidarr_url, cfg.lidarr_api_key,
+                    cfg.lidarr_search, cfg.lidarr_blocklist)
+            except Exception:
+                logger.exception("Auto-delete failed unexpectedly")
 
         if shutdown_requested:
             break
@@ -2729,7 +2769,6 @@ def main():
         if cfg.run_interval <= 0:
             logger.info("Scan complete. Container is idle. "
                         "Rescan with: rescan [report|move]")
-            _webui_update(cfg, status="idle", scan_progress=None)
             result = _idle_wait(
                 cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
             if result is False:
@@ -2747,7 +2786,6 @@ def main():
             "Next scan at %s (%sh interval). Waiting...",
             next_run, cfg.run_interval
         )
-        _webui_update(cfg, status="idle", scan_progress=None)
 
         result = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
                             cfg.lidarr_url, cfg.lidarr_api_key)
