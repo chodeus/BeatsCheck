@@ -574,6 +574,13 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     all_files = collect_audio_files(input_folder, min_age_minutes)
     total_library_size = _total_file_size(all_files)
 
+    # Push library size to WebUI immediately so the dashboard shows it
+    if _webui_app_state is not None:
+        _webui_app_state.update(
+            library_size_human=format_size(total_library_size),
+            library_files=len(all_files),
+        )
+
     files_to_check = [f for f in all_files if f not in already_processed]
     skipped = len(all_files) - len(files_to_check)
     total = len(files_to_check)
@@ -2755,4 +2762,9 @@ def main():
 
 
 if __name__ == "__main__":
+    import sys
+    # Register as 'beats_check' so that ``from beats_check import …``
+    # in webui.py finds THIS running instance instead of re-importing
+    # the file as a second module with separate global state.
+    sys.modules.setdefault("beats_check", sys.modules[__name__])
     main()

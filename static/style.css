@@ -210,6 +210,10 @@ header h1 { font-size: 1.15rem; font-weight: 700; letter-spacing: -.01em; }
 .status-dot.setup    { background: #b080e8; box-shadow: 0 0 6px rgba(176,128,232,.4); }
 .status-dot.error    { background: #e0506a; box-shadow: 0 0 8px rgba(224,80,106,.5); }
 #status-text { font-size: .82rem; color: var(--text-muted); }
+.card-value.status-idle     { color: #3ecfa0; }
+.card-value.status-scanning { color: #e8b84a; }
+.card-value.status-setup    { color: #b080e8; }
+.card-value.status-error    { color: #e0506a; }
 
 @keyframes pulse-scan {
   0%, 100% { box-shadow: 0 0 4px rgba(232,184,74,.3); }
