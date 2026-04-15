@@ -125,7 +125,7 @@ def write_json_atomic(path, data):
     """Write JSON data atomically using a temp file + rename."""
     tmp_path = path + ".tmp"
     with open(tmp_path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2)
+        json.dump(data, f, indent=2, sort_keys=True)
     os.rename(tmp_path, path)
 
 
@@ -1753,14 +1753,22 @@ def _resolve_lidarr_ids(corrupt_details, base_url, api_key):
                          "(multiple trackfiles with same name)",
                          os.path.basename(container_path))
 
+    already_resolved = len(corrupt_details) - len(unresolved)
     if matched:
-        logger.info("  Lidarr: resolved %d/%d corrupt files to "
-                    "trackfile IDs (checked %d/%d artists)",
+        logger.info("  Lidarr: resolved %d/%d remaining corrupt files "
+                    "to trackfile IDs (checked %d/%d artists)",
                     matched, len(unresolved),
                     artists_checked, len(artists))
-    elif unresolved:
-        logger.warning("  Lidarr: could not match any corrupt files "
-                       "to Lidarr trackfiles")
+    if remaining:
+        if already_resolved:
+            logger.info("  Lidarr: %d/%d corrupt files resolved during "
+                        "scan, %d could not be matched",
+                        already_resolved,
+                        already_resolved + len(remaining),
+                        len(remaining))
+        else:
+            logger.warning("  Lidarr: could not match any corrupt files "
+                           "to Lidarr trackfiles")
 
 
 def _lidarr_get_artists(base_url, api_key):
