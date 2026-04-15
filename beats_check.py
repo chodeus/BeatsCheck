@@ -571,6 +571,32 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
         logger.info("Review with: cat %s", corrupt_list_path)
 
 
+def _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
+                          all_files, total_library_size, mode,
+                          lidarr_url, lidarr_api_key):
+    """Fast path when every file has already been processed."""
+    logger.debug("Nothing to do.")
+    # Mark idle before finalization — Lidarr ID resolution can take minutes
+    if _webui_app_state is not None:
+        _webui_app_state.update(status="idle", scan_progress=None)
+    existing_details = _load_json(
+        os.path.join(log_dir, "corrupt_details.json"))
+    _finalize_scan(log_dir, corrupt_list_path, existing_details,
+                   output_folder, {
+                       "version": __version__,
+                       "finished": time.strftime('%Y-%m-%d %H:%M:%S'),
+                       "duration": "0s",
+                       "library_files": len(all_files),
+                       "library_size": total_library_size,
+                       "library_size_human": format_size(total_library_size),
+                       "files_checked": 0,
+                       "corrupted": 0,
+                       "corrupt_size": 0,
+                       "corrupt_size_human": format_size(0),
+                       "mode": mode,
+                   }, lidarr_url, lidarr_api_key)
+
+
 def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                     mode, workers, corrupt_list_path, min_age_minutes,
                     lidarr_url=None, lidarr_api_key=None):
@@ -602,23 +628,9 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                     if lidarr_url and lidarr_api_key else None)
 
     if total == 0:
-        logger.debug("Nothing to do.")
-        existing_details = _load_json(
-            os.path.join(log_dir, "corrupt_details.json"))
-        _finalize_scan(log_dir, corrupt_list_path, existing_details,
-                       output_folder, {
-                           "version": __version__,
-                           "finished": time.strftime('%Y-%m-%d %H:%M:%S'),
-                           "duration": "0s",
-                           "library_files": len(all_files),
-                           "library_size": total_library_size,
-                           "library_size_human": format_size(total_library_size),
-                           "files_checked": 0,
-                           "corrupted": 0,
-                           "corrupt_size": 0,
-                           "corrupt_size_human": format_size(0),
-                           "mode": mode,
-                       }, lidarr_url, lidarr_api_key)
+        _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
+                              all_files, total_library_size, mode,
+                              lidarr_url, lidarr_api_key)
         return 0
 
     checked = 0
