@@ -467,7 +467,7 @@ def collect_audio_files(input_folder, min_age_minutes=30):
 
 def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
                          corrupt_log, log, existing_corrupt, corrupt_details,
-                         log_dir=None):
+                         log_dir=None, lidarr_index=None):
     logger.info("CORRUPT: %s", file_path)
     logger.debug("         %s", reason)
 
@@ -484,6 +484,8 @@ def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
         corrupt_log.flush()
         existing_corrupt.add(file_path)
     corrupt_details[file_path] = {"reason": reason}
+    if lidarr_index:
+        _resolve_single_lidarr_id(file_path, corrupt_details, lidarr_index)
 
     # Write details incrementally so WebUI shows reasons in real time
     if log_dir:
@@ -533,6 +535,10 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
     """Post-scan cleanup: update state files and write summary."""
     details_path = os.path.join(log_dir, "corrupt_details.json")
 
+    # Write summary first so the dashboard shows accurate counts immediately
+    summary_path = os.path.join(log_dir, "summary.json")
+    write_json_atomic(summary_path, scan_stats)
+
     # Prune corrupt_details to existing files + moved files in output dir
     output_real = os.path.realpath(output_folder) if output_folder else ""
     corrupt_details = {
@@ -540,12 +546,6 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
         if os.path.exists(p) or (output_real and
                                  os.path.realpath(p).startswith(output_real))
     }
-
-    # Resolve Lidarr trackfile/album IDs for corrupt files
-    if lidarr_url and lidarr_api_key and corrupt_details:
-        _resolve_lidarr_ids(corrupt_details, lidarr_url, lidarr_api_key)
-
-    write_json_atomic(details_path, corrupt_details)
 
     # Clean stale entries from corrupt.txt (e.g. files moved in move mode)
     current_corrupt = _load_lines_as_set(corrupt_list_path)
@@ -556,9 +556,15 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
             f.write(p + "\n")
     os.rename(tmp_corrupt, corrupt_list_path)
 
-    # Write machine-readable summary
-    summary_path = os.path.join(log_dir, "summary.json")
-    write_json_atomic(summary_path, scan_stats)
+    # Resolve any remaining Lidarr IDs not resolved inline during the scan
+    # (e.g. files that were already in corrupt_details from a previous scan)
+    if lidarr_url and lidarr_api_key and corrupt_details:
+        unresolved = [p for p, v in corrupt_details.items()
+                      if isinstance(v, dict) and "trackfileId" not in v]
+        if unresolved:
+            _resolve_lidarr_ids(corrupt_details, lidarr_url, lidarr_api_key)
+
+    write_json_atomic(details_path, corrupt_details)
 
     if scan_stats["corrupted"] > 0:
         logger.info("Corrupt file list: %s", corrupt_list_path)
@@ -590,6 +596,10 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
                      corrupt_list_path, all_files, total_library_size,
                      total, skipped)
+
+    # Pre-build Lidarr trackfile index so corrupt files get IDs immediately
+    lidarr_index = (_build_lidarr_index(lidarr_url, lidarr_api_key)
+                    if lidarr_url and lidarr_api_key else None)
 
     if total == 0:
         logger.debug("Nothing to do.")
@@ -667,7 +677,8 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                     file_path, reason, mode, input_folder,
                     output_folder, corrupt_log, log,
                     existing_corrupt, corrupt_details,
-                    log_dir=log_dir)
+                    log_dir=log_dir,
+                    lidarr_index=lidarr_index)
 
             _write_heartbeat(heartbeat_path)
 
@@ -756,6 +767,10 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
         logger.info(summary.strip())
         log.write(summary)
         log.flush()
+
+    # Mark idle before finalization — Lidarr ID resolution can take minutes
+    if _webui_app_state is not None:
+        _webui_app_state.update(status="idle", scan_progress=None)
 
     _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
                    output_folder, {
@@ -1554,6 +1569,62 @@ def _load_lidarr_api_key():
             with open(secret_path, 'r') as f:
                 key = f.read().strip()
     return key
+
+
+def _build_lidarr_index(base_url, api_key):
+    """Pre-fetch all Lidarr trackfiles into a basename-keyed index.
+
+    Returns ``{basename: [{id, albumId, artistId, path}, ...]}``.
+    The index is built once at scan start so corrupt files can be
+    resolved immediately instead of waiting until finalization.
+    Returns ``None`` if the artist list cannot be fetched.
+    """
+    artists = _lidarr_get_artists(base_url, api_key)
+    if not artists:
+        return None
+    index = {}
+    for artist in artists:
+        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist["id"])
+        for tf in trackfiles:
+            basename = os.path.basename(tf["path"])
+            index.setdefault(basename, []).append({
+                "id": tf["id"],
+                "albumId": tf["albumId"],
+                "artistId": artist["id"],
+                "path": tf["path"],
+            })
+    logger.info("  Lidarr: indexed %d trackfiles from %d artists",
+                sum(len(v) for v in index.values()), len(artists))
+    return index
+
+
+def _resolve_single_lidarr_id(file_path, corrupt_details, lidarr_index):
+    """Resolve Lidarr IDs for one corrupt file using the pre-built index."""
+    basename = os.path.basename(file_path)
+    candidates = lidarr_index.get(basename)
+    if not candidates:
+        return
+    best_match = None
+    best_score = 0
+    best_path = None
+    ambiguous = False
+    for entry in candidates:
+        score = _suffix_match_path(file_path, entry["path"])
+        if score > best_score:
+            best_score = score
+            best_match = entry
+            best_path = entry["path"]
+            ambiguous = False
+        elif score == best_score and score >= 1:
+            ambiguous = True
+    # Accept score >= 2 always; score == 1 only if unambiguous
+    if best_match and not ambiguous and best_score >= 1:
+        detail = corrupt_details.get(file_path)
+        if isinstance(detail, dict):
+            detail["trackfileId"] = best_match["id"]
+            detail["albumId"] = best_match["albumId"]
+            detail["artistId"] = best_match["artistId"]
+            detail["lidarrPath"] = best_path
 
 
 def _suffix_match_path(container_path, lidarr_path):
