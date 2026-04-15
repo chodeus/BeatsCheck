@@ -572,15 +572,15 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
 
 
 def _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
-                          all_files, total_library_size, mode,
-                          lidarr_url, lidarr_api_key):
+                          all_files, total_library_size, mode):
     """Fast path when every file has already been processed."""
     logger.debug("Nothing to do.")
-    # Mark idle before finalization — Lidarr ID resolution can take minutes
     if _webui_app_state is not None:
         _webui_app_state.update(status="idle", scan_progress=None)
     existing_details = _load_json(
         os.path.join(log_dir, "corrupt_details.json"))
+    # Skip Lidarr ID resolution — no new corrupt files to resolve.
+    # Existing entries keep whatever IDs they already have.
     _finalize_scan(log_dir, corrupt_list_path, existing_details,
                    output_folder, {
                        "version": __version__,
@@ -594,7 +594,7 @@ def _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
                        "corrupt_size": 0,
                        "corrupt_size_human": format_size(0),
                        "mode": mode,
-                   }, lidarr_url, lidarr_api_key)
+                   })
 
 
 def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
@@ -625,8 +625,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
 
     if total == 0:
         _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
-                              all_files, total_library_size, mode,
-                              lidarr_url, lidarr_api_key)
+                              all_files, total_library_size, mode)
         return 0
 
     # Pre-build Lidarr trackfile index so corrupt files get IDs immediately
@@ -1589,25 +1588,31 @@ def _build_lidarr_index(base_url, api_key):
     Returns ``{basename: [{id, albumId, artistId, path}, ...]}``.
     The index is built once at scan start so corrupt files can be
     resolved immediately instead of waiting until finalization.
-    Returns ``None`` if the artist list cannot be fetched.
+    Returns ``None`` if the artist list or trackfiles cannot be fetched.
     """
-    artists = _lidarr_get_artists(base_url, api_key)
-    if not artists:
+    try:
+        artists = _lidarr_get_artists(base_url, api_key)
+        if not artists:
+            return None
+        index = {}
+        for artist in artists:
+            trackfiles = _lidarr_get_trackfiles(
+                base_url, api_key, artist["id"])
+            for tf in trackfiles:
+                basename = os.path.basename(tf["path"])
+                index.setdefault(basename, []).append({
+                    "id": tf["id"],
+                    "albumId": tf["albumId"],
+                    "artistId": artist["id"],
+                    "path": tf["path"],
+                })
+        logger.info("  Lidarr: indexed %d trackfiles from %d artists",
+                    sum(len(v) for v in index.values()), len(artists))
+        return index
+    except Exception:
+        logger.warning("Lidarr index build failed — "
+                       "IDs will be resolved at scan end")
         return None
-    index = {}
-    for artist in artists:
-        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist["id"])
-        for tf in trackfiles:
-            basename = os.path.basename(tf["path"])
-            index.setdefault(basename, []).append({
-                "id": tf["id"],
-                "albumId": tf["albumId"],
-                "artistId": artist["id"],
-                "path": tf["path"],
-            })
-    logger.info("  Lidarr: indexed %d trackfiles from %d artists",
-                sum(len(v) for v in index.values()), len(artists))
-    return index
 
 
 def _resolve_single_lidarr_id(file_path, corrupt_details, lidarr_index):
