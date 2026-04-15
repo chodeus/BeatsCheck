@@ -431,20 +431,16 @@ def _trigger_rescan(config_dir, mode="report", fresh=False):
     """Trigger a rescan by writing the .rescan file."""
     rescan_path = os.path.join(config_dir, ".rescan")
     try:
-        with open(rescan_path, 'w') as f:
-            f.write(mode)
+        # Delete resume cache BEFORE writing the trigger so the scan
+        # thread can't consume .rescan while processed.txt still exists.
         if fresh:
             processed = os.path.join(config_dir, "processed.txt")
-            if os.path.exists(processed):
-                try:
-                    from beats_check import _wait_for_scan_lock
-                    _wait_for_scan_lock(config_dir)
-                except ImportError:
-                    pass
-                try:
-                    os.remove(processed)
-                except OSError:
-                    pass
+            try:
+                os.remove(processed)
+            except OSError:
+                pass
+        with open(rescan_path, 'w') as f:
+            f.write(mode)
         return True
     except OSError:
         return False
