@@ -623,15 +623,15 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                      corrupt_list_path, all_files, total_library_size,
                      total, skipped)
 
-    # Pre-build Lidarr trackfile index so corrupt files get IDs immediately
-    lidarr_index = (_build_lidarr_index(lidarr_url, lidarr_api_key)
-                    if lidarr_url and lidarr_api_key else None)
-
     if total == 0:
         _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
                               all_files, total_library_size, mode,
                               lidarr_url, lidarr_api_key)
         return 0
+
+    # Pre-build Lidarr trackfile index so corrupt files get IDs immediately
+    lidarr_index = (_build_lidarr_index(lidarr_url, lidarr_api_key)
+                    if lidarr_url and lidarr_api_key else None)
 
     checked = 0
     corrupted = 0
