@@ -603,6 +603,9 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
 
     if total == 0:
         logger.debug("Nothing to do.")
+        # Mark idle before finalization — Lidarr ID resolution can take minutes
+        if _webui_app_state is not None:
+            _webui_app_state.update(status="idle", scan_progress=None)
         existing_details = _load_json(
             os.path.join(log_dir, "corrupt_details.json"))
         _finalize_scan(log_dir, corrupt_list_path, existing_details,
