@@ -471,15 +471,21 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
     def _json_response(self, data, status=200, cookies=None):
         body = json.dumps(data).encode('utf-8')
-        self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
-        self.send_header('Content-Length', len(body))
-        self.send_header('Cache-Control', 'no-cache')
-        if cookies:
-            for cookie in cookies:
-                self.send_header('Set-Cookie', cookie)
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', len(body))
+            self.send_header('Cache-Control', 'no-cache')
+            if cookies:
+                for cookie in cookies:
+                    self.send_header('Set-Cookie', cookie)
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionResetError, BrokenPipeError):
+            # Client disconnected before we could reply (common for
+            # long-running endpoints like /api/delete). Server-side
+            # work already completed; nothing to do.
+            pass
 
     def _read_body(self):
         """Parse JSON request body. Returns dict or None on error."""
