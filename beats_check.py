@@ -329,6 +329,36 @@ def _read_rescan_trigger(log_dir):
     return content
 
 
+def _apply_rescan_trigger(trigger, cfg):
+    """Parse a rescan trigger string and update *cfg* in place.
+    Handles the ``fresh:`` prefix written by the WebUI when the user
+    requests a fresh (non-resuming) scan.  Returns True if *trigger*
+    contained a valid mode override, False otherwise."""
+    if not isinstance(trigger, str) or not trigger:
+        return False
+    if trigger.startswith("fresh:"):
+        cfg.fresh_rescan = True
+        trigger = trigger[len("fresh:"):]
+    if trigger in ("report", "move"):
+        cfg.mode = trigger
+        return True
+    return False
+
+
+def _clear_resume_if_fresh(cfg):
+    """If a fresh rescan was requested, delete processed.txt now
+    (at scan start) and reset the flag."""
+    if not cfg.fresh_rescan:
+        return
+    processed = os.path.join(cfg.log_dir, "processed.txt")
+    try:
+        os.remove(processed)
+        logger.info("Fresh rescan: cleared resume cache.")
+    except OSError:
+        pass
+    cfg.fresh_rescan = False
+
+
 def _idle_wait(log_dir, timeout_seconds, lidarr_url=None, lidarr_api_key=None):
     """Sleep until timeout, shutdown, or .rescan trigger.
     Drains the Lidarr search queue during idle (max 5/hour).
@@ -544,7 +574,8 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
     corrupt_details = {
         p: r for p, r in corrupt_details.items()
         if os.path.exists(p) or (output_real and
-                                 os.path.realpath(p).startswith(output_real))
+                                 os.path.realpath(p).startswith(
+                                     output_real + os.sep))
     }
 
     # Clean stale entries from corrupt.txt (e.g. files moved in move mode)
@@ -2568,6 +2599,7 @@ def _load_config():
         lidarr_blocklist=_parse_env_bool("LIDARR_BLOCKLIST", False),
         webui=_parse_env_bool("WEBUI", False),
         webui_port=_parse_env_int("WEBUI_PORT", 8484),
+        fresh_rescan=False,
     )
 
 
@@ -2739,9 +2771,9 @@ def _post_scan_wait(cfg):
             cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
         if result is False:
             return True
-        if isinstance(result, str) and result in ("report", "move"):
-            cfg.mode = result
-            logger.info("Mode changed to: %s", cfg.mode)
+        if isinstance(result, str):
+            if _apply_rescan_trigger(result, cfg):
+                logger.info("Mode changed to: %s", cfg.mode)
         return False
 
     next_run = time.strftime(
@@ -2759,9 +2791,9 @@ def _post_scan_wait(cfg):
             return True
         logger.info("Scheduled scan starting.")
     else:
-        if isinstance(result, str) and result in ("report", "move"):
-            cfg.mode = result
-            logger.info("Mode changed to: %s", cfg.mode)
+        if isinstance(result, str):
+            if _apply_rescan_trigger(result, cfg):
+                logger.info("Mode changed to: %s", cfg.mode)
     return False
 
 
@@ -2832,8 +2864,8 @@ def main():
                 cfg.lidarr_api_key)
             if result is False:
                 break
-            if isinstance(result, str) and result in ("report", "move"):
-                cfg.mode = result
+            if isinstance(result, str):
+                _apply_rescan_trigger(result, cfg)
             continue
 
         if cfg.mode == "move":
@@ -2841,6 +2873,7 @@ def main():
                 cfg.mode = "report"
                 _webui_update(cfg, mode="report")
 
+        _clear_resume_if_fresh(cfg)
         _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
         scan_failed = False
         try:

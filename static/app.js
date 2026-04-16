@@ -1151,18 +1151,15 @@ function downloadLogs() {
 // --- Rescan ---
 async function triggerRescan(mode) {
   const fresh = document.getElementById('fresh-scan-check').checked;
-  // Validate move mode has output directory configured
+  // Warn early if output_dir looks unconfigured — the backend is
+  // authoritative and will fall back to report mode if invalid.
   if (mode === 'move') {
     const cfg = await api('config');
     if (cfg) {
       const outputDir = (cfg.config || []).find(e => e.key === 'output_dir');
-      if (!outputDir || !outputDir.value || outputDir.value === '/corrupted') {
-        const hasMount = await api('status');
-        // If output_dir is default and not explicitly set, warn the user
-        if (!outputDir || !outputDir.value) {
-          showToast('Move mode requires an Output Directory. Configure it in Settings first.', 'warning');
-          return;
-        }
+      if (!outputDir || !outputDir.value) {
+        showToast('Move mode requires an Output Directory. Configure it in Settings first.', 'warning');
+        return;
       }
     }
   }

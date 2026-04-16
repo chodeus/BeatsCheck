@@ -4,7 +4,7 @@
 
 Audio file integrity checker that performs a full decode test using ffmpeg. Catches audio stream corruption like `Decoding error: Invalid data` and `Decode error rate exceeds maximum`.
 
-**Default mode is report-only. No files are moved or deleted until you explicitly choose to.**
+**Default mode is setup — the container starts idle and won't scan until you configure it. No files are moved or deleted until you explicitly choose to.**
 
 ## Supported Formats
 

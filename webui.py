@@ -411,10 +411,18 @@ def _ignore_corrupt_files(config_dir, files):
             pass
 
 
+def _is_subpath(child, root):
+    """True if *child* is *root* itself or a path beneath it.
+    Both paths must already be resolved with os.path.realpath().
+    Uses a separator-aware check so /data2 is NOT treated as a
+    child of /data."""
+    return child == root or child.startswith(root + os.sep)
+
+
 def _list_dir(path):
     """List immediate subdirectories of a path. Used by folder picker."""
     real = os.path.realpath(path)
-    if not real.startswith(os.path.realpath('/data')):
+    if not _is_subpath(real, os.path.realpath('/data')):
         return []
     if not os.path.isdir(real):
         return []
@@ -428,19 +436,16 @@ def _list_dir(path):
 
 
 def _trigger_rescan(config_dir, mode="report", fresh=False):
-    """Trigger a rescan by writing the .rescan file."""
+    """Trigger a rescan by writing the .rescan file.
+    When *fresh* is True the trigger content is prefixed with ``fresh:``
+    so the scanner clears the resume cache at scan start (not now),
+    avoiding a race where a running scan rebuilds processed.txt
+    between the delete and the next scan."""
     rescan_path = os.path.join(config_dir, ".rescan")
     try:
-        # Delete resume cache BEFORE writing the trigger so the scan
-        # thread can't consume .rescan while processed.txt still exists.
-        if fresh:
-            processed = os.path.join(config_dir, "processed.txt")
-            try:
-                os.remove(processed)
-            except OSError:
-                pass
+        content = ("fresh:" + mode) if fresh else mode
         with open(rescan_path, 'w') as f:
-            f.write(mode)
+            f.write(content)
         return True
     except OSError:
         return False
@@ -589,7 +594,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             # Security: only allow browsing under /data
             real = os.path.realpath(parent)
             data_real = os.path.realpath('/data')
-            if not real.startswith(data_real):
+            if not _is_subpath(real, data_real):
                 self._json_response(
                     {"error": "path outside /data"}, 403)
                 return
@@ -776,7 +781,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         static_dir = self.server.static_dir
         filepath = os.path.join(static_dir, filename)
         real = os.path.realpath(filepath)
-        if not real.startswith(os.path.realpath(static_dir)):
+        if not _is_subpath(real, os.path.realpath(static_dir)):
             self.send_error(403)
             return
         if not os.path.isfile(real):
