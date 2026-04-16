@@ -4,11 +4,11 @@ on:
   push:
     branches: [ "main" ]
     paths:
-      - '*.py'
+      - '**/*.py'
   pull_request:
     branches: [ "main" ]
     paths:
-      - '*.py'
+      - '**/*.py'
   schedule:
     - cron: '27 3 * * 1'
 

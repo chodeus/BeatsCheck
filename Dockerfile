@@ -33,13 +33,13 @@ RUN apk --no-cache upgrade && \
 
 WORKDIR /app
 
-COPY entrypoint.sh /app/
-COPY delete.sh /app/
-COPY rescan.sh /app/
-COPY reset-webui-password.sh /app/
-COPY static/ /app/static/
-COPY webui.py /app/
-COPY beats_check.py /app/
+COPY scripts/entrypoint.sh /app/
+COPY scripts/delete.sh /app/
+COPY scripts/rescan.sh /app/
+COPY scripts/reset-webui-password.sh /app/
+COPY app/static/ /app/static/
+COPY app/webui.py /app/
+COPY app/main.py /app/
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
              /app/reset-webui-password.sh && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
@@ -53,7 +53,7 @@ VOLUME ["/data", "/config"]
 STOPSIGNAL SIGTERM
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 \
-  CMD pgrep -f "beats_check.py" > /dev/null && \
+  CMD pgrep -f "main.py" > /dev/null && \
       { [ ! -f /config/.heartbeat ] || \
         [ "$(( $(date +%s) - $(cat /config/.heartbeat 2>/dev/null || echo 0) ))" -lt 660 ]; } \
       || exit 1

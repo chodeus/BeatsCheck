@@ -183,7 +183,7 @@ BeatsCheck includes an optional web interface for monitoring and control. Disabl
 
 2. Publish the port in your Docker setup:
    ```yaml
-   # docker-compose.yml
+   # compose.yaml
    ports:
      - "8484:8484"
    ```
@@ -229,11 +229,11 @@ This removes the credential file. The next visit to the WebUI will show the setu
 
 ### Docker Compose (Recommended)
 
-A complete `docker-compose.yml` is included in the repository:
+A complete `compose.yaml` is included in the repository:
 
 ```bash
 # Copy and edit the compose file
-cp docker-compose.yml /path/to/your/docker-compose.yml
+cp compose.yaml /path/to/your/compose.yaml
 # Edit paths and settings, then:
 docker compose up -d
 ```
@@ -360,7 +360,7 @@ fi
 Requires Python 3.9+ and ffmpeg installed.
 
 ```bash
-MODE=report WORKERS=6 python3 beats_check.py /path/to/music /path/to/quarantine /path/to/config/beats_check.log
+MODE=report WORKERS=6 python3 app/main.py /path/to/music /path/to/quarantine /path/to/config/beats_check.log
 ```
 
 The third argument is the log file path. All state files (`processed.txt`, `corrupt.txt`, etc.) are written to the same directory as the log file. Unix-only (requires `fcntl`).

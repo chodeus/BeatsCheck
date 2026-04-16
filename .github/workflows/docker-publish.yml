@@ -8,25 +8,15 @@ on:
       - 'v*'
     paths:
       - 'Dockerfile'
-      - 'entrypoint.sh'
-      - 'delete.sh'
-      - 'rescan.sh'
-      - 'reset-webui-password.sh'
-      - 'beats_check.py'
-      - 'webui.py'
-      - 'static/**'
+      - 'scripts/**'
+      - 'app/**'
   pull_request:
     branches:
       - main
     paths:
       - 'Dockerfile'
-      - 'entrypoint.sh'
-      - 'delete.sh'
-      - 'rescan.sh'
-      - 'reset-webui-password.sh'
-      - 'beats_check.py'
-      - 'webui.py'
-      - 'static/**'
+      - 'scripts/**'
+      - 'app/**'
   workflow_dispatch:
 
 concurrency:

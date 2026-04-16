@@ -2909,8 +2909,8 @@ def main():
 
 
 if __name__ == "__main__":
-    # Register as 'beats_check' so that ``from beats_check import …``
-    # in webui.py finds THIS running instance instead of re-importing
-    # the file as a second module with separate global state.
-    sys.modules.setdefault("beats_check", sys.modules[__name__])
+    # Register as 'main' so that ``from main import …`` in webui.py
+    # finds THIS running instance instead of re-importing the file as
+    # a second module with separate global state.
+    sys.modules.setdefault("main", sys.modules[__name__])
     main()

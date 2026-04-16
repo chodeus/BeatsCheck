@@ -55,7 +55,7 @@ class AppState:
         return d
 
 
-# Module-level singleton — set by beats_check.main()
+# Module-level singleton — set by main.main()
 app_state = AppState()
 
 # ---------------------------------------------------------------------------
@@ -167,9 +167,9 @@ def _cleanup_sessions():
 
 _API_KEY_MASK = "********"
 
-# Import the canonical config key mapping from beats_check.py to avoid
+# Import the canonical config key mapping from main.py to avoid
 # maintaining a duplicate list of allowed config keys.
-from beats_check import _CONFIG_KEY_MAP  # noqa: E402
+from main import _CONFIG_KEY_MAP  # noqa: E402
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
 
 _config_write_lock = threading.Lock()
@@ -743,7 +743,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
         elif self.path == '/api/cancel':
             try:
-                from beats_check import cancel_scan
+                from main import cancel_scan
                 cancel_scan()
                 self._json_response({"ok": True})
             except ImportError:
@@ -760,7 +760,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                     {"error": "no files specified"}, 400)
                 return
             try:
-                from beats_check import delete_corrupt_files
+                from main import delete_corrupt_files
             except ImportError:
                 self._json_response(
                     {"error": "delete not available"}, 500)

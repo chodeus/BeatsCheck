@@ -52,4 +52,4 @@ umask "${UMASK}"
 exec su-exec "${PUID}:${PGID}" env \
     HOME=/app \
     PYTHONUNBUFFERED=1 \
-    python3 -u /app/beats_check.py "$@"
+    python3 -u /app/main.py "$@"

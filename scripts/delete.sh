@@ -12,4 +12,4 @@ fi
 exec su-exec "${PUID:-99}:${PGID:-100}" env \
     MODE=delete \
     PYTHONUNBUFFERED=1 \
-    python3 /app/beats_check.py
+    python3 /app/main.py

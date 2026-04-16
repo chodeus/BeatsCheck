@@ -3,7 +3,7 @@
 *.md
 LICENSE
 beats-check.xml
-docker-compose.yml
+compose.yaml
 .dockerignore
 .editorconfig
 .gitignore
