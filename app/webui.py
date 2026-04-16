@@ -800,7 +800,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         ext = os.path.splitext(filename)[1].lower()
         ct = content_types.get(ext, 'application/octet-stream')
 
-        with open(real, 'rb') as f:
+        with open(real, 'rb') as f:  # CodeQL[py/path-injection] false positive: real is validated by _is_subpath() above
             body = f.read()
         self.send_response(200)
         self.send_header('Content-Type', ct)
