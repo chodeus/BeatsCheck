@@ -148,69 +148,51 @@ function showAuthPage() {
   checkAuth();
 }
 
-async function doSetup(e) {
+async function submitAuth(e, endpoint, body, errorEl, failLabel) {
   e.preventDefault();
-  const username = document.getElementById('setup-username').value.trim();
-  const password = document.getElementById('setup-password').value;
-  const confirm = document.getElementById('setup-confirm').value;
-  const error = document.getElementById('setup-error');
-
-  if (!username) { error.textContent = 'Username is required'; return; }
-  if (password.length < 4) { error.textContent = 'Password must be at least 4 characters'; return; }
-  if (password !== confirm) { error.textContent = 'Passwords do not match'; return; }
-
-  error.textContent = '';
+  errorEl.textContent = '';
   const btn = e.target.querySelector('[type="submit"]');
   btn.disabled = true;
-
   try {
-    const res = await fetch('/api/setup', {
+    const res = await fetch('/api/' + endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (res.ok && data.ok) {
       isAuthenticated = true;
       showApp();
     } else {
-      error.textContent = data.error || 'Setup failed';
+      errorEl.textContent = data.error || failLabel;
     }
   } catch (err) {
-    error.textContent = 'Connection error';
+    errorEl.textContent = 'Connection error';
   }
   btn.disabled = false;
 }
 
-async function doLogin(e) {
-  e.preventDefault();
+function doSetup(e) {
+  const username = document.getElementById('setup-username').value.trim();
+  const password = document.getElementById('setup-password').value;
+  const confirm = document.getElementById('setup-confirm').value;
+  const error = document.getElementById('setup-error');
+  if (!username) { e.preventDefault(); error.textContent = 'Username is required'; return; }
+  if (password.length < 4) { e.preventDefault(); error.textContent = 'Password must be at least 4 characters'; return; }
+  if (password !== confirm) { e.preventDefault(); error.textContent = 'Passwords do not match'; return; }
+  return submitAuth(e, 'setup', { username, password }, error, 'Setup failed');
+}
+
+function doLogin(e) {
   const username = document.getElementById('login-username').value.trim();
   const password = document.getElementById('login-password').value;
   const error = document.getElementById('login-error');
-
-  if (!username || !password) { error.textContent = 'Username and password required'; return; }
-
-  error.textContent = '';
-  const btn = e.target.querySelector('[type="submit"]');
-  btn.disabled = true;
-
-  try {
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password }),
-    });
-    const data = await res.json();
-    if (res.ok && data.ok) {
-      isAuthenticated = true;
-      showApp();
-    } else {
-      error.textContent = data.error || 'Login failed';
-    }
-  } catch (err) {
-    error.textContent = 'Connection error';
+  if (!username || !password) {
+    e.preventDefault();
+    error.textContent = 'Username and password required';
+    return;
   }
-  btn.disabled = false;
+  return submitAuth(e, 'login', { username, password }, error, 'Login failed');
 }
 
 async function doLogout() {
@@ -1082,13 +1064,18 @@ function highlightLogLine(line, isSearchMatch) {
   return html;
 }
 
+let logLastMtime = 0;
+
 async function refreshLogs() {
   const lines = document.getElementById('log-lines').value || '500';
-  const data = await api('log?lines=' + encodeURIComponent(lines));
+  const query = 'log?lines=' + encodeURIComponent(lines) + '&since=' + logLastMtime;
+  const data = await api(query);
   if (!data) {
     document.getElementById('log-output').innerHTML = '<span class="log-level-error">(failed to load logs)</span>';
     return;
   }
+  if (data.unchanged) return;
+  logLastMtime = data.mtime || 0;
   logRawLines = (data.log || '').split('\n');
   renderLogOutput();
 }
@@ -1270,7 +1257,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const logLines = document.getElementById('log-lines');
   const logLevel = document.getElementById('log-level-filter');
   const logSearch = document.getElementById('log-search');
-  if (logLines) logLines.addEventListener('change', () => { if (currentPage === 'logs') refreshLogs(); });
+  if (logLines) logLines.addEventListener('change', () => {
+    logLastMtime = 0;
+    if (currentPage === 'logs') refreshLogs();
+  });
   if (logLevel) logLevel.addEventListener('change', renderLogOutput);
   if (logSearch) {
     let debounce;

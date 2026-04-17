@@ -2,8 +2,10 @@
 
 import hashlib
 import hmac
+import http.cookies
 import json
 import logging
+import mimetypes
 import os
 import re
 import secrets
@@ -167,59 +169,24 @@ def _cleanup_sessions():
 
 _API_KEY_MASK = "********"
 
-# Import the canonical config key mapping from main.py to avoid
-# maintaining a duplicate list of allowed config keys.
-from main import _CONFIG_KEY_MAP  # noqa: E402
+# The canonical config-key map lives in main.py; import it so the WebUI's
+# allowed-keys list and parser stay in sync without duplication.
+from main import (  # noqa: E402
+    _CONFIG_KEY_MAP, _load_corrupt_details, _parse_config_lines,
+    write_json_atomic, write_text_atomic,
+)
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
 
 _config_write_lock = threading.Lock()
 
 
-def _parse_query(path):
-    """Extract query parameters from a URL path as a dict."""
-    if '?' not in path:
-        return {}
-    try:
-        return dict(
-            p.split('=', 1) for p in
-            path.split('?', 1)[1].split('&')
-            if '=' in p)
-    except (ValueError, TypeError):
-        return {}
-
-
-def _strip_inline_comment(value):
-    """Strip inline comments (space+hash) from unquoted values."""
-    if ' #' in value and not (
-            len(value) >= 2 and value[0] == value[-1]
-            and value[0] in ('"', "'")):
-        value = value[:value.index(' #')].rstrip()
-    return value
-
-
-def _read_config_file(config_dir):
-    """Parse beatscheck.conf into an ordered list of {key, value}."""
-    path = os.path.join(config_dir, "beatscheck.conf")
-    entries = []
-    if not os.path.isfile(path):
-        return entries
-    with open(path, 'r') as f:
-        for line in f:
-            raw = line.rstrip('\n')
-            stripped = raw.strip()
-            if not stripped or stripped.startswith('#'):
-                continue
-            if '=' not in stripped:
-                continue
-            key, _, value = stripped.partition('=')
-            key = key.strip().lower()
-            value = value.strip()
-            value = _strip_inline_comment(value)
-            if len(value) >= 2 and value[0] == value[-1] \
-                    and value[0] in ('"', "'"):
-                value = value[1:-1]
-            entries.append({"key": key, "value": value})
-    return entries
+def _read_config_entries(config_dir):
+    """Return [{key, value}] in file order for display in the WebUI."""
+    return [
+        {"key": k, "value": v}
+        for k, v in _parse_config_lines(
+            os.path.join(config_dir, "beatscheck.conf")).items()
+    ]
 
 
 def _format_config_value(val):
@@ -232,8 +199,7 @@ def _format_config_value(val):
 
 def _write_config_file(config_dir, updates):
     """Update beatscheck.conf preserving comments and structure.
-    Uses atomic write (tmp + rename) to prevent corruption.
-    Thread-safe via _config_write_lock."""
+    Thread-safe via _config_write_lock; atomic via tmp+rename."""
     with _config_write_lock:
         path = os.path.join(config_dir, "beatscheck.conf")
         if not os.path.isfile(path):
@@ -250,22 +216,14 @@ def _write_config_file(config_dir, updates):
             stripped = line.strip()
             commented_match = re.match(r'^#\s*(\w+)\s*=', stripped)
             active_match = re.match(r'^(\w+)\s*=', stripped)
-
-            if active_match:
-                key = active_match.group(1).lower()
+            match = active_match or commented_match
+            if match:
+                key = match.group(1).lower()
                 if key in new_vals:
                     result.append(
                         f"{key} = {_format_config_value(new_vals[key])}\n")
                     written_keys.add(key)
                     continue
-            elif commented_match:
-                key = commented_match.group(1).lower()
-                if key in new_vals:
-                    result.append(
-                        f"{key} = {_format_config_value(new_vals[key])}\n")
-                    written_keys.add(key)
-                    continue
-
             result.append(line)
 
         for key, val in new_vals.items():
@@ -273,48 +231,51 @@ def _write_config_file(config_dir, updates):
                 result.append(
                     f"{key} = {_format_config_value(val)}\n")
 
-        tmp_path = path + ".tmp"
-        with open(tmp_path, 'w') as f:
-            f.writelines(result)
-        os.rename(tmp_path, path)
+        write_text_atomic(path, ''.join(result))
         return True
 
 
+_corrupt_cache = {"key": None, "value": None}
+_corrupt_cache_lock = threading.Lock()
+
+
 def _read_corrupt_list(config_dir):
-    """Read corrupt.txt and corrupt_details.json, merge into list."""
+    """Read corrupt.txt and corrupt_details.json, merge into list.
+    Results are cached per (corrupt.txt, corrupt_details.json) mtime pair
+    so repeated polls don't re-stat every corrupt file."""
     corrupt_path = os.path.join(config_dir, "corrupt.txt")
     details_path = os.path.join(config_dir, "corrupt_details.json")
+
+    def _mtime(p):
+        try:
+            return os.path.getmtime(p)
+        except OSError:
+            return 0
+
+    key = (_mtime(corrupt_path), _mtime(details_path))
+    with _corrupt_cache_lock:
+        if _corrupt_cache["key"] == key and _corrupt_cache["value"] is not None:
+            return _corrupt_cache["value"]
 
     paths = []
     if os.path.isfile(corrupt_path):
         with open(corrupt_path, 'r', encoding='utf-8') as f:
             paths = [line.strip() for line in f if line.strip()]
 
-    details = {}
-    if os.path.isfile(details_path):
-        try:
-            with open(details_path, 'r', encoding='utf-8') as f:
-                details = json.load(f)
-        except (json.JSONDecodeError, ValueError):
-            pass
-
-    # Count total files per album directory (cached per call)
+    details = _load_corrupt_details(config_dir)
     dir_totals = {}
 
     result = []
     for p in paths:
         info = details.get(p, {})
-        if isinstance(info, str):
-            info = {"reason": info}
         entry = {"path": p, "reason": info.get("reason", "")}
-        if isinstance(info, dict) and "trackfileId" in info:
+        if "trackfileId" in info:
             entry["has_lidarr_id"] = True
         try:
             entry["size"] = os.path.getsize(p)
         except OSError:
             entry["size"] = 0
             entry["missing"] = True
-        # Count total files in this album directory
         d = os.path.dirname(p)
         if d not in dir_totals:
             try:
@@ -325,28 +286,30 @@ def _read_corrupt_list(config_dir):
                 dir_totals[d] = 0
         entry["album_total"] = dir_totals[d]
         result.append(entry)
+
+    with _corrupt_cache_lock:
+        _corrupt_cache["key"] = key
+        _corrupt_cache["value"] = result
     return result
 
 
 def _read_log_tail(config_dir, lines=200):
-    """Read last N lines of beats_check.log."""
+    """Read last N lines of beats_check.log. Returns (text, mtime)."""
     log_path = os.path.join(config_dir, "beats_check.log")
-    if not os.path.isfile(log_path):
-        return ""
+    try:
+        st = os.stat(log_path)
+    except OSError:
+        return ("", 0)
     try:
         with open(log_path, 'rb') as f:
-            try:
-                f.seek(0, 2)
-                size = f.tell()
-                chunk = min(size, 256 * 1024)
-                f.seek(max(0, size - chunk))
-                data = f.read().decode('utf-8', errors='replace')
-            except OSError:
-                return ""
+            size = st.st_size
+            chunk = min(size, 256 * 1024)
+            f.seek(max(0, size - chunk))
+            data = f.read().decode('utf-8', errors='replace')
         all_lines = data.splitlines()
-        return '\n'.join(all_lines[-lines:])
+        return ('\n'.join(all_lines[-lines:]), int(st.st_mtime))
     except OSError:
-        return ""
+        return ("", 0)
 
 
 def _read_summary(config_dir):
@@ -361,54 +324,39 @@ def _read_summary(config_dir):
         return {}
 
 
+def _prune_json(path, keys):
+    """Remove *keys* from a JSON-object file, atomic write on change."""
+    if not os.path.isfile(path):
+        return
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return
+    for k in keys:
+        data.pop(k, None)
+    try:
+        write_json_atomic(path, data)
+    except OSError:
+        pass
+
+
 def _ignore_corrupt_files(config_dir, files):
-    """Remove files from corrupt.txt and corrupt_details.json
-    without deleting the actual files. They'll reappear if the
-    next scan finds them corrupt again."""
+    """Remove files from corrupt.txt and the JSON state files without
+    deleting the actual files. They'll reappear on the next scan if
+    they're still corrupt."""
     corrupt_path = os.path.join(config_dir, "corrupt.txt")
-    details_path = os.path.join(config_dir, "corrupt_details.json")
-    tracking_path = os.path.join(config_dir, "corrupt_tracking.json")
     ignore_set = set(files)
 
-    # Remove from corrupt.txt
     if os.path.isfile(corrupt_path):
         with open(corrupt_path, 'r', encoding='utf-8') as f:
             remaining = [line.strip() for line in f
-                         if line.strip()
-                         and line.strip() not in ignore_set]
-        tmp = corrupt_path + ".tmp"
-        with open(tmp, 'w', encoding='utf-8') as f:
-            for p in remaining:
-                f.write(p + '\n')
-        os.rename(tmp, corrupt_path)
+                         if line.strip() and line.strip() not in ignore_set]
+        write_text_atomic(corrupt_path,
+                          ''.join(p + '\n' for p in remaining))
 
-    # Remove from corrupt_details.json
-    if os.path.isfile(details_path):
-        try:
-            with open(details_path, 'r', encoding='utf-8') as f:
-                details = json.load(f)
-            for fp in files:
-                details.pop(fp, None)
-            tmp = details_path + ".tmp"
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(details, f, indent=2)
-            os.rename(tmp, details_path)
-        except (json.JSONDecodeError, OSError):
-            pass
-
-    # Remove from corrupt_tracking.json
-    if os.path.isfile(tracking_path):
-        try:
-            with open(tracking_path, 'r', encoding='utf-8') as f:
-                tracking = json.load(f)
-            for fp in files:
-                tracking.pop(fp, None)
-            tmp = tracking_path + ".tmp"
-            with open(tmp, 'w', encoding='utf-8') as f:
-                json.dump(tracking, f, indent=2)
-            os.rename(tmp, tracking_path)
-        except (json.JSONDecodeError, OSError):
-            pass
+    _prune_json(os.path.join(config_dir, "corrupt_details.json"), files)
+    _prune_json(os.path.join(config_dir, "corrupt_tracking.json"), files)
 
 
 def _is_subpath(child, root):
@@ -456,11 +404,7 @@ def _trigger_rescan(config_dir, mode="report", fresh=False):
 # ---------------------------------------------------------------------------
 
 _MAX_BODY = 1_048_576  # 1 MB
-
-# Paths that don't require authentication
-_AUTH_EXEMPT_PATHS = frozenset({
-    '/api/auth-status', '/api/login', '/api/setup',
-})
+_SESSION_COOKIE = "beatscheck_session"
 
 
 class WebUIHandler(SimpleHTTPRequestHandler):
@@ -507,26 +451,23 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
     def _get_session_token(self):
         """Extract session token from cookies."""
-        cookie_header = self.headers.get('Cookie', '')
-        for part in cookie_header.split(';'):
-            part = part.strip()
-            if part.startswith('beatscheck_session='):
-                return part[len('beatscheck_session='):]
-        return None
+        jar = http.cookies.SimpleCookie()
+        jar.load(self.headers.get('Cookie', ''))
+        morsel = jar.get(_SESSION_COOKIE)
+        return morsel.value if morsel else None
 
     def _check_auth(self):
         """Check if request is authenticated. Returns True or
         sends 401 and returns False."""
         _cleanup_sessions()
-        token = self._get_session_token()
-        if _validate_session(token):
+        if _validate_session(self._get_session_token()):
             return True
         self._json_response({"error": "unauthorized"}, 401)
         return False
 
     def _session_cookie(self, token, max_age=_SESSION_MAX_AGE):
         """Build a Set-Cookie header value."""
-        return (f"beatscheck_session={token}; "
+        return (f"{_SESSION_COOKIE}={token}; "
                 f"HttpOnly; SameSite=Strict; Path=/; "
                 f"Max-Age={max_age}")
 
@@ -568,7 +509,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response(state)
 
         elif self.path == '/api/config':
-            entries = _read_config_file(config_dir)
+            entries = _read_config_entries(config_dir)
             for entry in entries:
                 if entry["key"] == "lidarr_api_key" \
                         and entry["value"]:
@@ -580,34 +521,35 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response(
                 {"files": files, "count": len(files)})
 
-        elif self.path == '/api/log' \
-                or self.path.startswith('/api/log?'):
-            params = _parse_query(self.path)
+        elif self.path == '/api/log' or self.path.startswith('/api/log?'):
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
             try:
                 lines = max(1, min(
-                    int(params.get('lines', 200)), 10000))
+                    int(params.get('lines', ['200'])[0]), 10000))
             except (ValueError, TypeError):
                 lines = 200
-            text = _read_log_tail(config_dir, lines)
-            self._json_response({"log": text})
+            since = params.get('since', ['0'])[0]
+            try:
+                since_mtime = int(since)
+            except (ValueError, TypeError):
+                since_mtime = 0
+            text, mtime = _read_log_tail(config_dir, lines)
+            if mtime and mtime == since_mtime:
+                self._json_response({"log": None, "mtime": mtime, "unchanged": True})
+            else:
+                self._json_response({"log": text, "mtime": mtime})
 
-        elif self.path == '/api/paths' \
-                or self.path.startswith('/api/paths?'):
-            # Folder picker — list children of a directory
-            params = _parse_query(self.path)
-            parent = urllib.parse.unquote(
-                params.get('dir', '/data'))
-            # Security: only allow browsing under /data
+        elif self.path == '/api/paths' or self.path.startswith('/api/paths?'):
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            parent = params.get('dir', ['/data'])[0]
             real = os.path.realpath(parent)
-            data_real = os.path.realpath('/data')
-            if not _is_subpath(real, data_real):
+            if not _is_subpath(real, os.path.realpath('/data')):
                 self._json_response(
                     {"error": "path outside /data"}, 403)
                 return
-            children = _list_dir(parent)
             self._json_response({
                 "path": parent,
-                "children": children,
+                "children": _list_dir(parent),
             })
 
         else:
@@ -794,17 +736,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
 
-        content_types = {
-            '.html': 'text/html; charset=utf-8',
-            '.css': 'text/css; charset=utf-8',
-            '.js': 'application/javascript; charset=utf-8',
-            '.json': 'application/json',
-            '.png': 'image/png',
-            '.svg': 'image/svg+xml',
-            '.ico': 'image/x-icon',
-        }
         ext = os.path.splitext(filename)[1].lower()
-        ct = content_types.get(ext, 'application/octet-stream')
+        ct, _ = mimetypes.guess_type(filename)
+        ct = ct or 'application/octet-stream'
+        if ext in ('.html', '.css', '.js'):
+            ct += '; charset=utf-8'
 
         with open(real, 'rb') as f:  # CodeQL[py/path-injection] false positive: real is validated by _is_subpath() above
             body = f.read()

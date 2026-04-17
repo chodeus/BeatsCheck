@@ -44,11 +44,9 @@ def cancel_scan():
 
 
 def _decode_mountinfo_path(path):
-    """Decode octal escapes in /proc/self/mountinfo paths.
-    e.g. \\040 -> space, \\011 -> tab."""
-    import re as _re
-    return _re.sub(r'\\([0-7]{3})',
-                   lambda m: chr(int(m.group(1), 8)), path)
+    """Decode octal escapes in /proc/self/mountinfo paths (\\040 -> space)."""
+    return re.sub(r'\\([0-7]{3})',
+                  lambda m: chr(int(m.group(1), 8)), path)
 
 
 def _get_host_mount_path(container_path):
@@ -129,6 +127,28 @@ def write_json_atomic(path, data):
     os.rename(tmp_path, path)
 
 
+def write_text_atomic(path, text):
+    """Write text atomically using a temp file + rename."""
+    tmp_path = path + ".tmp"
+    with open(tmp_path, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.rename(tmp_path, path)
+
+
+def _migrate_corrupt_details(details):
+    """Normalize legacy string values to {'reason': str}. Mutates in place."""
+    for k, v in list(details.items()):
+        if isinstance(v, str):
+            details[k] = {"reason": v}
+    return details
+
+
+def _load_corrupt_details(log_dir):
+    """Load and migrate corrupt_details.json."""
+    return _migrate_corrupt_details(
+        _load_json(os.path.join(log_dir, "corrupt_details.json")))
+
+
 def _load_json(path, default=None):
     """Load a JSON file, returning default if missing or invalid."""
     if default is None:
@@ -170,7 +190,6 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
     tracking_path = os.path.join(config_dir, "corrupt_tracking.json")
     log_file = os.path.join(config_dir, "beats_check.log")
 
-    # Load allowlist from corrupt.txt
     allowed = _load_lines_as_set(corrupt_path)
 
     # Resolve music_dir realpath once for containment checks
@@ -198,19 +217,16 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
     if not validated:
         return {"deleted": [], "errors": errors, "count": 0}
 
-    # Load Lidarr config and corrupt details
     lidarr_url = os.environ.get("LIDARR_URL", "").rstrip("/")
     lidarr_key = _load_lidarr_api_key()
     lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
-    details = _load_json(details_path)
+    details = _load_corrupt_details(config_dir)
 
-    # Split into Lidarr-tracked and non-Lidarr paths
     lidarr_paths = []
     direct_paths = []
     for fp in validated:
         detail = details.get(fp, {})
         if (lidarr_url and lidarr_key
-                and isinstance(detail, dict)
                 and "trackfileId" in detail):
             lidarr_paths.append(fp)
         else:
@@ -243,7 +259,6 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
                         {"path": fp,
                          "error": "Lidarr API delete failed"})
 
-    # Direct delete for non-Lidarr files
     for fp in direct_paths:
         try:
             os.remove(validated[fp])
@@ -251,7 +266,6 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
         except OSError as e:
             errors.append({"path": fp, "error": str(e)})
 
-    # Update all state files
     if deleted:
         deleted_set = set(deleted)
         remaining = sorted(allowed - deleted_set)
@@ -362,7 +376,8 @@ def _clear_resume_if_fresh(cfg):
 def _idle_wait(log_dir, timeout_seconds, lidarr_url=None, lidarr_api_key=None):
     """Sleep until timeout, shutdown, or .rescan trigger.
     Drains the Lidarr search queue during idle (max 5/hour).
-    Returns mode override string if rescan triggered, False otherwise."""
+    Returns the raw trigger string when a rescan is requested (may be empty
+    or include a 'fresh:' prefix); returns None on timeout or shutdown."""
     heartbeat_path = os.path.join(log_dir, ".heartbeat")
     deadline = time.time() + timeout_seconds if timeout_seconds is not None else None
     last_search_time = 0
@@ -371,16 +386,15 @@ def _idle_wait(log_dir, timeout_seconds, lidarr_url=None, lidarr_api_key=None):
         trigger = _read_rescan_trigger(log_dir)
         if trigger is not None:
             logger.info("Rescan requested.")
-            return trigger if trigger else True
+            return trigger
         if deadline and time.time() >= deadline:
-            return False
-        # Drain search queue: 1 album every 720s (5/hour)
+            return None
         if (lidarr_url and lidarr_api_key
                 and time.time() - last_search_time >= 720):
             if _search_queue_drain_one(log_dir, lidarr_url, lidarr_api_key):
                 last_search_time = time.time()
         time.sleep(30)
-    return False
+    return None
 
 
 # --- Scan lock ---
@@ -435,13 +449,14 @@ def _clean_ffmpeg_errors(stderr):
 
 def check_audio_file(file_path):
     """Decode-test a single audio file. Pure function — no shared state.
-    Returns (file_path, is_corrupt, reason)."""
+    Returns (file_path, is_corrupt, reason, size)."""
     try:
         file_size = os.path.getsize(file_path)
         if file_size < 1024:
-            return (file_path, True, f"File too small ({file_size} bytes)")
+            return (file_path, True,
+                    f"File too small ({file_size} bytes)", file_size)
     except OSError as e:
-        return (file_path, True, f"File not accessible: {e}")
+        return (file_path, True, f"File not accessible: {e}", 0)
 
     try:
         result = subprocess.run(
@@ -453,13 +468,13 @@ def check_audio_file(file_path):
             timeout=600,
         )
     except subprocess.TimeoutExpired:
-        return (file_path, True, "Decode timed out (>10 minutes)")
+        return (file_path, True, "Decode timed out (>10 minutes)", file_size)
 
     if result.returncode != 0:
-        reason = _clean_ffmpeg_errors(result.stderr)
-        return (file_path, True, reason)
+        return (file_path, True,
+                _clean_ffmpeg_errors(result.stderr), file_size)
 
-    return (file_path, False, None)
+    return (file_path, False, None, file_size)
 
 
 def collect_audio_files(input_folder, min_age_minutes=30):
@@ -587,13 +602,8 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
             f.write(p + "\n")
     os.rename(tmp_corrupt, corrupt_list_path)
 
-    # Resolve any remaining Lidarr IDs not resolved inline during the scan
-    # (e.g. files that were already in corrupt_details from a previous scan)
     if lidarr_url and lidarr_api_key and corrupt_details:
-        unresolved = [p for p, v in corrupt_details.items()
-                      if isinstance(v, dict) and "trackfileId" not in v]
-        if unresolved:
-            _resolve_lidarr_ids(corrupt_details, lidarr_url, lidarr_api_key)
+        _resolve_lidarr_ids(corrupt_details, lidarr_url, lidarr_api_key)
 
     write_json_atomic(details_path, corrupt_details)
 
@@ -606,12 +616,8 @@ def _handle_nothing_to_do(log_dir, corrupt_list_path, output_folder,
                           all_files, total_library_size, mode):
     """Fast path when every file has already been processed."""
     logger.debug("Nothing to do.")
-    if _webui_app_state is not None:
-        _webui_app_state.update(status="idle", scan_progress=None)
-    existing_details = _load_json(
-        os.path.join(log_dir, "corrupt_details.json"))
-    # Skip Lidarr ID resolution — no new corrupt files to resolve.
-    # Existing entries keep whatever IDs they already have.
+    _webui_app_state.update(status="idle", scan_progress=None)
+    existing_details = _load_corrupt_details(log_dir)
     _finalize_scan(log_dir, corrupt_list_path, existing_details,
                    output_folder, {
                        "version": __version__,
@@ -639,12 +645,10 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     all_files = collect_audio_files(input_folder, min_age_minutes)
     total_library_size = _total_file_size(all_files)
 
-    # Push library size to WebUI immediately so the dashboard shows it
-    if _webui_app_state is not None:
-        _webui_app_state.update(
-            library_size_human=format_size(total_library_size),
-            library_files=len(all_files),
-        )
+    _webui_app_state.update(
+        library_size_human=format_size(total_library_size),
+        library_files=len(all_files),
+    )
 
     files_to_check = [f for f in all_files if f not in already_processed]
     skipped = len(all_files) - len(files_to_check)
@@ -668,8 +672,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
     corrupt_size = 0
     start_time = time.time()
 
-    corrupt_details = _load_json(
-        os.path.join(log_dir, "corrupt_details.json"))
+    corrupt_details = _load_corrupt_details(log_dir)
     existing_corrupt = _load_lines_as_set(corrupt_list_path)
 
     heartbeat_path = os.path.join(log_dir, ".heartbeat")
@@ -692,7 +695,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
             nonlocal checked, corrupted, corrupt_size
             file_path = pending.pop(future)
             try:
-                file_path, is_corrupt, reason = future.result()
+                file_path, is_corrupt, reason, size = future.result()
             except Exception as exc:
                 logger.exception("Unexpected error checking %s",
                                  file_path)
@@ -711,10 +714,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
 
             if is_corrupt:
                 corrupted += 1
-                try:
-                    corrupt_size += os.path.getsize(file_path)
-                except OSError:
-                    pass
+                corrupt_size += size
                 _handle_corrupt_file(
                     file_path, reason, mode, input_folder,
                     output_folder, corrupt_log, log,
@@ -811,8 +811,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
         log.flush()
 
     # Mark idle before finalization — Lidarr ID resolution can take minutes
-    if _webui_app_state is not None:
-        _webui_app_state.update(status="idle", scan_progress=None)
+    _webui_app_state.update(status="idle", scan_progress=None)
 
     _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
                    output_folder, {
@@ -854,11 +853,8 @@ def run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
 # --- Delete mode ---
 
 def _get_detail_reason(corrupt_details, path):
-    """Extract reason string from corrupt_details (handles old/new format)."""
-    val = corrupt_details.get(path, "")
-    if isinstance(val, dict):
-        return val.get("reason", "")
-    return val
+    """Extract reason string from a migrated corrupt_details dict."""
+    return corrupt_details.get(path, {}).get("reason", "")
 
 
 def _display_folder_files(corrupt_files, corrupt_details):
@@ -953,17 +949,14 @@ def _handle_files_delete_lidarr(file_paths, log, corrupt_details,
                                 lidarr_blocklist):
     """Delete specific files via Lidarr API, one album at a time.
     Returns (folders_del, files_del, skipped, album_ids)."""
-    # Group by album
     album_to_tfids = {}
     direct_paths = []
 
     for fp in file_paths:
         detail = corrupt_details.get(fp, {})
-        if isinstance(detail, dict) and "trackfileId" in detail:
+        if "trackfileId" in detail:
             aid = detail.get("albumId", 0)
-            if aid not in album_to_tfids:
-                album_to_tfids[aid] = []
-            album_to_tfids[aid].append(detail["trackfileId"])
+            album_to_tfids.setdefault(aid, []).append(detail["trackfileId"])
         else:
             direct_paths.append(fp)
 
@@ -1019,7 +1012,6 @@ def _handle_files_delete_lidarr(file_paths, log, corrupt_details,
             log.write(f"ERROR: Bulk delete failed for album "
                       f"{album_id}\n")
 
-    # Direct delete for files not tracked by Lidarr
     for fp in direct_paths:
         try:
             os.remove(fp)
@@ -1047,27 +1039,24 @@ def _resolve_folder_trackfiles(folder, existing, corrupt_details,
     except OSError:
         return None
 
-    # Start with stored IDs from corrupt_details
-    file_to_tfid = {}
-    for fp in all_files:
-        detail = corrupt_details.get(fp, {})
-        if isinstance(detail, dict) and "trackfileId" in detail:
-            file_to_tfid[fp] = detail["trackfileId"]
+    file_to_tfid = {
+        fp: corrupt_details[fp]["trackfileId"]
+        for fp in all_files
+        if "trackfileId" in corrupt_details.get(fp, {})
+    }
 
-    # Fetch remaining trackfile IDs from Lidarr by album
     unmatched = [fp for fp in all_files if fp not in file_to_tfid]
     if unmatched and album_ids:
+        album_tfs = []
         for aid in album_ids:
-            album_tfs = _lidarr_get_trackfiles_by_album(
-                lidarr_url, lidarr_api_key, aid)
-            for tf in album_tfs:
-                for fp in unmatched:
-                    score = _suffix_match_path(fp, tf["path"])
-                    if score >= 1:
-                        file_to_tfid[fp] = tf["id"]
-                        if tf.get("albumId"):
-                            album_ids.add(tf["albumId"])
-                        break
+            album_tfs.extend(_lidarr_get_trackfiles_by_album(
+                lidarr_url, lidarr_api_key, aid))
+        for fp in unmatched:
+            match = _best_suffix_match(fp, album_tfs, min_score=1)
+            if match:
+                file_to_tfid[fp] = match["id"]
+                if match.get("albumId"):
+                    album_ids.add(match["albumId"])
         unmatched = [fp for fp in all_files if fp not in file_to_tfid]
 
     return all_files, file_to_tfid, unmatched
@@ -1078,12 +1067,11 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
                                  lidarr_api_key, lidarr_blocklist):
     """Delete entire folder via Lidarr API.
     Returns (folders_del, files_del, skipped, album_ids)."""
-    # Collect album IDs from corrupt file details
-    album_ids = set()
-    for cf in existing:
-        detail = corrupt_details.get(cf, {})
-        if isinstance(detail, dict) and detail.get("albumId"):
-            album_ids.add(detail["albumId"])
+    album_ids = {
+        corrupt_details[cf]["albumId"]
+        for cf in existing
+        if corrupt_details.get(cf, {}).get("albumId")
+    }
 
     resolved = _resolve_folder_trackfiles(
         folder, existing, corrupt_details, album_ids,
@@ -1097,7 +1085,6 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
     tf_ids = list(file_to_tfid.values())
     deleted = 0
 
-    # Blocklist before deletion
     if lidarr_blocklist and album_ids:
         bl_ok, bl_fail = _lidarr_blocklist_albums(
             lidarr_url, lidarr_api_key, album_ids)
@@ -1111,7 +1098,6 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
             log.write(f"LIDARR BLOCKLIST: {bl_ok} albums\n")
             print(f"           -> Lidarr: blocklisted {bl_ok} albums")
 
-    # Bulk delete via Lidarr API
     if tf_ids:
         result = _lidarr_delete_trackfiles_bulk(
             lidarr_url, lidarr_api_key, tf_ids)
@@ -1175,7 +1161,7 @@ def _load_corrupt_file_list(corrupt_list_path, log_dir):
     with open(corrupt_list_path, 'r', encoding='utf-8') as f:
         all_paths = [line.strip() for line in f if line.strip()]
 
-    corrupt_details = _load_json(os.path.join(log_dir, "corrupt_details.json"))
+    corrupt_details = _load_corrupt_details(log_dir)
 
     seen = set()
     files = []
@@ -1617,26 +1603,41 @@ def _build_lidarr_index(base_url, api_key):
     """Pre-fetch all Lidarr trackfiles into a basename-keyed index.
 
     Returns ``{basename: [{id, albumId, artistId, path}, ...]}``.
-    The index is built once at scan start so corrupt files can be
-    resolved immediately instead of waiting until finalization.
-    Returns ``None`` if the artist list or trackfiles cannot be fetched.
+    Tries the unfiltered trackfile endpoint first (one API call); falls
+    back to per-artist queries if the bulk call fails or is unavailable.
+    Returns ``None`` if neither path succeeds.
     """
     try:
+        bulk = _lidarr_request(
+            f"{base_url}/api/v1/trackfile", api_key)
+        if isinstance(bulk, list) and bulk:
+            index = {}
+            for tf in bulk:
+                index.setdefault(
+                    os.path.basename(tf["path"]), []).append({
+                        "id": tf["id"],
+                        "albumId": tf.get("albumId", 0),
+                        "artistId": tf.get("artistId", 0),
+                        "path": tf["path"],
+                    })
+            logger.info("  Lidarr: indexed %d trackfiles",
+                        sum(len(v) for v in index.values()))
+            return index
+
         artists = _lidarr_get_artists(base_url, api_key)
         if not artists:
             return None
         index = {}
         for artist in artists:
-            trackfiles = _lidarr_get_trackfiles(
-                base_url, api_key, artist["id"])
-            for tf in trackfiles:
-                basename = os.path.basename(tf["path"])
-                index.setdefault(basename, []).append({
-                    "id": tf["id"],
-                    "albumId": tf["albumId"],
-                    "artistId": artist["id"],
-                    "path": tf["path"],
-                })
+            for tf in _lidarr_get_trackfiles(
+                    base_url, api_key, artist["id"]):
+                index.setdefault(
+                    os.path.basename(tf["path"]), []).append({
+                        "id": tf["id"],
+                        "albumId": tf["albumId"],
+                        "artistId": artist["id"],
+                        "path": tf["path"],
+                    })
         logger.info("  Lidarr: indexed %d trackfiles from %d artists",
                     sum(len(v) for v in index.values()), len(artists))
         return index
@@ -1646,42 +1647,26 @@ def _build_lidarr_index(base_url, api_key):
         return None
 
 
+def _apply_lidarr_match(detail, match):
+    """Copy ID fields from a Lidarr trackfile match into a detail dict."""
+    detail["trackfileId"] = match["id"]
+    detail["albumId"] = match["albumId"]
+    detail["artistId"] = match["artistId"]
+    detail["lidarrPath"] = match["path"]
+
+
 def _resolve_single_lidarr_id(file_path, corrupt_details, lidarr_index):
     """Resolve Lidarr IDs for one corrupt file using the pre-built index."""
-    basename = os.path.basename(file_path)
-    candidates = lidarr_index.get(basename)
-    if not candidates:
-        return
-    best_match = None
-    best_score = 0
-    best_path = None
-    ambiguous = False
-    for entry in candidates:
-        score = _suffix_match_path(file_path, entry["path"])
-        if score > best_score:
-            best_score = score
-            best_match = entry
-            best_path = entry["path"]
-            ambiguous = False
-        elif score == best_score and score >= 1:
-            ambiguous = True
-    # Accept score >= 2 always; score == 1 only if unambiguous
-    if best_match and not ambiguous and best_score >= 1:
-        detail = corrupt_details.get(file_path)
-        if isinstance(detail, dict):
-            detail["trackfileId"] = best_match["id"]
-            detail["albumId"] = best_match["albumId"]
-            detail["artistId"] = best_match["artistId"]
-            detail["lidarrPath"] = best_path
+    candidates = lidarr_index.get(os.path.basename(file_path)) or []
+    match = _best_suffix_match(file_path, candidates, min_score=1)
+    if match and file_path in corrupt_details:
+        _apply_lidarr_match(corrupt_details[file_path], match)
 
 
 def _suffix_match_path(container_path, lidarr_path):
-    """Check if two paths refer to the same file by comparing path
-    components from the right. Returns the number of matching suffix
-    components (0 = no match, higher = more specific match)."""
+    """Number of matching path components from the right. 0 = no match."""
     c_parts = container_path.replace("\\", "/").split("/")
     l_parts = lidarr_path.replace("\\", "/").split("/")
-    # Compare from the right — filename must match at minimum
     matches = 0
     for cp, lp in zip(reversed(c_parts), reversed(l_parts)):
         if cp == lp:
@@ -1691,115 +1676,59 @@ def _suffix_match_path(container_path, lidarr_path):
     return matches
 
 
+def _best_suffix_match(container_path, candidates, min_score=1):
+    """Pick the best-scoring candidate for a container path.
+    *candidates* is an iterable of dicts with a "path" key.
+    Returns the winning candidate, or None if no match meets *min_score*
+    or if the top score is ambiguous (tied between multiple candidates)."""
+    best = None
+    best_score = 0
+    ambiguous = False
+    for c in candidates:
+        score = _suffix_match_path(container_path, c["path"])
+        if score > best_score:
+            best = c
+            best_score = score
+            ambiguous = False
+        elif score == best_score and score >= 1:
+            ambiguous = True
+    if best and best_score >= min_score and not ambiguous:
+        return best
+    return None
+
+
 def _resolve_lidarr_ids(corrupt_details, base_url, api_key):
     """Post-scan: enrich corrupt_details with Lidarr trackfileId and albumId.
-    Uses suffix matching to handle different container mount paths."""
+    Tries a strict filename+folder match first, then a looser filename-only
+    match. Handles different container mount paths via suffix matching."""
     unresolved = [p for p, v in corrupt_details.items()
-                  if isinstance(v, dict) and "trackfileId" not in v]
+                  if "trackfileId" not in v]
     if not unresolved:
         return
 
-    artists = _lidarr_get_artists(base_url, api_key)
-    if not artists:
-        logger.warning("Lidarr: could not fetch artists for ID resolution")
+    index = _build_lidarr_index(base_url, api_key)
+    if index is None:
+        logger.warning("Lidarr: could not fetch trackfiles for ID resolution")
         return
 
-    # Pre-filter: only fetch trackfiles for artists that could match.
-    # Build set of corrupt file basenames for quick lookup.
-    unresolved_basenames = {os.path.basename(p) for p in unresolved}
-    remaining = set(unresolved)
+    # Two passes: strict (>=2 components) then loose (>=1 unambiguous).
+    # Strict avoids wrong matches when many files share a filename.
+    matched = 0
+    for min_score in (2, 1):
+        for path in list(unresolved):
+            candidates = index.get(os.path.basename(path)) or []
+            match = _best_suffix_match(path, candidates, min_score=min_score)
+            if match:
+                _apply_lidarr_match(corrupt_details[path], match)
+                unresolved.remove(path)
+                matched += 1
 
-    # Build trackfile map incrementally — stop when all resolved
-    all_trackfiles = {}
-    artists_checked = 0
-    for artist in artists:
-        if not remaining:
-            break
-        trackfiles = _lidarr_get_trackfiles(base_url, api_key, artist["id"])
-        artists_checked += 1
-        # Only index this artist's trackfiles if any basename matches
-        artist_basenames = {os.path.basename(tf["path"]) for tf in trackfiles}
-        if not artist_basenames & unresolved_basenames:
-            continue
-        for tf in trackfiles:
-            all_trackfiles[tf["path"]] = {
-                "id": tf["id"],
-                "albumId": tf["albumId"],
-                "artistId": artist["id"],
-            }
-        # Try to resolve after each relevant artist
-        newly_matched = []
-        for container_path in list(remaining):
-            best_match = None
-            best_score = 0
-            best_lidarr_path = None
-            ambiguous = False
-            for lidarr_path, tf_info in all_trackfiles.items():
-                score = _suffix_match_path(container_path, lidarr_path)
-                if score > best_score:
-                    best_score = score
-                    best_match = tf_info
-                    best_lidarr_path = lidarr_path
-                    ambiguous = False
-                elif score == best_score and score >= 1:
-                    ambiguous = True
-            if best_match and best_score >= 2 and not ambiguous:
-                # Strong match (filename + folder) — resolve now
-                newly_matched.append(
-                    (container_path, best_match, best_lidarr_path))
-                remaining.discard(container_path)
-        for container_path, match, lpath in newly_matched:
-            detail = corrupt_details[container_path]
-            detail["trackfileId"] = match["id"]
-            detail["albumId"] = match["albumId"]
-            detail["artistId"] = match["artistId"]
-            detail["lidarrPath"] = lpath
-
-    # Second pass for remaining: accept score==1 if unambiguous
-    matched = len(unresolved) - len(remaining)
-    for container_path in list(remaining):
-        best_match = None
-        best_score = 0
-        best_lidarr_path = None
-        ambiguous = False
-        for lidarr_path, tf_info in all_trackfiles.items():
-            score = _suffix_match_path(container_path, lidarr_path)
-            if score > best_score:
-                best_score = score
-                best_match = tf_info
-                best_lidarr_path = lidarr_path
-                ambiguous = False
-            elif score == best_score and score >= 1:
-                ambiguous = True
-        if best_match and best_score >= 1 and not ambiguous:
-            detail = corrupt_details[container_path]
-            detail["trackfileId"] = best_match["id"]
-            detail["albumId"] = best_match["albumId"]
-            detail["artistId"] = best_match["artistId"]
-            detail["lidarrPath"] = best_lidarr_path
-            matched += 1
-            remaining.discard(container_path)
-        elif ambiguous:
-            logger.debug("  Lidarr: ambiguous match for %s "
-                         "(multiple trackfiles with same name)",
-                         os.path.basename(container_path))
-
-    already_resolved = len(corrupt_details) - len(unresolved)
     if matched:
-        logger.info("  Lidarr: resolved %d/%d remaining corrupt files "
-                    "to trackfile IDs (checked %d/%d artists)",
-                    matched, len(unresolved),
-                    artists_checked, len(artists))
-    if remaining:
-        if already_resolved:
-            logger.info("  Lidarr: %d/%d corrupt files resolved during "
-                        "scan, %d could not be matched",
-                        already_resolved,
-                        already_resolved + len(remaining),
-                        len(remaining))
-        else:
-            logger.warning("  Lidarr: could not match any corrupt files "
-                           "to Lidarr trackfiles")
+        logger.info("  Lidarr: resolved %d corrupt files to trackfile IDs",
+                    matched)
+    if unresolved:
+        logger.info("  Lidarr: %d corrupt files could not be matched",
+                    len(unresolved))
 
 
 def _lidarr_get_artists(base_url, api_key):
@@ -1985,17 +1914,15 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
     Falls back to direct filesystem delete when Lidarr API fails.
     Sequential processing prevents flooding indexers with searches.
     Returns (deleted_count, affected_album_ids)."""
-    details_path = os.path.join(
-        log_dir or os.path.dirname(log_file), "corrupt_details.json")
-    corrupt_details = _load_json(details_path)
+    corrupt_details = _load_corrupt_details(
+        log_dir or os.path.dirname(log_file))
 
-    # Group corrupt paths by album, keeping both path and stored tfid
     album_to_entries = {}
     non_lidarr_paths = []
 
     for path in corrupt_paths:
         detail = corrupt_details.get(path, {})
-        if isinstance(detail, dict) and "trackfileId" in detail:
+        if "trackfileId" in detail:
             aid = detail.get("albumId", 0)
             if aid not in album_to_entries:
                 album_to_entries[aid] = []
@@ -2522,25 +2449,20 @@ def _apply_config_file(config_dir):
         print(f"Warning: could not read config file {path}: {e}")
 
 
-def _parse_env_int(name, default, label=None):
-    """Parse an integer environment variable, exit on error."""
+def _env(name, default, cast, strict=False, label=None):
+    """Read and cast an environment variable.
+    On cast failure: sys.exit(1) if *strict*, else return *default*."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
     try:
-        val = int(os.environ.get(name, str(default)))
-        return val
-    except ValueError:
-        print(f"Invalid {name} value. Must be an integer"
-              f"{' (' + label + ')' if label else ''}.")
-        sys.exit(1)
-
-
-def _parse_env_float(name, default, label=None):
-    """Parse a float environment variable, exit on error."""
-    try:
-        return float(os.environ.get(name, str(default)))
-    except ValueError:
-        print(f"Invalid {name} value. Must be a number"
-              f"{' (' + label + ')' if label else ''}.")
-        sys.exit(1)
+        return cast(raw)
+    except (ValueError, TypeError):
+        if strict:
+            print(f"Invalid {name} value"
+                  f"{' (' + label + ')' if label else ''}.")
+            sys.exit(1)
+        return default
 
 
 def _parse_env_bool(name, default=False):
@@ -2575,7 +2497,7 @@ def _load_config():
         print(f"Invalid MODE '{mode}'. Must be: report, move, delete, setup")
         sys.exit(1)
 
-    workers = _parse_env_int("WORKERS", 4)
+    workers = _env("WORKERS", 4, int, strict=True)
     if workers < 1:
         print("Invalid WORKERS value. Must be a positive integer.")
         sys.exit(1)
@@ -2588,27 +2510,19 @@ def _load_config():
         mode=mode,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         workers=workers,
-        run_interval=_parse_env_float("RUN_INTERVAL", 0, "hours"),
-        delete_after=_parse_env_float("DELETE_AFTER", 0, "days"),
-        max_auto_delete=_parse_env_int("MAX_AUTO_DELETE", 50),
-        min_age_minutes=_parse_env_int("MIN_FILE_AGE", 30, "minutes"),
-        max_log_mb=_parse_env_int("MAX_LOG_MB", 50, "MB"),
+        run_interval=_env("RUN_INTERVAL", 0.0, float, strict=True, label="hours"),
+        delete_after=_env("DELETE_AFTER", 0.0, float, strict=True, label="days"),
+        max_auto_delete=_env("MAX_AUTO_DELETE", 50, int, strict=True),
+        min_age_minutes=_env("MIN_FILE_AGE", 30, int, strict=True, label="minutes"),
+        max_log_mb=_env("MAX_LOG_MB", 50, int, strict=True, label="MB"),
         lidarr_url=os.environ.get("LIDARR_URL", "").rstrip("/"),
         lidarr_api_key=_load_lidarr_api_key(),
         lidarr_search=_parse_env_bool("LIDARR_SEARCH", False),
         lidarr_blocklist=_parse_env_bool("LIDARR_BLOCKLIST", False),
         webui=_parse_env_bool("WEBUI", False),
-        webui_port=_parse_env_int("WEBUI_PORT", 8484),
+        webui_port=_env("WEBUI_PORT", 8484, int, strict=True),
         fresh_rescan=False,
     )
-
-
-def _env_safe(name, fallback, converter):
-    """Read an env var and convert it, returning fallback on failure."""
-    try:
-        return converter(os.environ.get(name, fallback))
-    except (ValueError, TypeError):
-        return fallback
 
 
 def _reload_config(cfg):
@@ -2639,16 +2553,12 @@ def _reload_config(cfg):
     cfg.output_folder = os.environ.get(
         "OUTPUT_DIR", cfg.output_folder).rstrip("/")
     cfg.mode = (os.environ.get("MODE") or cfg.mode).lower()
-    cfg.workers = max(1, _env_safe("WORKERS", cfg.workers, int))
-    cfg.run_interval = _env_safe(
-        "RUN_INTERVAL", cfg.run_interval, float)
-    cfg.delete_after = _env_safe(
-        "DELETE_AFTER", cfg.delete_after, float)
-    cfg.max_auto_delete = _env_safe(
-        "MAX_AUTO_DELETE", cfg.max_auto_delete, int)
-    cfg.min_age_minutes = _env_safe(
-        "MIN_FILE_AGE", cfg.min_age_minutes, int)
-    cfg.max_log_mb = _env_safe("MAX_LOG_MB", cfg.max_log_mb, int)
+    cfg.workers = max(1, _env("WORKERS", cfg.workers, int))
+    cfg.run_interval = _env("RUN_INTERVAL", cfg.run_interval, float)
+    cfg.delete_after = _env("DELETE_AFTER", cfg.delete_after, float)
+    cfg.max_auto_delete = _env("MAX_AUTO_DELETE", cfg.max_auto_delete, int)
+    cfg.min_age_minutes = _env("MIN_FILE_AGE", cfg.min_age_minutes, int)
+    cfg.max_log_mb = _env("MAX_LOG_MB", cfg.max_log_mb, int)
     cfg.lidarr_url = os.environ.get(
         "LIDARR_URL", cfg.lidarr_url).rstrip("/")
     cfg.lidarr_api_key = _load_lidarr_api_key()
@@ -2664,33 +2574,37 @@ def _run_setup_idle(log_dir, lidarr_url=None, lidarr_api_key=None):
     Drains the Lidarr search queue during idle if configured."""
     logger.info("Setup mode — container is idle. "
                 "Start scanning with: rescan report")
-    result = _idle_wait(log_dir, None, lidarr_url, lidarr_api_key)
-    if isinstance(result, str) and result in ("report", "move"):
-        return result
-    if result is True:
-        return "report"
-    return None
+    trigger = _idle_wait(log_dir, None, lidarr_url, lidarr_api_key)
+    if trigger is None:
+        return None
+    stripped = trigger[len("fresh:"):] if trigger.startswith("fresh:") else trigger
+    return stripped if stripped in ("report", "move") else "report"
 
 
-_webui_app_state = None
+class _NullAppState:
+    """No-op stand-in used when the WebUI is disabled."""
+    def update(self, **kwargs):
+        pass
+
+    def snapshot(self):
+        return {}
+
+    def get(self, key=None):
+        return None if key else {}
 
 
-def _webui_update(cfg, **kwargs):
-    """Update WebUI state if enabled. Safe to call even when WebUI is off."""
-    if _webui_app_state is not None:
-        _webui_app_state.update(**kwargs)
+_webui_app_state = _NullAppState()
 
 
 def _webui_progress(current, total, corrupted, current_file):
     """Update WebUI scan progress. Called from scan loop."""
-    if _webui_app_state is not None:
-        _webui_app_state.update(
-            scan_progress={
-                "current": current, "total": total,
-                "file": current_file},
-            corrupt_count=corrupted,
-            total_scanned=current,
-        )
+    _webui_app_state.update(
+        scan_progress={
+            "current": current, "total": total,
+            "file": current_file},
+        corrupt_count=corrupted,
+        total_scanned=current,
+    )
 
 
 # --- Main helpers ---
@@ -2750,13 +2664,12 @@ def _wait_after_cancel(cfg):
     """After a cancelled scan, go idle and wait for next rescan trigger.
     Returns True if shutdown requested (caller should break)."""
     logger.info("Scan cancelled. Container is idle.")
-    _webui_update(cfg, status="idle", scan_progress=None)
-    result = _idle_wait(
+    _webui_app_state.update(status="idle", scan_progress=None)
+    trigger = _idle_wait(
         cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
-    if result is False:
+    if trigger is None:
         return True
-    if isinstance(result, str) and result in ("report", "move"):
-        cfg.mode = result
+    if _apply_rescan_trigger(trigger, cfg):
         logger.info("Mode changed to: %s", cfg.mode)
     return False
 
@@ -2767,13 +2680,12 @@ def _post_scan_wait(cfg):
     if cfg.run_interval <= 0:
         logger.info("Scan complete. Container is idle. "
                     "Rescan with: rescan [report|move]")
-        result = _idle_wait(
+        trigger = _idle_wait(
             cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
-        if result is False:
+        if trigger is None:
             return True
-        if isinstance(result, str):
-            if _apply_rescan_trigger(result, cfg):
-                logger.info("Mode changed to: %s", cfg.mode)
+        if _apply_rescan_trigger(trigger, cfg):
+            logger.info("Mode changed to: %s", cfg.mode)
         return False
 
     next_run = time.strftime(
@@ -2784,16 +2696,14 @@ def _post_scan_wait(cfg):
         "Next scan at %s (%sh interval). Waiting...",
         next_run, cfg.run_interval
     )
-    result = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
-                        cfg.lidarr_url, cfg.lidarr_api_key)
-    if result is False:
+    trigger = _idle_wait(cfg.log_dir, cfg.run_interval * 3600,
+                         cfg.lidarr_url, cfg.lidarr_api_key)
+    if trigger is None:
         if shutdown_requested:
             return True
         logger.info("Scheduled scan starting.")
-    else:
-        if isinstance(result, str):
-            if _apply_rescan_trigger(result, cfg):
-                logger.info("Mode changed to: %s", cfg.mode)
+    elif _apply_rescan_trigger(trigger, cfg):
+        logger.info("Mode changed to: %s", cfg.mode)
     return False
 
 
@@ -2827,7 +2737,7 @@ def main():
         logger.info("  Search queue: %d albums pending", len(queue))
 
     if cfg.mode == "setup":
-        _webui_update(cfg, status="setup", mode="setup")
+        _webui_app_state.update(status="setup", mode="setup")
         new_mode = _run_setup_idle(cfg.log_dir, cfg.lidarr_url,
                                    cfg.lidarr_api_key)
         if new_mode:
@@ -2854,27 +2764,25 @@ def main():
         _reload_config(cfg)
         _maybe_rotate_logs(cfg)
 
-        # Validate paths before scanning
         if not os.path.isdir(cfg.input_folder):
             logger.error("Music directory not found: %s",
                          cfg.input_folder)
-            _webui_update(cfg, status="idle", mode=cfg.mode)
-            result = _idle_wait(
+            _webui_app_state.update(status="idle", mode=cfg.mode)
+            trigger = _idle_wait(
                 cfg.log_dir, None, cfg.lidarr_url,
                 cfg.lidarr_api_key)
-            if result is False:
+            if trigger is None:
                 break
-            if isinstance(result, str):
-                _apply_rescan_trigger(result, cfg)
+            _apply_rescan_trigger(trigger, cfg)
             continue
 
-        if cfg.mode == "move":
-            if not _validate_move_mode(cfg):
-                cfg.mode = "report"
-                _webui_update(cfg, mode="report")
+        if cfg.mode == "move" and not _validate_move_mode(cfg):
+            cfg.mode = "report"
+            _webui_app_state.update(mode="report")
 
         _clear_resume_if_fresh(cfg)
-        _webui_update(cfg, status="scanning", mode=cfg.mode, scan_progress=None)
+        _webui_app_state.update(
+            status="scanning", mode=cfg.mode, scan_progress=None)
         scan_failed = False
         try:
             run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
@@ -2889,8 +2797,7 @@ def main():
                 break
             continue
 
-        # Mark scan complete immediately so the UI reflects idle status
-        _webui_update(cfg, status="idle", scan_progress=None)
+        _webui_app_state.update(status="idle", scan_progress=None)
 
         if not scan_failed and cfg.delete_after > 0:
             try:
