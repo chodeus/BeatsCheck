@@ -1603,27 +1603,11 @@ def _build_lidarr_index(base_url, api_key):
     """Pre-fetch all Lidarr trackfiles into a basename-keyed index.
 
     Returns ``{basename: [{id, albumId, artistId, path}, ...]}``.
-    Tries the unfiltered trackfile endpoint first (one API call); falls
-    back to per-artist queries if the bulk call fails or is unavailable.
-    Returns ``None`` if neither path succeeds.
+    Queries per-artist — Lidarr's trackfile endpoint requires a filter
+    (artistId/albumId) and rejects unfiltered requests with HTTP 400.
+    Returns ``None`` if the artist list cannot be fetched.
     """
     try:
-        bulk = _lidarr_request(
-            f"{base_url}/api/v1/trackfile", api_key)
-        if isinstance(bulk, list) and bulk:
-            index = {}
-            for tf in bulk:
-                index.setdefault(
-                    os.path.basename(tf["path"]), []).append({
-                        "id": tf["id"],
-                        "albumId": tf.get("albumId", 0),
-                        "artistId": tf.get("artistId", 0),
-                        "path": tf["path"],
-                    })
-            logger.info("  Lidarr: indexed %d trackfiles",
-                        sum(len(v) for v in index.values()))
-            return index
-
         artists = _lidarr_get_artists(base_url, api_key)
         if not artists:
             return None
