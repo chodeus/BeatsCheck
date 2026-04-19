@@ -151,8 +151,13 @@
       <div class="table-toolbar">
         <input type="text" id="corrupt-search" placeholder="Search files..." class="input" aria-label="Search corrupt files">
         <button id="view-toggle-btn" class="btn btn-outline btn-sm" onclick="toggleCorruptView()">Group by Album</button>
-        <button id="redownload-selected-btn" class="btn btn-primary" onclick="redownloadSelected()" disabled aria-label="Re-download selected files via Lidarr">Re-download Selected</button>
+        <div id="album-select-helper" class="select-n-group" style="display:none">
+          <label for="select-n-input" class="select-n-label">Select</label>
+          <input type="number" id="select-n-input" class="input select-n-input" min="1" max="50" value="50" aria-label="Number of albums to select">
+          <button class="btn btn-outline btn-sm" onclick="selectNAlbums()" aria-label="Select N albums">Select N</button>
+        </div>
         <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete Selected</button>
+        <button id="delete-albums-btn" class="btn btn-danger" onclick="deleteSelectedAlbums()" disabled style="display:none" aria-label="Delete selected albums (whole folders)">Delete Albums (Whole)</button>
         <button class="btn btn-outline btn-sm" onclick="clearCorruptList()" aria-label="Clear corrupt list">Clear List</button>
       </div>
       <div class="table-wrap">
@@ -217,6 +222,24 @@
   </main>
 
   <div id="toast-container" aria-live="polite"></div>
+
+  <!-- Bulk delete progress modal -->
+  <div id="delete-progress-modal" class="modal-backdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="delete-progress-title">
+    <div class="modal">
+      <h3 id="delete-progress-title">Bulk Delete In Progress</h3>
+      <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+        <div id="delete-progress-fill" class="progress-fill"></div>
+      </div>
+      <div id="delete-progress-text" class="progress-text">0 / 0</div>
+      <div id="delete-progress-phase" class="progress-eta"></div>
+      <div id="delete-progress-current" class="progress-file"></div>
+      <div id="delete-progress-errors" class="auth-error" style="display:none"></div>
+      <div class="form-actions">
+        <button id="delete-progress-cancel" class="btn btn-danger" onclick="cancelDeleteJob()">Cancel</button>
+        <button id="delete-progress-close" class="btn btn-primary" onclick="closeDeleteProgress()" style="display:none">Close</button>
+      </div>
+    </div>
+  </div>
 
   <script src="app.js"></script>
 </body>
