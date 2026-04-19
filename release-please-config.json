@@ -7,7 +7,7 @@
       "release-type": "simple",
       "package-name": "BeatsCheck",
       "extra-files": [
-        "VERSION"
+        {"type": "generic", "path": "VERSION"}
       ],
       "changelog-sections": [
         { "type": "feat", "section": "Features" },

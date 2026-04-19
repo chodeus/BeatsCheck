@@ -22,9 +22,10 @@ def _read_version():
                  os.path.join(here, "..", "VERSION")):
         try:
             with open(path, "r", encoding="utf-8") as f:
-                v = f.read().strip()
-                if v:
-                    return v
+                for line in f:
+                    v = line.split("#", 1)[0].strip()
+                    if v:
+                        return v
         except OSError:
             continue
     return "dev"
