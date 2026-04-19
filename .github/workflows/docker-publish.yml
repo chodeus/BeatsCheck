@@ -101,3 +101,14 @@ jobs:
         if: github.event_name != 'pull_request' && always()
         with:
           sarif_file: 'trivy-results.sarif'
+
+  notify-failure:
+    needs: build-and-push
+    if: failure() && github.event_name != 'pull_request'
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@main
+    with:
+      event_type: build
+      status: failure
+      title: "❌ Docker build failed: ${{ github.ref_name }}"
+      commit_sha: ${{ github.sha }}
+    secrets: inherit
