@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.2.0](https://github.com/chodeus/BeatsCheck/compare/v1.1.0...v1.2.0) (2026-04-19)
+
+
+### Features
+
+* add monotonic BUILD_NUMBER to docker image ([#32](https://github.com/chodeus/BeatsCheck/issues/32)) ([1e075ce](https://github.com/chodeus/BeatsCheck/commit/1e075ceb5639d2fd97421457b145bf16e803a856))
+* background file-delete jobs, per-album Lidarr search report, dynamic version ([7ecf7e4](https://github.com/chodeus/BeatsCheck/commit/7ecf7e44d08328781ba62e4fd11a37524034e080))
+
 ## [1.1.0](https://github.com/chodeus/BeatsCheck/compare/v1.0.0...v1.1.0) (2026-04-19)
 
 
