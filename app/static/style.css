@@ -765,3 +765,52 @@ tbody tr:hover { background: var(--bg-hover); }
   html { font-size: 14px; }
   .card-grid { grid-template-columns: 1fr 1fr; }
 }
+
+/* --- Bulk-delete modal --- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.modal {
+  background: var(--bg-panel, #1e2430);
+  border: 1px solid var(--border, #33384a);
+  border-radius: 6px;
+  padding: 1.5rem;
+  max-width: 560px;
+  width: 90%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.modal h3 {
+  margin: 0 0 1rem 0;
+}
+
+.modal .progress-bar { margin-bottom: 0.5rem; }
+.modal .progress-text { font-weight: 600; }
+.modal .progress-file {
+  word-break: break-all;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  margin-top: 0.25rem;
+}
+
+/* --- Select N helper --- */
+.select-n-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.select-n-label {
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+.select-n-input {
+  width: 4rem !important;
+  text-align: center;
+}

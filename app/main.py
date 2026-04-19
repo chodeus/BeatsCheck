@@ -267,6 +267,13 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
             errors.append({"path": fp, "error": str(e)})
 
     if deleted:
+        # Capture album IDs before pruning details
+        affected_album_ids = {
+            details.get(fp, {}).get("albumId")
+            for fp in deleted
+            if details.get(fp, {}).get("albumId")
+        }
+
         deleted_set = set(deleted)
         remaining = sorted(allowed - deleted_set)
         # Rewrite corrupt.txt atomically
@@ -290,7 +297,463 @@ def delete_corrupt_files(paths, config_dir, music_dir=None):
             tracking.pop(fp, None)
         write_json_atomic(tracking_path, tracking)
 
+        if affected_album_ids and lidarr_url and lidarr_key:
+            _record_pending_redownloads(
+                config_dir, list(affected_album_ids),
+                lidarr_url, lidarr_key)
+
     return {"deleted": deleted, "errors": errors, "count": len(deleted)}
+
+
+# --- Pending re-download tracker ---
+
+PENDING_REDOWNLOADS_FILE = "pending_redownloads.json"
+_PENDING_REDOWNLOAD_TTL = 86400
+
+
+def _pending_redownloads_path(config_dir):
+    return os.path.join(config_dir, PENDING_REDOWNLOADS_FILE)
+
+
+def _record_pending_redownloads(config_dir, album_ids,
+                                lidarr_url, lidarr_api_key):
+    """Track album IDs affected by a Lidarr-backed delete so the next
+    scan cycle can detect grabbed re-downloads via Lidarr history."""
+    if not album_ids:
+        return
+    path = _pending_redownloads_path(config_dir)
+    pending = _load_json(path, default={})
+    if not isinstance(pending, dict):
+        pending = {}
+    now_iso = time.strftime('%Y-%m-%dT%H:%M:%S')
+    now_ts = time.time()
+    for aid in album_ids:
+        key = str(aid)
+        entry = pending.get(key, {})
+        entry["deletedAt"] = now_iso
+        entry["deletedAtTs"] = now_ts
+        if "albumName" not in entry and lidarr_url and lidarr_api_key:
+            album = _lidarr_get_album(lidarr_url, lidarr_api_key, aid)
+            if album:
+                title = album.get("title", "")
+                artist_obj = album.get("artist", {}) or {}
+                artist = artist_obj.get("artistName", "")
+                entry["albumName"] = (
+                    f"{artist} — {title}"
+                    if artist and title else title or key)
+                entry["monitored"] = album.get("monitored", True)
+        pending[key] = entry
+    try:
+        write_json_atomic(path, pending)
+    except OSError:
+        pass
+
+
+def _poll_pending_redownloads(cfg):
+    """Check Lidarr history for pending album re-downloads.
+    Logs grabs to beats_check.log and removes resolved/stale entries.
+    Called at the top of each scan cycle."""
+    if not (cfg.lidarr_url and cfg.lidarr_api_key):
+        return
+    path = _pending_redownloads_path(cfg.log_dir)
+    pending = _load_json(path, default={})
+    if not isinstance(pending, dict) or not pending:
+        return
+    now_ts = time.time()
+    changed = False
+    for aid_str in list(pending.keys()):
+        entry = pending[aid_str]
+        try:
+            aid = int(aid_str)
+        except (ValueError, TypeError):
+            pending.pop(aid_str, None)
+            changed = True
+            continue
+        deleted_ts = entry.get("deletedAtTs", 0)
+        label = entry.get("albumName", aid_str)
+        if now_ts - deleted_ts > _PENDING_REDOWNLOAD_TTL:
+            logger.info(
+                "LIDARR REDOWNLOAD: %s — no grab detected within 24h",
+                label)
+            try:
+                with open(cfg.log_file, 'a', encoding='utf-8') as lf:
+                    lf.write(
+                        f"LIDARR REDOWNLOAD TIMEOUT: {label} "
+                        f"— no grab within 24h\n")
+            except OSError:
+                pass
+            pending.pop(aid_str, None)
+            changed = True
+            continue
+        records = _lidarr_get_album_history(
+            cfg.lidarr_url, cfg.lidarr_api_key, aid)
+        if not records:
+            continue
+        record = records[0]
+        rec_date = record.get("date", "")
+        try:
+            rec_ts = time.mktime(time.strptime(
+                rec_date[:19], '%Y-%m-%dT%H:%M:%S'))
+        except (ValueError, TypeError):
+            rec_ts = 0
+        if rec_ts <= deleted_ts:
+            continue
+        source = (record.get("sourceTitle")
+                  or (record.get("data") or {}).get("releaseTitle")
+                  or "")
+        msg = (f"LIDARR REDOWNLOAD: {label} — "
+               f"grabbed (1 report)"
+               + (f" [{source}]" if source else ""))
+        logger.info(msg)
+        try:
+            with open(cfg.log_file, 'a', encoding='utf-8') as lf:
+                lf.write(msg + "\n")
+        except OSError:
+            pass
+        pending.pop(aid_str, None)
+        changed = True
+    if changed:
+        try:
+            write_json_atomic(path, pending)
+        except OSError:
+            pass
+
+
+# --- Whole-album delete (invoked from the WebUI) ---
+
+_MAX_DELETE_ALBUMS = 50
+_LIDARR_ALBUM_DELAY_SECONDS = 30
+
+
+def _list_folder_files(real):
+    """Return top-level regular-file paths in *real* (excluding symlinks)."""
+    try:
+        return [
+            os.path.join(real, e) for e in os.listdir(real)
+            if os.path.isfile(os.path.join(real, e))
+            and not os.path.islink(os.path.join(real, e))
+        ]
+    except OSError:
+        return None
+
+
+def _build_file_to_tfid(all_files, album_ids, corrupt_details,
+                        lidarr_url, lidarr_key):
+    """Map folder files to Lidarr trackfile IDs via corrupt_details +
+    suffix-match fallback. Mutates *album_ids* with any new matches."""
+    file_to_tfid = {
+        fp: corrupt_details[fp]["trackfileId"]
+        for fp in all_files
+        if "trackfileId" in corrupt_details.get(fp, {})
+    }
+    unmatched = [fp for fp in all_files if fp not in file_to_tfid]
+    if not unmatched or not album_ids:
+        return file_to_tfid
+    album_tfs = []
+    for aid in album_ids:
+        album_tfs.extend(_lidarr_get_trackfiles_by_album(
+            lidarr_url, lidarr_key, aid))
+    for fp in unmatched:
+        match = _best_suffix_match(fp, album_tfs, min_score=1)
+        if match:
+            file_to_tfid[fp] = match["id"]
+            if match.get("albumId"):
+                album_ids.add(match["albumId"])
+    return file_to_tfid
+
+
+def _lidarr_delete_folder_api(folder, file_to_tfid, album_ids,
+                              lidarr_url, lidarr_key, log):
+    """Call Lidarr bulk-delete for *file_to_tfid* and wait for
+    monitored searches. Returns (deleted_paths, error_or_None)."""
+    tf_ids = list(file_to_tfid.values())
+    if not tf_ids:
+        return ([], None)
+    max_search_id = 0
+    cmds = _lidarr_request(
+        f"{lidarr_url}/api/v1/command", lidarr_key)
+    if cmds:
+        for c in cmds:
+            if (c.get("name") == "AlbumSearch"
+                    and c.get("id", 0) > max_search_id):
+                max_search_id = c["id"]
+    result = _lidarr_delete_trackfiles_bulk(
+        lidarr_url, lidarr_key, tf_ids)
+    if result is None:
+        return ([], "Lidarr bulk delete API failed")
+    deleted_paths = [fp for fp in file_to_tfid
+                     if not os.path.exists(fp)]
+    log.write(f"LIDARR DELETE: {folder} — "
+              f"{len(tf_ids)} track files "
+              f"({len(album_ids)} albums)\n")
+    log.flush()
+    has_monitored = any(
+        (a := _lidarr_get_album(lidarr_url, lidarr_key, aid))
+        and a.get("monitored", True)
+        for aid in album_ids
+    )
+    if has_monitored:
+        _lidarr_wait_for_search(
+            lidarr_url, lidarr_key, since_id=max_search_id)
+    return (deleted_paths, None)
+
+
+def _rmtree_and_collect(real, folder, log, deleted_paths):
+    """Walk *real* to record file paths then rmtree the folder.
+    Returns (deleted_paths, error_or_None). Caller is responsible
+    for ensuring *real* is safe to remove (not a mount root)."""
+    for dirpath, _, filenames in os.walk(real):
+        for fn in filenames:
+            fp = os.path.join(dirpath, fn)
+            if os.path.exists(fp) and fp not in deleted_paths:
+                deleted_paths.append(fp)
+    try:
+        shutil.rmtree(real)
+        log.write(f"REMOVED FOLDER: {folder}\n")
+        log.flush()
+    except OSError as e:
+        log.write(f"ERROR removing folder {folder}: {e}\n")
+        return (deleted_paths, f"rmtree failed: {e}")
+    return (deleted_paths, None)
+
+
+def _direct_delete_untracked(all_files, deleted_paths,
+                             corrupt_details, lidarr_url,
+                             lidarr_key, log):
+    """Direct FS delete for files not already handled by Lidarr."""
+    for fp in all_files:
+        if fp in deleted_paths:
+            continue
+        if (lidarr_url and lidarr_key
+                and "trackfileId" in corrupt_details.get(fp, {})):
+            continue
+        try:
+            os.remove(fp)
+            deleted_paths.append(fp)
+            log.write(f"DELETED FILE: {fp}\n")
+        except OSError as e:
+            log.write(f"ERROR deleting {fp}: {e}\n")
+    log.flush()
+
+
+def _delete_one_folder(folder, real, existing_corrupt, corrupt_details,
+                       log, lidarr_url, lidarr_key, lidarr_blocklist,
+                       mode, music_real):
+    """Delete a single album folder. Returns
+    (deleted_paths, album_ids, error_message_or_None)."""
+    if mode == "whole":
+        all_files = _list_folder_files(real)
+        if all_files is None:
+            return ([], [], "listdir failed")
+    else:
+        all_files = [cf for cf in existing_corrupt
+                     if os.path.dirname(cf) == folder
+                     and os.path.exists(cf)]
+        if not all_files:
+            return ([], [], None)
+
+    album_ids = {
+        corrupt_details[cf]["albumId"]
+        for cf in existing_corrupt
+        if corrupt_details.get(cf, {}).get("albumId")
+    }
+
+    deleted_paths = []
+    if lidarr_url and lidarr_key:
+        file_to_tfid = _build_file_to_tfid(
+            all_files, album_ids, corrupt_details,
+            lidarr_url, lidarr_key)
+        if file_to_tfid and lidarr_blocklist and album_ids:
+            _, bl_fail = _lidarr_blocklist_albums(
+                lidarr_url, lidarr_key, album_ids)
+            if bl_fail:
+                return (deleted_paths, list(album_ids),
+                        f"blocklist failed ({bl_fail} albums)")
+        api_deleted, err = _lidarr_delete_folder_api(
+            folder, file_to_tfid, album_ids,
+            lidarr_url, lidarr_key, log)
+        deleted_paths.extend(api_deleted)
+        if err:
+            return (deleted_paths, list(album_ids), err)
+
+    if mode == "whole" and real != music_real and os.path.isdir(real):
+        deleted_paths, err = _rmtree_and_collect(
+            real, folder, log, deleted_paths)
+        if err:
+            return (deleted_paths, list(album_ids), err)
+    elif mode == "corrupt":
+        _direct_delete_untracked(
+            all_files, deleted_paths, corrupt_details,
+            lidarr_url, lidarr_key, log)
+
+    return (deleted_paths, list(album_ids), None)
+
+
+def _validate_delete_folders(folders, music_real):
+    """Return (validated=[(folder, real)], errors=[...]) after safety
+    checks: mount-root guard, MUSIC_DIR containment, symlink guard,
+    is-a-directory."""
+    validated = []
+    errors = []
+    for folder in folders:
+        real = os.path.realpath(folder)
+        if music_real and real == music_real:
+            errors.append({"folder": folder,
+                           "error": "cannot delete mount root"})
+            continue
+        if music_real and not real.startswith(music_real + os.sep):
+            errors.append({"folder": folder,
+                           "error": "outside music directory"})
+            continue
+        if os.path.islink(folder):
+            errors.append({"folder": folder,
+                           "error": "symlink rejected"})
+            continue
+        if not os.path.isdir(real):
+            errors.append({"folder": folder,
+                           "error": "not a directory"})
+            continue
+        validated.append((folder, real))
+    return validated, errors
+
+
+def _stagger_sleep(cancel_cb):
+    """Sleep the inter-album delay, checking *cancel_cb* every second.
+    Returns True if cancellation was requested."""
+    for _ in range(_LIDARR_ALBUM_DELAY_SECONDS):
+        if cancel_cb and cancel_cb():
+            return True
+        time.sleep(1)
+    return bool(cancel_cb and cancel_cb())
+
+
+def _finalize_delete_state(config_dir, deleted_files,
+                           corrupt_details):
+    """After a bulk delete, strip *deleted_files* from corrupt.txt,
+    corrupt_details.json, and corrupt_tracking.json."""
+    if not deleted_files:
+        return
+    corrupt_path = os.path.join(config_dir, "corrupt.txt")
+    details_path = os.path.join(config_dir, "corrupt_details.json")
+    tracking_path = os.path.join(config_dir, "corrupt_tracking.json")
+    allowed_corrupt = _load_lines_as_set(corrupt_path)
+    deleted_set = set(deleted_files)
+    remaining = sorted(allowed_corrupt - deleted_set)
+    tmp = corrupt_path + ".tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            for p in remaining:
+                f.write(p + '\n')
+        os.rename(tmp, corrupt_path)
+    except OSError:
+        pass
+    for fp in deleted_files:
+        corrupt_details.pop(fp, None)
+    write_json_atomic(details_path, corrupt_details)
+    tracking = _load_json(tracking_path)
+    for fp in deleted_files:
+        tracking.pop(fp, None)
+    write_json_atomic(tracking_path, tracking)
+
+
+def delete_album_folders(folders, config_dir, music_dir=None,
+                         mode="whole", progress_cb=None,
+                         cancel_cb=None):
+    """Delete album folders with staggered Lidarr deletion.
+
+    mode='whole' removes the entire folder (Lidarr-tracked files go
+    through the API, then shutil.rmtree handles non-tracked files and
+    subdirectories). mode='corrupt' only removes files currently in
+    corrupt.txt for the folder.
+
+    Staggered album-by-album with ~30s between albums when Lidarr is
+    configured. progress_cb(index, total, folder, phase) reports status;
+    cancel_cb() returning True aborts between albums.
+
+    Returns dict: {deleted, errors, count, albums, cancelled}.
+    """
+    if mode not in ("whole", "corrupt"):
+        return {"deleted": [], "errors": [
+            {"folder": "", "error": "invalid mode"}],
+            "count": 0, "albums": [], "cancelled": False}
+    if len(folders) > _MAX_DELETE_ALBUMS:
+        return {"deleted": [], "errors": [
+            {"folder": "",
+             "error": f"too many folders (>{_MAX_DELETE_ALBUMS})"}],
+            "count": 0, "albums": [], "cancelled": False}
+
+    music_real = os.path.realpath(music_dir) if music_dir else None
+    log_file = os.path.join(config_dir, "beats_check.log")
+
+    validated, errors = _validate_delete_folders(folders, music_real)
+    if not validated:
+        return {"deleted": [], "errors": errors, "count": 0,
+                "albums": [], "cancelled": False}
+
+    lidarr_url = os.environ.get("LIDARR_URL", "").rstrip("/")
+    lidarr_key = _load_lidarr_api_key()
+    lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
+    corrupt_details = _load_corrupt_details(config_dir)
+
+    deleted_files = []
+    affected_albums = []
+    cancelled = False
+    total = len(validated)
+
+    with open(log_file, 'a', encoding='utf-8') as log:
+        log.write(f"\n{'='*60}\n")
+        log.write(f"Bulk delete ({mode}) started: "
+                  f"{time.strftime('%Y-%m-%d %H:%M:%S')} "
+                  f"— {total} folders\n")
+        log.write(f"{'='*60}\n")
+        log.flush()
+
+        for i, (folder, real) in enumerate(validated, 1):
+            if (cancel_cb and cancel_cb()) or shutdown_requested:
+                cancelled = True
+                log.write(f"CANCELLED at folder {i}/{total}\n")
+                break
+
+            if i > 1 and lidarr_url and lidarr_key:
+                if progress_cb:
+                    progress_cb(i - 1, total, folder, "waiting")
+                if _stagger_sleep(cancel_cb):
+                    cancelled = True
+                    log.write(f"CANCELLED at folder {i}/{total}\n")
+                    break
+
+            if progress_cb:
+                progress_cb(i, total, folder, "deleting")
+
+            existing_corrupt = [
+                cf for cf in corrupt_details
+                if os.path.dirname(cf) == folder
+                and os.path.exists(cf)
+            ]
+
+            del_files, album_ids, err = _delete_one_folder(
+                folder, real, existing_corrupt, corrupt_details,
+                log, lidarr_url, lidarr_key, lidarr_blocklist,
+                mode, music_real)
+            deleted_files.extend(del_files)
+            affected_albums.extend(album_ids)
+            if err:
+                errors.append({"folder": folder, "error": err})
+
+        log.write(f"Bulk delete ({mode}) complete: "
+                  f"{len(deleted_files)} files, "
+                  f"{len(affected_albums)} albums\n")
+        log.flush()
+
+    _finalize_delete_state(config_dir, deleted_files, corrupt_details)
+
+    if affected_albums and lidarr_url and lidarr_key:
+        _record_pending_redownloads(
+            config_dir, affected_albums, lidarr_url, lidarr_key)
+
+    return {"deleted": deleted_files, "errors": errors,
+            "count": len(deleted_files),
+            "albums": affected_albums, "cancelled": cancelled}
 
 
 def _rotate_file(path, keep=3):
@@ -1429,6 +1892,27 @@ def run_delete_mode(corrupt_list_path, log_file, log_dir,
 
 # --- Auto-delete ---
 
+def _post_auto_delete_lidarr(log_dir, album_ids, lidarr_url,
+                             lidarr_api_key, lidarr_search):
+    """After auto-delete, record pending re-downloads and queue
+    explicit searches for unmonitored albums."""
+    if not album_ids:
+        return
+    _record_pending_redownloads(
+        log_dir, album_ids, lidarr_url, lidarr_api_key)
+    if not lidarr_search:
+        return
+    unmonitored = []
+    for aid in album_ids:
+        album = _lidarr_get_album(lidarr_url, lidarr_api_key, aid)
+        if album and not album.get("monitored", True):
+            unmonitored.append(aid)
+    if unmonitored:
+        _search_queue_add(log_dir, unmonitored)
+        logger.info("  Queued search for %d unmonitored albums",
+                    len(unmonitored))
+
+
 def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
                     lidarr_url=None, lidarr_api_key=None,
                     lidarr_search=False, lidarr_blocklist=False):
@@ -1501,20 +1985,9 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
             for path in to_delete:
                 if not os.path.exists(path):
                     tracking.pop(path, None)
-            if lidarr_search and album_ids:
-                # Only queue search for unmonitored albums —
-                # Lidarr auto-searches monitored ones after deletion
-                unmonitored = []
-                for aid in album_ids:
-                    album = _lidarr_get_album(
-                        lidarr_url, lidarr_api_key, aid)
-                    if album and not album.get("monitored", True):
-                        unmonitored.append(aid)
-                if unmonitored:
-                    _search_queue_add(log_dir, unmonitored)
-                    logger.info("  Queued search for %d "
-                                "unmonitored albums",
-                                len(unmonitored))
+            _post_auto_delete_lidarr(
+                log_dir, album_ids, lidarr_url, lidarr_api_key,
+                lidarr_search)
         else:
             logger.error("  Lidarr API failed — auto-delete aborted. "
                          "Files will be retried next run.")
@@ -2747,6 +3220,7 @@ def main():
         scan_cancelled = False
         _reload_config(cfg)
         _maybe_rotate_logs(cfg)
+        _poll_pending_redownloads(cfg)
 
         if not os.path.isdir(cfg.input_folder):
             logger.error("Music directory not found: %s",

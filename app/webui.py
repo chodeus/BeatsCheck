@@ -383,6 +383,134 @@ def _list_dir(path):
         return []
 
 
+# ---------------------------------------------------------------------------
+# Bulk-delete job tracker (in-memory; survives only while WebUI is running)
+# ---------------------------------------------------------------------------
+
+_delete_jobs = {}
+_delete_jobs_lock = threading.Lock()
+
+
+def _new_delete_job(total, mode):
+    """Register a new delete job and return its id."""
+    job_id = secrets.token_hex(8)
+    with _delete_jobs_lock:
+        _delete_jobs[job_id] = {
+            "id": job_id,
+            "mode": mode,
+            "total": total,
+            "done": 0,
+            "current": "",
+            "phase": "queued",
+            "errors": [],
+            "deleted": 0,
+            "finished": False,
+            "cancelled": False,
+            "cancel_requested": False,
+            "started_at": time.time(),
+        }
+    return job_id
+
+
+def _update_delete_job(job_id, **kwargs):
+    with _delete_jobs_lock:
+        job = _delete_jobs.get(job_id)
+        if job is not None:
+            job.update(kwargs)
+
+
+def _get_delete_job(job_id):
+    with _delete_jobs_lock:
+        job = _delete_jobs.get(job_id)
+        if job is None:
+            return None
+        return dict(job)
+
+
+def _cancel_delete_job(job_id):
+    with _delete_jobs_lock:
+        job = _delete_jobs.get(job_id)
+        if job is None:
+            return False
+        job["cancel_requested"] = True
+        return True
+
+
+def _prune_delete_jobs(max_age=3600):
+    """Drop finished jobs older than *max_age* to keep the store bounded."""
+    cutoff = time.time() - max_age
+    with _delete_jobs_lock:
+        stale = [jid for jid, j in _delete_jobs.items()
+                 if j.get("finished") and j.get("started_at", 0) < cutoff]
+        for jid in stale:
+            _delete_jobs.pop(jid, None)
+
+
+def _run_delete_job(job_id, folders, config_dir, music_dir, mode):
+    """Background worker that runs delete_album_folders under the scan
+    lock with progress + cancel wired to the in-memory job store."""
+    try:
+        from main import (
+            _acquire_scan_lock, delete_album_folders,
+        )
+    except ImportError:
+        _update_delete_job(
+            job_id, finished=True, phase="error",
+            errors=[{"folder": "", "error": "delete not available"}])
+        return
+
+    def progress_cb(index, total, folder, phase):
+        _update_delete_job(
+            job_id, done=index, total=total,
+            current=folder, phase=phase)
+
+    def cancel_cb():
+        job = _get_delete_job(job_id)
+        return bool(job and job.get("cancel_requested"))
+
+    lock_fd = None
+    try:
+        lock_fd = _acquire_scan_lock(config_dir)
+    except OSError:
+        _update_delete_job(
+            job_id, finished=True, phase="error",
+            errors=[{"folder": "",
+                     "error": "could not acquire scan lock"}])
+        return
+
+    try:
+        _update_delete_job(job_id, phase="running")
+        result = delete_album_folders(
+            folders, config_dir, music_dir=music_dir,
+            mode=mode, progress_cb=progress_cb, cancel_cb=cancel_cb)
+        _update_delete_job(
+            job_id,
+            deleted=result.get("count", 0),
+            errors=result.get("errors", []),
+            cancelled=result.get("cancelled", False),
+            finished=True,
+            phase="cancelled" if result.get("cancelled") else "done",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Bulk delete job %s failed", job_id)
+        _update_delete_job(
+            job_id, finished=True, phase="error",
+            errors=[{"folder": "", "error": str(e)}])
+    finally:
+        try:
+            import fcntl as _fcntl
+            if lock_fd is not None:
+                _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
+                lock_fd.close()
+                try:
+                    os.remove(os.path.join(config_dir, ".scanning"))
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+        _prune_delete_jobs()
+
+
 def _trigger_rescan(config_dir, mode="report", fresh=False):
     """Trigger a rescan by writing the .rescan file.
     When *fresh* is True the trigger content is prefixed with ``fresh:``
@@ -538,6 +666,17 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 self._json_response({"log": None, "mtime": mtime, "unchanged": True})
             else:
                 self._json_response({"log": text, "mtime": mtime})
+
+        elif (self.path == '/api/delete-job-status'
+                or self.path.startswith('/api/delete-job-status?')):
+            params = urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query)
+            job_id = params.get('id', [''])[0]
+            job = _get_delete_job(job_id)
+            if job is None:
+                self._json_response({"error": "job not found"}, 404)
+                return
+            self._json_response(job)
 
         elif self.path == '/api/paths' or self.path.startswith('/api/paths?'):
             params = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -718,11 +857,72 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 files, config_dir, music_dir=music_dir)
             self._json_response(result)
 
+        elif self._dispatch_bulk_delete(config_dir):
+            return
+
         elif self.path == '/api/ignore':
             self._handle_ignore(config_dir)
 
         else:
             self._json_response({"error": "not found"}, 404)
+
+    def _dispatch_bulk_delete(self, config_dir):
+        """Handle bulk-delete-related POSTs. Returns True if the path
+        matched (response already sent), False otherwise."""
+        if self.path == '/api/delete-albums':
+            self._handle_delete_albums(config_dir)
+            return True
+        if (self.path == '/api/delete-job-cancel'
+                or self.path.startswith('/api/delete-job-cancel?')):
+            params = urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query)
+            ok = _cancel_delete_job(params.get('id', [''])[0])
+            self._json_response({"ok": ok})
+            return True
+        return False
+
+    def _handle_delete_albums(self, config_dir):
+        """POST /api/delete-albums — fire-and-forget bulk delete.
+        Returns 202 + {job_id}; progress polled via
+        /api/delete-job-status?id=..."""
+        body = self._read_body()
+        if body is None:
+            return
+        folders = body.get('folders', [])
+        mode = body.get('mode', 'whole')
+        if not isinstance(folders, list) or not folders:
+            self._json_response(
+                {"error": "no folders specified"}, 400)
+            return
+        if mode not in ('whole', 'corrupt'):
+            self._json_response(
+                {"error": "mode must be 'whole' or 'corrupt'"}, 400)
+            return
+        try:
+            from main import _MAX_DELETE_ALBUMS
+        except ImportError:
+            _MAX_DELETE_ALBUMS = 50
+        if len(folders) > _MAX_DELETE_ALBUMS:
+            self._json_response(
+                {"error": f"too many folders "
+                 f"(max {_MAX_DELETE_ALBUMS})"}, 400)
+            return
+        # Refuse to start if a scan is running
+        lock_path = os.path.join(config_dir, ".scanning")
+        if os.path.exists(lock_path):
+            self._json_response(
+                {"error": "scan in progress — cannot delete"}, 409)
+            return
+        music_dir = os.environ.get("MUSIC_DIR", "/data")
+        job_id = _new_delete_job(len(folders), mode)
+        thread = threading.Thread(
+            target=_run_delete_job,
+            args=(job_id, folders, config_dir, music_dir, mode),
+            daemon=True,
+        )
+        thread.start()
+        self._json_response(
+            {"job_id": job_id, "total": len(folders)}, 202)
 
     def _serve_static(self, filename):
         """Serve a file from the static directory."""

@@ -450,13 +450,13 @@ async function loadCorrupt() {
         : '<span class="info-tag off">Disabled</span>';
       const collapsed = localStorage.getItem('beatscheck-info-collapsed') === '1';
       const lines = [];
-      lines.push('<strong>Re-download</strong> — deletes files via Lidarr'
-        + (blocklist ? ', blocklists the bad release,' : '')
-        + ' and waits for each album to finish searching before proceeding.');
+      lines.push('<strong>Delete</strong> — removes corrupt files. Lidarr-tracked files are deleted via the Lidarr API'
+        + (blocklist ? ', the bad release is blocklisted,' : '')
+        + ' and BeatsCheck waits for each album to finish searching before moving to the next.');
+      lines.push('<strong>Delete Album</strong> — removes the entire album folder (same Lidarr flow for tracked files).');
       lines.push('Monitored albums are automatically re-searched by Lidarr.'
         + (searchUnmon ? ' Unmonitored albums will also be searched.' : ' Unmonitored albums will <em>not</em> be re-downloaded.'));
-      lines.push('<strong>Delete</strong> — permanently removes files'
-        + (hasAnyLidarr ? ' (Lidarr-tracked files are deleted via API, triggering the same search behavior).' : '.'));
+      lines.push('Successful re-downloads are logged to <code>beats_check.log</code> on the next scan cycle.');
       lines.push('Blocklist: ' + blTag
         + (blocklist ? ' — bad releases will be blocklisted to prevent re-grabbing the same corrupt version.' : ' — Lidarr may re-grab the same release. Enable in Settings to prevent this.'));
       infoBanner.innerHTML = '<div class="info-banner-header" onclick="toggleInfoBanner()">'
@@ -487,6 +487,7 @@ function toggleCorruptView() {
   const btn = document.getElementById('view-toggle-btn');
   if (btn) btn.textContent = corruptView === 'files' ? 'Group by Album' : 'Show All Files';
   applyCorruptFilters();
+  updateAlbumHelperVisibility();
 }
 
 function applyCorruptFilters() {
@@ -544,14 +545,13 @@ function renderCorruptAlbums(files) {
     const countLabel = allCorrupt
       ? `All ${tracks.length} files corrupt`
       : `${tracks.length} of ${albumTotal} files corrupt`;
-    const hasLidarr = tracks.some(f => f.has_lidarr_id);
     html += `<tr class="album-header ${allCorrupt ? 'all-corrupt' : ''}" onclick="toggleAlbumExpand(this)">
-      <td class="col-check"><input type="checkbox" class="album-check" data-dir="${safeDir}" onchange="toggleAlbumSelect(this)" onclick="event.stopPropagation()" aria-label="Select album"></td>
+      <td class="col-check"><input type="checkbox" class="album-check" data-dir="${safeDir}" data-total="${albumTotal}" onchange="toggleAlbumSelect(this)" onclick="event.stopPropagation()" aria-label="Select album"></td>
       <td><strong>${escHtml(albumName)}</strong><br><span class="album-count">${countLabel}</span></td>
       <td class="col-size">${formatSize(totalSize)}</td>
       <td class="col-actions album-actions">
-        ${hasLidarr ? `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();deleteAlbumRedownload('${safeDir}')" ${allMissing ? 'disabled' : ''} title="Delete via Lidarr and re-download">Re-download</button>` : ''}
-        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbum('${safeDir}')" ${allMissing ? 'disabled' : ''} title="Delete files permanently">Delete</button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbum('${safeDir}')" ${allMissing ? 'disabled' : ''} title="Delete corrupt files only">Delete</button>
+        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbumWhole('${safeDir}', ${albumTotal})" title="Delete the entire album folder">Delete Album</button>
         <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();ignoreAlbum('${safeDir}')" title="Hide until next scan">Ignore</button>
       </td>
     </tr>`;
@@ -569,6 +569,7 @@ function renderCorruptAlbums(files) {
     });
   });
   tbody.innerHTML = html;
+  updateAlbumHelperVisibility();
 }
 
 function toggleAlbumExpand(row) {
@@ -587,6 +588,165 @@ function toggleAlbumSelect(checkbox) {
   updateDeleteBtn();
 }
 
+function updateAlbumHelperVisibility() {
+  const helper = document.getElementById('album-select-helper');
+  const bulkBtn = document.getElementById('delete-albums-btn');
+  if (!helper || !bulkBtn) return;
+  const isAlbums = corruptView === 'albums';
+  helper.style.display = isAlbums ? '' : 'none';
+  bulkBtn.style.display = isAlbums ? '' : 'none';
+}
+
+function selectNAlbums() {
+  const input = document.getElementById('select-n-input');
+  let n = parseInt(input.value, 10);
+  if (isNaN(n) || n < 1) n = 1;
+  if (n > 50) n = 50;
+  input.value = n;
+  const boxes = document.querySelectorAll('tr.album-header:not([style*="display: none"]) .album-check');
+  let selected = 0;
+  boxes.forEach(b => {
+    if (selected < n) {
+      if (!b.checked) {
+        b.checked = true;
+        toggleAlbumSelect(b);
+      }
+      selected++;
+    }
+  });
+  if (selected < n) {
+    showToast(`Selected ${selected} album(s) (fewer than requested — only ${selected} visible)`, 'info');
+  } else {
+    showToast(`Selected ${selected} album(s)`, 'success');
+  }
+}
+
+async function deleteAlbumWhole(dir, totalFiles) {
+  const msg = `Delete the entire album folder?\n\n${dir}\n\nThis will delete ALL ${totalFiles || '?'} file(s) in the folder, not just the corrupt ones.`;
+  if (!confirm(msg)) return;
+  const res = await startDeleteJob([dir], 'whole');
+  if (res) openDeleteProgress(res.job_id, res.total, 'whole');
+}
+
+async function deleteSelectedAlbums() {
+  const boxes = document.querySelectorAll('.album-check:checked');
+  const dirs = Array.from(boxes).map(b => b.dataset.dir).filter(Boolean);
+  if (dirs.length === 0) return;
+  if (dirs.length > 50) {
+    showToast('Maximum 50 albums per bulk delete', 'error');
+    return;
+  }
+  const estMin = Math.ceil((dirs.length * 35) / 60);
+  const msg = `Delete ${dirs.length} whole album folder(s)?\n\n`
+    + `Albums are processed one at a time with a 30s delay between each to avoid flooding Lidarr and indexers.\n\n`
+    + `Estimated time: ~${estMin} minute(s).\n\nThis cannot be undone.`;
+  if (!confirm(msg)) return;
+  const res = await startDeleteJob(dirs, 'whole');
+  if (res) openDeleteProgress(res.job_id, res.total, 'whole');
+}
+
+async function startDeleteJob(dirs, mode) {
+  try {
+    const r = await fetch('/api/delete-albums', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folders: dirs, mode }),
+    });
+    if (r.status === 202) {
+      return await r.json();
+    }
+    const err = await r.json().catch(() => ({}));
+    showToast('Delete failed: ' + (err.error || ('HTTP ' + r.status)), 'error');
+    return null;
+  } catch (e) {
+    showToast('Delete request failed: ' + e.message, 'error');
+    return null;
+  }
+}
+
+let deleteProgressInterval = null;
+let currentDeleteJobId = null;
+
+function openDeleteProgress(jobId, total, mode) {
+  currentDeleteJobId = jobId;
+  const modal = document.getElementById('delete-progress-modal');
+  const title = document.getElementById('delete-progress-title');
+  if (title) title.textContent = mode === 'whole' ? 'Deleting Albums' : 'Deleting Files';
+  document.getElementById('delete-progress-text').textContent = `0 / ${total}`;
+  document.getElementById('delete-progress-phase').textContent = 'Starting...';
+  document.getElementById('delete-progress-current').textContent = '';
+  document.getElementById('delete-progress-errors').style.display = 'none';
+  document.getElementById('delete-progress-cancel').style.display = '';
+  document.getElementById('delete-progress-cancel').disabled = false;
+  document.getElementById('delete-progress-close').style.display = 'none';
+  document.getElementById('delete-progress-fill').style.width = '0%';
+  modal.style.display = 'flex';
+  if (deleteProgressInterval) clearInterval(deleteProgressInterval);
+  deleteProgressInterval = setInterval(() => pollDeleteJob(jobId), 2000);
+  pollDeleteJob(jobId);
+}
+
+async function pollDeleteJob(jobId) {
+  const r = await fetch('/api/delete-job-status?id=' + encodeURIComponent(jobId));
+  if (!r.ok) return;
+  const job = await r.json();
+  const total = job.total || 1;
+  const done = job.done || 0;
+  const pct = Math.min(100, Math.round((done / total) * 100));
+  document.getElementById('delete-progress-fill').style.width = pct + '%';
+  document.getElementById('delete-progress-text').textContent = `${done} / ${total}`;
+  let phaseLabel = job.phase;
+  if (job.phase === 'running') phaseLabel = 'Running';
+  else if (job.phase === 'waiting') phaseLabel = 'Waiting 30s before next album...';
+  else if (job.phase === 'deleting') phaseLabel = 'Deleting current album...';
+  else if (job.phase === 'done') phaseLabel = 'Complete';
+  else if (job.phase === 'cancelled') phaseLabel = 'Cancelled';
+  else if (job.phase === 'error') phaseLabel = 'Error';
+  document.getElementById('delete-progress-phase').textContent = phaseLabel;
+  document.getElementById('delete-progress-current').textContent = job.current ? job.current : '';
+  if (job.errors && job.errors.length) {
+    const errBox = document.getElementById('delete-progress-errors');
+    errBox.style.display = '';
+    errBox.innerHTML = job.errors.slice(0, 10)
+      .map(e => `${escHtml(e.folder || '')} — ${escHtml(e.error || '')}`)
+      .join('<br>');
+  }
+  if (job.finished) {
+    clearInterval(deleteProgressInterval);
+    deleteProgressInterval = null;
+    document.getElementById('delete-progress-cancel').style.display = 'none';
+    document.getElementById('delete-progress-close').style.display = '';
+    const verb = job.cancelled ? 'Cancelled' : 'Done';
+    showToast(`${verb} — ${job.deleted || 0} file(s) deleted`, job.cancelled ? 'info' : 'success');
+    loadCorrupt();
+    refreshDashboard();
+  }
+}
+
+async function cancelDeleteJob() {
+  if (!currentDeleteJobId) return;
+  const btn = document.getElementById('delete-progress-cancel');
+  btn.disabled = true;
+  btn.textContent = 'Cancelling...';
+  try {
+    await fetch('/api/delete-job-cancel?id=' + encodeURIComponent(currentDeleteJobId), { method: 'POST' });
+  } catch (e) {
+    showToast('Cancel request failed', 'error');
+  }
+}
+
+function closeDeleteProgress() {
+  const modal = document.getElementById('delete-progress-modal');
+  modal.style.display = 'none';
+  currentDeleteJobId = null;
+  if (deleteProgressInterval) {
+    clearInterval(deleteProgressInterval);
+    deleteProgressInterval = null;
+  }
+  const btn = document.getElementById('delete-progress-cancel');
+  if (btn) btn.textContent = 'Cancel';
+}
+
 async function deleteAlbum(dir) {
   const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
   const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
@@ -597,27 +757,6 @@ async function deleteAlbum(dir) {
     const res = await apiPost('delete', { files: paths });
     if (res && res.count > 0) {
       showToast('Deleted ' + res.count + ' file(s)', 'success');
-      loadCorrupt();
-      refreshDashboard();
-    } else {
-      showToast('Delete failed' + (res?.errors?.length ? ': ' + res.errors[0].error : ''), 'error');
-    }
-  } finally {
-    btns.forEach(b => b.disabled = false);
-  }
-}
-
-async function deleteAlbumRedownload(dir) {
-  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
-  const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
-  if (!paths.length) return;
-  if (!confirm('Delete ' + paths.length + ' corrupt file(s) via Lidarr?\n\nLidarr will blocklist the bad release and re-download a clean copy for monitored albums.')) return;
-  const btns = document.querySelectorAll(`tr.album-header .btn`);
-  btns.forEach(b => b.disabled = true);
-  try {
-    const res = await apiPost('delete', { files: paths });
-    if (res && res.count > 0) {
-      showToast('Deleted ' + res.count + ' file(s) — Lidarr will re-download monitored albums', 'success');
       loadCorrupt();
       refreshDashboard();
     } else {
@@ -731,10 +870,13 @@ function updateDeleteBtn() {
   const checked = document.querySelectorAll('.file-check:checked');
   const any = checked.length > 0;
   document.getElementById('delete-selected-btn').disabled = !any;
-  const redownloadBtn = document.getElementById('redownload-selected-btn');
-  if (redownloadBtn) {
-    const anyLidarr = Array.from(checked).some(c => c.dataset.lidarr);
-    redownloadBtn.disabled = !anyLidarr;
+  const albumsBtn = document.getElementById('delete-albums-btn');
+  if (albumsBtn) {
+    const checkedAlbums = document.querySelectorAll('.album-check:checked').length;
+    albumsBtn.disabled = checkedAlbums === 0 || checkedAlbums > 50;
+    albumsBtn.textContent = checkedAlbums > 0
+      ? `Delete ${checkedAlbums} Album${checkedAlbums === 1 ? '' : 's'} (Whole)`
+      : 'Delete Albums (Whole)';
   }
 }
 
@@ -778,30 +920,6 @@ async function deleteSelected() {
   }
 }
 
-async function redownloadSelected() {
-  const checks = document.querySelectorAll('.file-check:checked');
-  const paths = Array.from(checks).filter(c => c.dataset.lidarr).map(c => c.dataset.path).filter(Boolean);
-  if (paths.length === 0) return;
-  const skipped = checks.length - paths.length;
-  let msg = 'Delete ' + paths.length + ' file(s) via Lidarr?\n\nLidarr will blocklist the bad release and re-download a clean copy for monitored albums.';
-  if (skipped > 0) msg += '\n\n' + skipped + ' file(s) without Lidarr IDs will be skipped.';
-  if (!confirm(msg)) return;
-  const btn = document.getElementById('redownload-selected-btn');
-  btn.disabled = true;
-  try {
-    const res = await apiPost('delete', { files: paths });
-    if (res && res.count > 0) {
-      showToast('Deleted ' + res.count + ' file(s) — Lidarr will re-download monitored albums', 'success');
-      document.getElementById('select-all').checked = false;
-      loadCorrupt();
-      refreshDashboard();
-    } else {
-      showToast('Re-download failed' + (res?.errors?.length ? ': ' + res.errors[0].error : ''), 'error');
-    }
-  } finally {
-    btn.disabled = false;
-  }
-}
 
 // --- Folder Picker ---
 function createFolderPicker(inputId, currentVal) {
