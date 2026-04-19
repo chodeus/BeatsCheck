@@ -1,4 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>chodeus/chodeus-ops"]
+  "extends": ["github>chodeus/chodeus-ops"],
+  "packageRules": [
+    {
+      "description": "Require manual review for chodeus-ops digest updates. The central preset auto-merges digests, but Renovate's cache can lag behind pushes we make manually during incident response — auto-merge has already silently downgraded a chodeus-ops pin to a broken SHA (chodeus/BeatsCheck#26). Opt-out here until the race is resolved upstream.",
+      "matchDepNames": ["chodeus/chodeus-ops"],
+      "matchUpdateTypes": ["digest"],
+      "automerge": false
+    }
+  ]
 }
