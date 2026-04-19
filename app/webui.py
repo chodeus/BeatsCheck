@@ -511,6 +511,74 @@ def _run_delete_job(job_id, folders, config_dir, music_dir, mode):
         _prune_delete_jobs()
 
 
+def _run_delete_files_job(job_id, files, config_dir, music_dir):
+    """Background worker that runs delete_corrupt_files under the scan
+    lock with progress + cancel wired to the in-memory job store. Used
+    by /api/delete-files so multi-album file deletes don't block the
+    browser for the full 30s-per-album Lidarr search window."""
+    try:
+        from main import _acquire_scan_lock, delete_corrupt_files
+    except ImportError:
+        _update_delete_job(
+            job_id, finished=True, phase="error",
+            errors=[{"path": "", "error": "delete not available"}])
+        return
+
+    def progress_cb(index, total, label, phase):
+        _update_delete_job(
+            job_id, done=index, total=total,
+            current=label, phase=phase)
+
+    def cancel_cb():
+        job = _get_delete_job(job_id)
+        return bool(job and job.get("cancel_requested"))
+
+    lock_fd = None
+    try:
+        lock_fd = _acquire_scan_lock(config_dir)
+    except OSError:
+        _update_delete_job(
+            job_id, finished=True, phase="error",
+            errors=[{"path": "",
+                     "error": "could not acquire scan lock"}])
+        return
+
+    try:
+        _update_delete_job(job_id, phase="running")
+        result = delete_corrupt_files(
+            files, config_dir, music_dir=music_dir,
+            progress_cb=progress_cb, cancel_cb=cancel_cb)
+        cancelled = bool(
+            _get_delete_job(job_id) and
+            _get_delete_job(job_id).get("cancel_requested"))
+        _update_delete_job(
+            job_id,
+            deleted=result.get("count", 0),
+            errors=result.get("errors", []),
+            cancelled=cancelled,
+            finished=True,
+            phase="cancelled" if cancelled else "done",
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.exception("Bulk file-delete job %s failed", job_id)
+        _update_delete_job(
+            job_id, finished=True, phase="error",
+            errors=[{"path": "", "error": str(e)}])
+    finally:
+        try:
+            import fcntl as _fcntl
+            if lock_fd is not None:
+                _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
+                lock_fd.close()
+                try:
+                    os.remove(os.path.join(config_dir, ".scanning"))
+                except OSError:
+                    pass
+        except ImportError:
+            pass
+        _prune_delete_jobs()
+
+
 def _trigger_rescan(config_dir, mode="report", fresh=False):
     """Trigger a rescan by writing the .rescan file.
     When *fresh* is True the trigger content is prefixed with ``fresh:``
@@ -872,6 +940,9 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         if self.path == '/api/delete-albums':
             self._handle_delete_albums(config_dir)
             return True
+        if self.path == '/api/delete-files':
+            self._handle_delete_files(config_dir)
+            return True
         if (self.path == '/api/delete-job-cancel'
                 or self.path.startswith('/api/delete-job-cancel?')):
             params = urllib.parse.parse_qs(
@@ -923,6 +994,40 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         thread.start()
         self._json_response(
             {"job_id": job_id, "total": len(folders)}, 202)
+
+    def _handle_delete_files(self, config_dir):
+        """POST /api/delete-files — fire-and-forget file-level delete.
+        Body: {"files": [...]}. Returns 202 + {job_id}; progress polled
+        via /api/delete-job-status?id=..."""
+        body = self._read_body()
+        if body is None:
+            return
+        files = body.get('files', [])
+        if not isinstance(files, list) or not files:
+            self._json_response(
+                {"error": "no files specified"}, 400)
+            return
+        if len(files) > 5000:
+            self._json_response(
+                {"error": "too many files (max 5000)"}, 400)
+            return
+        lock_path = os.path.join(config_dir, ".scanning")
+        if os.path.exists(lock_path):
+            self._json_response(
+                {"error": "scan in progress — cannot delete"}, 409)
+            return
+        music_dir = os.environ.get("MUSIC_DIR", "/data")
+        # Progress is measured per-album; Lidarr lookup happens inside
+        # the worker. Report total as file count for the initial display.
+        job_id = _new_delete_job(len(files), "files")
+        thread = threading.Thread(
+            target=_run_delete_files_job,
+            args=(job_id, files, config_dir, music_dir),
+            daemon=True,
+        )
+        thread.start()
+        self._json_response(
+            {"job_id": job_id, "total": len(files)}, 202)
 
     def _serve_static(self, filename):
         """Serve a file from the static directory."""

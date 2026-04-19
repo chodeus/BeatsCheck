@@ -708,7 +708,7 @@ async function pollDeleteJob(jobId) {
     const errBox = document.getElementById('delete-progress-errors');
     errBox.style.display = '';
     errBox.innerHTML = job.errors.slice(0, 10)
-      .map(e => `${escHtml(e.folder || '')} — ${escHtml(e.error || '')}`)
+      .map(e => `${escHtml(e.folder || e.path || '')} — ${escHtml(e.error || '')}`)
       .join('<br>');
   }
   if (job.finished) {
@@ -753,17 +753,27 @@ async function deleteAlbum(dir) {
   if (!paths.length || !confirm('Permanently delete ' + paths.length + ' corrupt file(s) from this album?')) return;
   const btns = document.querySelectorAll(`tr.album-header .btn`);
   btns.forEach(b => b.disabled = true);
+  const res = await startDeleteFilesJob(paths);
+  btns.forEach(b => b.disabled = false);
+  if (res) openDeleteProgress(res.job_id, res.total, 'files');
+}
+
+async function startDeleteFilesJob(paths) {
   try {
-    const res = await apiPost('delete', { files: paths });
-    if (res && res.count > 0) {
-      showToast('Deleted ' + res.count + ' file(s)', 'success');
-      loadCorrupt();
-      refreshDashboard();
-    } else {
-      showToast('Delete failed' + (res?.errors?.length ? ': ' + res.errors[0].error : ''), 'error');
+    const r = await fetch('/api/delete-files', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({files: paths})
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      showToast('Delete failed: ' + (err.error || ('HTTP ' + r.status)), 'error');
+      return null;
     }
-  } finally {
-    btns.forEach(b => b.disabled = false);
+    return await r.json();
+  } catch (e) {
+    showToast('Delete request failed: ' + e.message, 'error');
+    return null;
   }
 }
 
@@ -884,18 +894,9 @@ async function deleteSingle(el) {
   const path = el.dataset.path;
   if (!path || !confirm('Delete ' + path + '?')) return;
   el.disabled = true;
-  try {
-    const res = await apiPost('delete', { files: [path] });
-    if (res && res.count > 0) {
-      showToast('Deleted ' + res.count + ' file(s)', 'success');
-      loadCorrupt();
-      refreshDashboard();
-    } else {
-      showToast('Delete failed' + (res && res.errors && res.errors.length ? ': ' + res.errors[0].error : ''), 'error');
-    }
-  } finally {
-    el.disabled = false;
-  }
+  const res = await startDeleteFilesJob([path]);
+  el.disabled = false;
+  if (res) openDeleteProgress(res.job_id, res.total, 'files');
 }
 
 async function deleteSelected() {
@@ -905,18 +906,11 @@ async function deleteSelected() {
   if (!confirm('Delete ' + paths.length + ' file(s)?')) return;
   const btn = document.getElementById('delete-selected-btn');
   btn.disabled = true;
-  try {
-    const res = await apiPost('delete', { files: paths });
-    if (res && res.count > 0) {
-      showToast('Deleted ' + res.count + ' file(s)', 'success');
-      document.getElementById('select-all').checked = false;
-      loadCorrupt();
-      refreshDashboard();
-    } else {
-      showToast('Delete failed', 'error');
-    }
-  } finally {
-    btn.disabled = false;
+  const res = await startDeleteFilesJob(paths);
+  btn.disabled = false;
+  if (res) {
+    document.getElementById('select-all').checked = false;
+    openDeleteProgress(res.job_id, res.total, 'files');
   }
 }
 

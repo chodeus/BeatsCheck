@@ -36,6 +36,7 @@ RUN apk --no-cache upgrade && \
 
 WORKDIR /app
 
+COPY VERSION /app/VERSION
 COPY scripts/entrypoint.sh /app/
 COPY scripts/delete.sh /app/
 COPY scripts/rescan.sh /app/
