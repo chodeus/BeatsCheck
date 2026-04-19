@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/chodeus/BeatsCheck/compare/v1.0.0...v1.1.0) (2026-04-19)
+
+
+### Features
+
+* **webui:** bulk album delete + Lidarr re-download completion tracking ([#20](https://github.com/chodeus/BeatsCheck/issues/20)) ([2e0c79a](https://github.com/chodeus/BeatsCheck/commit/2e0c79aaae82bd33211d6640a1a519a91afe4c33))
+
 ## 1.0.0 (2026-04-19)
 
 
