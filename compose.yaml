@@ -9,7 +9,7 @@
 ###
 services:
   beatscheck:
-    image: ghcr.io/chodeus/beatscheck:latest@sha256:b2947164664e68403acc4c8058011a34007978bb3ad310565cc7701e57e8638c
+    image: ghcr.io/chodeus/beatscheck:latest@sha256:1e9f90610516ba88f2ab938d71beefde618e11e7448706543848c99a20ff8ccc
     container_name: beatscheck
     restart: unless-stopped
     volumes:
