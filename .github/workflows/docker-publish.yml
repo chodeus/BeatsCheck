@@ -48,7 +48,7 @@ jobs:
 
   build:
     needs: build-number
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@a435933268b61484615a8d3e6216d08efdd04a9f # main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@0469c75e0002d118473db2aeff288cf7f5fa70de # main
     with:
       push: ${{ github.event_name != 'pull_request' }}
       build_args: |
@@ -61,7 +61,7 @@ jobs:
   notify-failure:
     needs: build
     if: failure() && github.event_name != 'pull_request'
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@a435933268b61484615a8d3e6216d08efdd04a9f # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@0469c75e0002d118473db2aeff288cf7f5fa70de # main
     with:
       event_type: build
       status: failure
