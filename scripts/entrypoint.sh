@@ -15,6 +15,30 @@ elif [ -n "$TZ" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
     export TZ
 fi
 
+# Detect rootless mode (`docker run --user uid:gid`). PUID/PGID env vars
+# are ignored — we can't usermod/chown without root, and the supplied uid
+# is already what the operator wants.
+if [ "$(id -u)" != "0" ]; then
+    PUID=$(id -u)
+    PGID=$(id -g)
+    USER_NAME=$(id -un 2>/dev/null || echo "uid-${PUID}")
+
+    # Operator must pre-chown /config on the host. Fail fast with a clear
+    # message if they haven't.
+    if [ ! -w /config ]; then
+        echo "Rootless mode but /config is not writable by uid:gid ${PUID}:${PGID}"
+        echo "Pre-chown the host config dir: sudo chown -R ${PUID}:${PGID} /path/to/config"
+        exit 1
+    fi
+
+    for cmd in ffmpeg python3; do
+        command -v "$cmd" >/dev/null 2>&1 || { echo "Missing required tool: $cmd"; exit 1; }
+    done
+
+    umask "${UMASK}"
+    exec env HOME=/app PYTHONUNBUFFERED=1 python3 -u /app/main.py "$@"
+fi
+
 # Validate PUID/PGID are numeric
 case "$PUID" in
     ''|*[!0-9]*) echo "Warning: PUID must be numeric, got '$PUID'. Using 99."; PUID=99 ;;

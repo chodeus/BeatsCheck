@@ -29,7 +29,6 @@ RUN apk --no-cache upgrade && \
     apk --no-cache add \
     python3 \
     ffmpeg \
-    shadow \
     su-exec \
     tini \
     tzdata
@@ -46,6 +45,7 @@ COPY app/webui.py /app/
 COPY app/main.py /app/
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
              /app/reset-webui-password.sh && \
+    chmod -R a+rX /app && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
     ln -s /app/rescan.sh /usr/local/bin/rescan && \
     ln -s /app/reset-webui-password.sh /usr/local/bin/reset-webui-password

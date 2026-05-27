@@ -25,6 +25,13 @@ Please do **not** open a public issue for security vulnerabilities that could be
 - No network access required (`--network none` supported)
 - Tini init process for proper signal handling
 - HEALTHCHECK for container orchestrator monitoring
+- Supports two hardened deployment modes (both documented in `compose.yaml`):
+  - **Capability-dropped PUID/PGID:** `cap_drop: ALL` + `cap_add` of the five
+    capabilities the entrypoint actually needs (CHOWN, SETUID, SETGID, FOWNER,
+    DAC_OVERRIDE) plus `no-new-privileges:true`. Removes NET_RAW, SYS_ADMIN,
+    mount, and module-loading powers even during the brief root window.
+  - **Fully rootless:** `user: "99:100"` instead of PUID/PGID env vars, with
+    the host config dir pre-chowned to match. Container never runs as root.
 
 ### CI/CD Security
 - Trivy vulnerability scanning on every image build

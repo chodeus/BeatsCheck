@@ -38,3 +38,21 @@ services:
     #   - "8484:8484"
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2
+    ## Optional hardening: drop every capability, add back only the five
+    ## the entrypoint actually needs (PUID/PGID remap + chown + su-exec),
+    ## and block setuid escalation. Even during the brief root window at
+    ## startup, the container has no NET_RAW, SYS_ADMIN, or mount powers.
+    # cap_drop:
+    #   - ALL
+    # cap_add:
+    #   - CHOWN
+    #   - SETUID
+    #   - SETGID
+    #   - FOWNER
+    #   - DAC_OVERRIDE
+    # security_opt:
+    #   - no-new-privileges:true
+    ## Fully rootless alternative: replace PUID/PGID env with `user:` and
+    ## pre-chown the host config dir (sudo chown -R 99:100 ./config).
+    ## The entrypoint detects non-root invocation and skips the chown/su-exec.
+    # user: "99:100"
