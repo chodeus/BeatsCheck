@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/chodeus/BeatsCheck/compare/v1.2.0...v1.3.0) (2026-06-05)
+
+
+### Features
+
+* **docker:** add rootless --user support and cap-drop hardening guidance ([c9926a9](https://github.com/chodeus/BeatsCheck/commit/c9926a99b61d51dab45f67d635d0721f6f5a5793))
+* ship FFmpeg 8.1.x from chodeus/ffmpeg-static ([8df59bd](https://github.com/chodeus/BeatsCheck/commit/8df59bd48aecb75a79c075428ba96743bebfa6e9))
+
+
+### Documentation
+
+* reference chodeus/ffmpeg-static as the bundled ffmpeg source ([1a1de77](https://github.com/chodeus/BeatsCheck/commit/1a1de77fa31186f7a9891b3f0611fa4e827f15ad))
+
 ## [1.2.0](https://github.com/chodeus/BeatsCheck/compare/v1.1.0...v1.2.0) (2026-04-19)
 
 
