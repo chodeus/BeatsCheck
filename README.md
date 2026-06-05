@@ -357,7 +357,10 @@ fi
 
 ## Standalone Usage (No Docker)
 
-Requires Python 3.9+ and ffmpeg installed.
+Requires Python 3.9+ and ffmpeg installed. The Docker image bundles a
+fully-static **FFmpeg 8.1.x** from [chodeus/ffmpeg-static](https://github.com/chodeus/ffmpeg-static)
+(kept current via Renovate); this section is only for running outside Docker,
+where you provide your own ffmpeg.
 
 ```bash
 MODE=report WORKERS=6 python3 app/main.py /path/to/music /path/to/quarantine /path/to/config/beats_check.log
