@@ -1,3 +1,30 @@
+# ---- ffmpeg fetch stage ----
+# Download + SHA-256 verify the static ffmpeg from chodeus/ffmpeg-static (our
+# verified mirror of the FFmpeg-project-recommended BtbN builds). Runs on the
+# build host; the binary is validated against musl in the final stage below.
+FROM --platform=$BUILDPLATFORM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS ffmpeg-fetch
+ARG TARGETARCH
+# renovate: datasource=github-releases depName=chodeus/ffmpeg-static
+ARG FFMPEG_VERSION=n8.1.1
+RUN apk add --no-cache ca-certificates wget
+RUN set -eux; \
+    arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}"; \
+    case "$arch" in \
+      amd64) asset="ffmpeg-linux64" ;; \
+      arm64) asset="ffmpeg-linuxarm64" ;; \
+      *) echo "unsupported architecture: $arch" >&2; exit 1 ;; \
+    esac; \
+    base="https://github.com/chodeus/ffmpeg-static/releases/download/${FFMPEG_VERSION}"; \
+    mkdir -p /out; \
+    wget -qO /out/ffmpeg "${base}/${asset}"; \
+    wget -qO /tmp/SHA256SUMS "${base}/SHA256SUMS"; \
+    expected="$(awk -v f="$asset" '$2 == f { print $1 }' /tmp/SHA256SUMS)"; \
+    actual="$(sha256sum /out/ffmpeg | awk '{ print $1 }')"; \
+    [ -n "$expected" ] && [ "$expected" = "$actual" ] \
+      || { echo "ffmpeg SHA-256 mismatch for $asset (want=$expected got=$actual)" >&2; exit 1; }; \
+    chmod +x /out/ffmpeg
+
+# ---- final image ----
 FROM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
 
 ARG BUILD_DATE
@@ -28,10 +55,16 @@ ENV PUID=99 \
 RUN apk --no-cache upgrade && \
     apk --no-cache add \
     python3 \
-    ffmpeg \
     su-exec \
     tini \
     tzdata
+
+# FFmpeg 8.1.x from chodeus/ffmpeg-static (fetched + verified in the stage
+# above), replacing Alpine's older packaged ffmpeg. The self-check fails the
+# build loudly if the glibc-static binary can't run on Alpine's musl — turning
+# a would-be runtime failure into a build-time one.
+COPY --from=ffmpeg-fetch /out/ffmpeg /usr/local/bin/ffmpeg
+RUN ffmpeg -version
 
 WORKDIR /app
 
