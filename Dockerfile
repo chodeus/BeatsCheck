@@ -2,7 +2,7 @@
 # Download + SHA-256 verify the static ffmpeg from chodeus/ffmpeg-static (our
 # verified mirror of the FFmpeg-project-recommended BtbN builds). Runs on the
 # build host; the binary is validated against musl in the final stage below.
-FROM --platform=$BUILDPLATFORM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11 AS ffmpeg-fetch
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS ffmpeg-fetch
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=chodeus/ffmpeg-static
 ARG FFMPEG_VERSION=n8.1.2
@@ -25,7 +25,7 @@ RUN set -eux; \
     chmod +x /out/ffmpeg
 
 # ---- final image ----
-FROM alpine:3.23@sha256:5b10f432ef3da1b8d4c7eb6c487f2f5a8f096bc91145e68878dd4a5019afde11
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 ARG BUILD_DATE
 ARG VCS_REF
