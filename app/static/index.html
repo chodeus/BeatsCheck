@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark" data-accent="signal">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -10,216 +10,295 @@
 <body>
   <a href="#content" class="skip-link">Skip to content</a>
 
-  <header>
-    <div class="header-left">
-      <button id="menu-toggle" class="icon-btn mobile-only" aria-label="Toggle navigation menu">&#9776;</button>
-      <h1>BeatsCheck</h1>
-      <span id="version-badge" class="badge">v…</span>
-    </div>
-    <div class="header-right">
-      <span id="status-indicator" class="status-dot" role="status" aria-label="Application status"></span>
-      <span id="status-text">Connecting...</span>
-      <button id="logout-btn" class="btn btn-outline btn-sm" style="display:none" aria-label="Log out">Logout</button>
-      <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark/light theme">&#9790;</button>
-    </div>
-  </header>
-
+  <!-- ============ Sidebar ============ -->
   <nav id="sidebar" aria-label="Main navigation">
+    <div class="sidebar-logo">
+      <div class="logo-chip" aria-hidden="true">
+        <div class="logo-bar"></div>
+        <div class="logo-dot"></div>
+      </div>
+      <div style="min-width:0">
+        <div class="logo-word">Beats<b>Check</b></div>
+        <div class="logo-sub" id="logo-version">v… · integrity</div>
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+
+    <div class="nav-section">MONITOR</div>
     <a href="#dashboard" class="nav-link active" data-page="dashboard">
-      <span class="nav-icon" aria-hidden="true">&#9632;</span> Dashboard
+      <span class="nav-index" aria-hidden="true">01</span> Dashboard
     </a>
     <a href="#corrupt" class="nav-link" data-page="corrupt">
-      <span class="nav-icon" aria-hidden="true">&#9888;</span> Corrupt Files
+      <span class="nav-index" aria-hidden="true">02</span> Corrupt files
+      <span id="nav-corrupt-badge" class="nav-badge zero">0</span>
     </a>
     <a href="#config" class="nav-link" data-page="config">
-      <span class="nav-icon" aria-hidden="true">&#9881;</span> Configuration
+      <span class="nav-index" aria-hidden="true">03</span> Configuration
     </a>
     <a href="#logs" class="nav-link" data-page="logs">
-      <span class="nav-icon" aria-hidden="true">&#9776;</span> Logs
+      <span class="nav-index" aria-hidden="true">04</span> Logs
     </a>
+
+    <div class="sidebar-status">
+      <div class="status-card">
+        <div class="status-card-head">
+          <span id="sidebar-status-dot" class="status-dot"></span>
+          <span id="sidebar-status-word" class="status-card-word">Connecting</span>
+        </div>
+        <div id="sidebar-status-meta" class="status-card-meta">starting…</div>
+      </div>
+    </div>
   </nav>
 
-  <main id="content">
+  <!-- ============ Main column ============ -->
+  <div class="main-col">
 
-    <!-- Setup (first-run) -->
-    <section id="page-setup" class="page">
-      <div class="auth-container">
-        <h2>Welcome to BeatsCheck</h2>
-        <p class="subtitle">Create your WebUI credentials to get started.</p>
-        <form id="setup-form" class="auth-form">
-          <div class="auth-field">
-            <label for="setup-username">Username</label>
-            <input type="text" id="setup-username" required autocomplete="username" class="input">
+    <header>
+      <div class="header-left">
+        <button id="menu-toggle" class="icon-btn mobile-only" aria-label="Toggle navigation menu">&#9776;</button>
+        <h1 id="screen-title">Dashboard</h1>
+        <span id="version-badge" class="badge">v…</span>
+      </div>
+      <div class="header-right">
+        <div class="status-pill">
+          <span id="status-indicator" class="status-dot" role="status" aria-label="Application status"></span>
+          <span id="status-text">Connecting…</span>
+        </div>
+        <button id="logout-btn" class="icon-btn" style="display:none" aria-label="Log out">Logout</button>
+        <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark/light theme">Light</button>
+      </div>
+    </header>
+
+    <main id="content">
+
+      <!-- ===== Setup (first-run) ===== -->
+      <section id="page-setup" class="page">
+        <div class="auth-container">
+          <div class="auth-card">
+            <div class="auth-head">
+              <div class="auth-logo" aria-hidden="true"><div class="logo-bar"></div><div class="logo-dot"></div></div>
+              <div class="auth-title">Create your credentials</div>
+              <p class="subtitle">First-run setup. These are stored hashed in the container.</p>
+            </div>
+            <form id="setup-form" class="auth-form">
+              <div class="auth-field">
+                <label for="setup-username">Username</label>
+                <input type="text" id="setup-username" required autocomplete="username" class="input">
+              </div>
+              <div class="auth-field">
+                <label for="setup-password">Password</label>
+                <input type="password" id="setup-password" required minlength="4" autocomplete="new-password" class="input">
+              </div>
+              <div class="auth-field">
+                <label for="setup-confirm">Confirm password</label>
+                <input type="password" id="setup-confirm" required minlength="4" autocomplete="new-password" class="input">
+              </div>
+              <div id="setup-error" class="auth-error"></div>
+              <button type="submit" class="btn btn-primary auth-submit">Create account</button>
+            </form>
+            <p class="auth-help">Credentials are stored securely in the container. To reset, run:<br><code>docker exec beatscheck reset-webui-password</code></p>
           </div>
-          <div class="auth-field">
-            <label for="setup-password">Password</label>
-            <input type="password" id="setup-password" required minlength="4" autocomplete="new-password" class="input">
+        </div>
+      </section>
+
+      <!-- ===== Login ===== -->
+      <section id="page-login" class="page">
+        <div class="auth-container">
+          <div class="auth-card">
+            <div class="auth-head">
+              <div class="auth-logo" aria-hidden="true"><div class="logo-bar"></div><div class="logo-dot"></div></div>
+              <div class="auth-title">Welcome back</div>
+              <p class="subtitle">Sign in to BeatsCheck</p>
+            </div>
+            <form id="login-form" class="auth-form">
+              <div class="auth-field">
+                <label for="login-username">Username</label>
+                <input type="text" id="login-username" required autocomplete="username" class="input">
+              </div>
+              <div class="auth-field">
+                <label for="login-password">Password</label>
+                <input type="password" id="login-password" required autocomplete="current-password" class="input">
+              </div>
+              <div id="login-error" class="auth-error"></div>
+              <button type="submit" class="btn btn-primary auth-submit">Log in</button>
+            </form>
+            <p class="auth-help">Forgot your password?<br><code>docker exec beatscheck reset-webui-password</code></p>
           </div>
-          <div class="auth-field">
-            <label for="setup-confirm">Confirm Password</label>
-            <input type="password" id="setup-confirm" required minlength="4" autocomplete="new-password" class="input">
+        </div>
+      </section>
+
+      <!-- ===== Dashboard ===== -->
+      <section id="page-dashboard" class="page">
+        <h2>Dashboard</h2>
+        <div class="page-narrow">
+          <div class="card-grid">
+            <div class="card">
+              <div class="card-label">Status</div>
+              <div class="card-value"><span id="dash-status-icon" class="status-dot"></span><span id="dash-status">--</span></div>
+            </div>
+            <div class="card">
+              <div class="card-label">Mode</div>
+              <div class="card-value" id="dash-mode">--</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Library</div>
+              <div class="card-value" id="dash-library">--</div>
+              <div class="card-sub" id="dash-library-sub"></div>
+            </div>
+            <div class="card">
+              <div class="card-label">Corrupt</div>
+              <div class="card-value danger" id="dash-corrupt">--</div>
+              <div class="card-sub" id="dash-corrupt-sub"></div>
+            </div>
+            <div class="card">
+              <div class="card-label">Workers</div>
+              <div class="card-value" id="dash-workers">--</div>
+            </div>
+            <div class="card">
+              <div class="card-label">Uptime</div>
+              <div class="card-value" id="dash-uptime">--</div>
+            </div>
           </div>
-          <div id="setup-error" class="auth-error"></div>
-          <button type="submit" class="btn btn-primary auth-submit">Create Account</button>
-        </form>
-        <p class="auth-help">Credentials are stored securely in the container. To reset, run:<br><code>docker exec beatscheck reset-webui-password</code></p>
-      </div>
-    </section>
 
-    <!-- Login -->
-    <section id="page-login" class="page">
-      <div class="auth-container">
-        <h2>BeatsCheck Login</h2>
-        <form id="login-form" class="auth-form">
-          <div class="auth-field">
-            <label for="login-username">Username</label>
-            <input type="text" id="login-username" required autocomplete="username" class="input">
+          <!-- Scan hero (scanning) -->
+          <div id="scan-hero" class="scan-hero" style="display:none">
+            <div class="scan-hero-top">
+              <div style="min-width:0">
+                <div class="scan-hero-title">Decoding library</div>
+                <div id="scan-hero-file" class="scan-hero-file"></div>
+              </div>
+              <div class="scan-hero-pct-wrap">
+                <div id="scan-hero-pct" class="scan-hero-pct">0%</div>
+                <div id="scan-hero-checked" class="scan-hero-checked">0 / 0</div>
+              </div>
+            </div>
+            <div id="spectrogram" class="spectrogram" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Scan progress spectrogram">
+              <div class="spectrogram-wash" id="spectrogram-wash"></div>
+              <div class="spectrogram-playhead" id="spectrogram-playhead"></div>
+            </div>
+            <div class="scan-hero-stats">
+              <span><b id="shero-checked">0 / 0</b> checked</span>
+              <span class="stat-corrupt" id="shero-corrupt">0 corrupt found</span>
+              <span class="stat-eta" id="shero-eta">ETA --</span>
+              <span id="shero-workers">-- workers active</span>
+            </div>
           </div>
-          <div class="auth-field">
-            <label for="login-password">Password</label>
-            <input type="password" id="login-password" required autocomplete="current-password" class="input">
+
+          <!-- Idle hero -->
+          <div id="idle-hero" class="idle-hero" style="display:none">
+            <div class="idle-hero-tile" aria-hidden="true">&#10003;</div>
+            <div style="min-width:0">
+              <div class="idle-hero-title">Scanner idle</div>
+              <div id="idle-hero-meta" class="idle-hero-meta">No scan run yet</div>
+            </div>
+            <button class="btn btn-primary" onclick="triggerRescan('report')">Start scan</button>
           </div>
-          <div id="login-error" class="auth-error"></div>
-          <button type="submit" class="btn btn-primary auth-submit">Log In</button>
-        </form>
-        <p class="auth-help">Forgot your password? Run:<br><code>docker exec beatscheck reset-webui-password</code></p>
-      </div>
-    </section>
 
-    <!-- Dashboard -->
-    <section id="page-dashboard" class="page">
-      <h2>Dashboard</h2>
-      <div class="card-grid">
-        <div class="card">
-          <div class="card-label"><span id="dash-status-icon" class="card-icon" aria-hidden="true">&#9679;</span> Status</div>
-          <div id="dash-status" class="card-value">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9881;</span> Mode</div>
-          <div id="dash-mode" class="card-value">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9888;</span> Corrupt Files</div>
-          <div id="dash-corrupt" class="card-value">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9836;</span> Library Size</div>
-          <div id="dash-library" class="card-value">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label"><span class="card-icon" aria-hidden="true">&#8635;</span> Last Scan</div>
-          <div id="dash-last-scan" class="card-value">--</div>
-        </div>
-        <div class="card">
-          <div class="card-label"><span class="card-icon" aria-hidden="true">&#9201;</span> Uptime</div>
-          <div id="dash-uptime" class="card-value">--</div>
-        </div>
-      </div>
+          <!-- Action row -->
+          <div class="action-bar">
+            <h3>Actions</h3>
+            <div class="btn-group">
+              <button onclick="triggerRescan('report')" class="btn btn-primary">Scan — Report</button>
+              <button onclick="triggerRescan('move')" class="btn btn-secondary">Scan — Move</button>
+              <button id="cancel-scan-btn" onclick="cancelScan()" class="btn btn-danger" style="display:none">Cancel scan</button>
+            </div>
+            <label class="fresh-scan-toggle">
+              <input type="checkbox" id="fresh-scan-check"> Fresh scan (ignore resume cache)
+            </label>
+          </div>
 
-      <!-- Progress bar (visible during scan) -->
-      <div id="scan-progress-section" class="card" style="display:none;">
-        <div class="card-label">Scan Progress</div>
-        <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-          <div id="progress-fill" class="progress-fill"></div>
+          <!-- Recently flagged -->
+          <div class="section-heading">Recently flagged <span class="meta">most recent</span></div>
+          <div id="recent-list" class="recent-list">
+            <div class="recent-empty">No corrupt files — library is clean.</div>
+          </div>
         </div>
-        <div id="progress-text" class="progress-text">0 / 0 files</div>
-        <div id="progress-corrupt" class="progress-corrupt"></div>
-        <div id="progress-eta" class="progress-eta"></div>
-        <div id="progress-file" class="progress-file"></div>
-      </div>
+      </section>
 
-      <div class="action-bar">
-        <h3>Actions</h3>
-        <div class="btn-group">
-          <button onclick="triggerRescan('report')" class="btn btn-primary">Scan (Report)</button>
-          <button onclick="triggerRescan('move')" class="btn btn-secondary">Scan (Move)</button>
-          <button id="cancel-scan-btn" onclick="cancelScan()" class="btn btn-danger" style="display:none">Cancel Scan</button>
+      <!-- ===== Corrupt Files ===== -->
+      <section id="page-corrupt" class="page">
+        <h2>Corrupt Files <span id="corrupt-count" class="badge">0</span></h2>
+        <div class="page-narrow">
+          <div id="corrupt-scan-banner" class="scan-banner" style="display:none">
+            A scan is in progress — deleting is disabled until the scan completes.
+          </div>
+          <div id="corrupt-info-banner" class="info-banner" style="display:none"></div>
+          <div class="table-toolbar">
+            <input type="text" id="corrupt-search" placeholder="Search files, albums, errors…" class="input" aria-label="Search corrupt files">
+            <button id="view-toggle-btn" class="btn btn-secondary btn-sm" onclick="toggleCorruptView()">Group by album</button>
+            <div id="album-select-helper" class="select-n-group" style="display:none">
+              <label for="select-n-input" class="select-n-label">Select</label>
+              <input type="number" id="select-n-input" class="input select-n-input" min="1" max="50" value="50" aria-label="Number of albums to select">
+              <button class="btn btn-outline btn-sm" onclick="selectNAlbums()" aria-label="Select N albums">Select N</button>
+            </div>
+            <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete selected</button>
+            <button id="delete-albums-btn" class="btn btn-danger" onclick="deleteSelectedAlbums()" disabled style="display:none" aria-label="Delete selected albums (whole folders)">Delete Albums (Whole)</button>
+            <button class="btn btn-outline btn-sm" onclick="clearCorruptList()" aria-label="Clear corrupt list">Clear</button>
+          </div>
+          <div class="table-wrap">
+            <table id="corrupt-table" aria-label="Corrupt files list">
+              <thead>
+                <tr>
+                  <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" aria-label="Select all files"></th>
+                  <th class="sortable" data-sort="path" onclick="sortTable('path')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('path')}">File <span class="sort-indicator"></span></th>
+                  <th class="col-size sortable" data-sort="size" onclick="sortTable('size')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('size')}">Size <span class="sort-indicator"></span></th>
+                  <th class="col-actions">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="corrupt-tbody">
+                <tr><td colspan="4" class="empty-state">No corrupt files — library is clean.</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
-        <label class="fresh-scan-toggle">
-          <input type="checkbox" id="fresh-scan-check"> Fresh scan (ignore resume cache)
-        </label>
-      </div>
-    </section>
+      </section>
 
-    <!-- Corrupt Files -->
-    <section id="page-corrupt" class="page">
-      <h2>Corrupt Files <span id="corrupt-count" class="badge">0</span></h2>
-      <div id="corrupt-scan-banner" class="scan-banner" style="display:none">
-        A scan is in progress — deleting is disabled until the scan completes.
-      </div>
-      <div id="corrupt-info-banner" class="info-banner" style="display:none"></div>
-      <div class="table-toolbar">
-        <input type="text" id="corrupt-search" placeholder="Search files..." class="input" aria-label="Search corrupt files">
-        <button id="view-toggle-btn" class="btn btn-outline btn-sm" onclick="toggleCorruptView()">Group by Album</button>
-        <div id="album-select-helper" class="select-n-group" style="display:none">
-          <label for="select-n-input" class="select-n-label">Select</label>
-          <input type="number" id="select-n-input" class="input select-n-input" min="1" max="50" value="50" aria-label="Number of albums to select">
-          <button class="btn btn-outline btn-sm" onclick="selectNAlbums()" aria-label="Select N albums">Select N</button>
+      <!-- ===== Configuration ===== -->
+      <section id="page-config" class="page">
+        <h2>Configuration</h2>
+        <div class="page-config-wrap">
+          <p class="subtitle">Changes save to <code>beatscheck.conf</code> and apply on the next scan.</p>
+          <form id="config-form" onsubmit="saveConfig(event)">
+            <div class="form-actions form-actions-top">
+              <button type="submit" class="btn btn-primary">Save configuration</button>
+              <span id="config-status" class="form-status"></span>
+            </div>
+            <div id="config-fields"></div>
+          </form>
         </div>
-        <button id="delete-selected-btn" class="btn btn-danger" onclick="deleteSelected()" disabled aria-label="Delete selected files">Delete Selected</button>
-        <button id="delete-albums-btn" class="btn btn-danger" onclick="deleteSelectedAlbums()" disabled style="display:none" aria-label="Delete selected albums (whole folders)">Delete Albums (Whole)</button>
-        <button class="btn btn-outline btn-sm" onclick="clearCorruptList()" aria-label="Clear corrupt list">Clear List</button>
-      </div>
-      <div class="table-wrap">
-        <table id="corrupt-table" aria-label="Corrupt files list">
-          <thead>
-            <tr>
-              <th class="col-check"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" aria-label="Select all files"></th>
-              <th class="sortable" data-sort="path" onclick="sortTable('path')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('path')}">File <span class="sort-indicator"></span></th>
-              <th class="col-size sortable" data-sort="size" onclick="sortTable('size')" tabindex="0" role="button" aria-sort="none" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();sortTable('size')}">Size <span class="sort-indicator"></span></th>
-              <th class="col-actions">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="corrupt-tbody">
-            <tr><td colspan="4" class="empty-state">No corrupt files found</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+      </section>
 
-    <!-- Configuration -->
-    <section id="page-config" class="page">
-      <h2>Configuration</h2>
-      <p class="subtitle">Changes are saved to <code>beatscheck.conf</code> and apply on the next scan.</p>
-      <form id="config-form" onsubmit="saveConfig(event)">
-        <div id="config-fields"></div>
-        <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Save Configuration</button>
-          <span id="config-status" class="form-status"></span>
+      <!-- ===== Logs ===== -->
+      <section id="page-logs" class="page">
+        <h2>Logs</h2>
+        <div class="log-toolbar">
+          <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
+          <select id="log-lines" class="input log-lines-select" aria-label="Number of log lines">
+            <option value="100">100 lines</option>
+            <option value="500" selected>500 lines</option>
+            <option value="1000">1000 lines</option>
+            <option value="5000">All</option>
+          </select>
+          <select id="log-level-filter" class="input log-lines-select" aria-label="Filter by log level">
+            <option value="">All levels</option>
+            <option value="CRITICAL">Critical</option>
+            <option value="ERROR">Error</option>
+            <option value="WARNING">Warning</option>
+            <option value="INFO">Info</option>
+            <option value="DEBUG">Debug</option>
+          </select>
+          <input type="text" id="log-search" placeholder="Search logs…" class="input log-search-input" aria-label="Search logs">
+          <div class="log-toolbar-actions">
+            <button class="btn btn-outline btn-sm" onclick="copyLogs()" aria-label="Copy logs to clipboard">Copy</button>
+            <button class="btn btn-outline btn-sm" onclick="downloadLogs()" aria-label="Download log file">Download</button>
+            <button class="btn btn-outline btn-sm" onclick="refreshLogs()">Refresh</button>
+          </div>
         </div>
-      </form>
-    </section>
+        <div id="log-output" class="log-viewer" role="log" aria-live="off" aria-label="Log output"></div>
+      </section>
 
-    <!-- Logs -->
-    <section id="page-logs" class="page">
-      <h2>Logs</h2>
-      <div class="log-toolbar">
-        <label><input type="checkbox" id="log-autoscroll" checked> Auto-scroll</label>
-        <select id="log-lines" class="input log-lines-select" aria-label="Number of log lines">
-          <option value="100">100 lines</option>
-          <option value="500" selected>500 lines</option>
-          <option value="1000">1000 lines</option>
-          <option value="5000">All</option>
-        </select>
-        <select id="log-level-filter" class="input log-lines-select" aria-label="Filter by log level">
-          <option value="">All Levels</option>
-          <option value="CRITICAL">Critical</option>
-          <option value="ERROR">Error</option>
-          <option value="WARNING">Warning</option>
-          <option value="INFO">Info</option>
-          <option value="DEBUG">Debug</option>
-        </select>
-        <input type="text" id="log-search" placeholder="Search logs..." class="input log-search-input" aria-label="Search logs">
-        <div class="log-toolbar-actions">
-          <button class="btn btn-outline btn-sm" onclick="copyLogs()" aria-label="Copy logs to clipboard">Copy</button>
-          <button class="btn btn-outline btn-sm" onclick="downloadLogs()" aria-label="Download log file">Download</button>
-          <button class="btn btn-outline btn-sm" onclick="refreshLogs()">Refresh</button>
-        </div>
-      </div>
-      <div id="log-output" class="log-viewer" role="log" aria-live="off" aria-label="Log output"></div>
-    </section>
-
-  </main>
+    </main>
+  </div>
 
   <div id="toast-container" aria-live="polite"></div>
 

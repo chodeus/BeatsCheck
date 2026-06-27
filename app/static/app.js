@@ -119,10 +119,13 @@ function showPage(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   const el = document.getElementById('page-' + page);
   if (el) el.classList.add('active');
+  const title = document.getElementById('screen-title');
+  if (title) title.textContent = SCREEN_TITLES[page] || 'BeatsCheck';
   // Hide/show app chrome for auth pages
   const sidebar = document.getElementById('sidebar');
   const logoutBtn = document.getElementById('logout-btn');
   if (page === 'login' || page === 'setup') {
+    stopStatusPoll();
     sidebar.style.display = 'none';
     if (logoutBtn) logoutBtn.style.display = 'none';
     document.body.classList.add('auth-view');
@@ -223,10 +226,16 @@ function toggleTheme() {
 
 function updateThemeIcon(theme) {
   const btn = document.getElementById('theme-toggle');
-  btn.textContent = theme === 'dark' ? '\u263E' : '\u2600';
+  // Header toggle is labeled with the *other* theme's name (per design).
+  btn.textContent = theme === 'dark' ? 'Light' : 'Dark';
 }
 
 // --- Navigation ---
+const SCREEN_TITLES = {
+  dashboard: 'Dashboard', corrupt: 'Corrupt files', config: 'Configuration',
+  logs: 'Logs', login: 'Login', setup: 'Setup wizard',
+};
+
 function navigate(page) {
   if (currentPage === 'config' && page !== 'config' && hasUnsavedConfig()) {
     if (!confirm('You have unsaved configuration changes. Leave anyway?')) return;
@@ -240,11 +249,16 @@ function navigate(page) {
   const nav = document.querySelector(`[data-page="${page}"]`);
   if (nav) nav.classList.add('active');
 
+  const title = document.getElementById('screen-title');
+  if (title) title.textContent = SCREEN_TITLES[page] || 'BeatsCheck';
+
   closeSidebar();
 
-  if (page === 'dashboard') { startStatusPoll(); }
-  else { stopStatusPoll(); }
+  // Status drives the header pill + sidebar card on every screen, so the
+  // poll runs continuously while authenticated (not just on the dashboard).
+  startStatusPoll();
 
+  if (page === 'dashboard') loadRecentFlagged();
   if (page === 'corrupt') loadCorrupt();
   if (page === 'config') loadConfig();
   if (page === 'logs') { refreshLogs(); startLogPoll(); }
@@ -321,69 +335,94 @@ function formatSize(bytes) {
 }
 
 let prevCardValues = {};
+let lastDashCorruptCount = null;
+let wasScanning = false;
+
+function formatNumber(n) {
+  if (n == null || isNaN(n)) return '--';
+  return Number(n).toLocaleString('en-US');
+}
+
+function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 async function refreshDashboard() {
   const data = await api('status');
   if (!data) return;
 
-  document.getElementById('version-badge').textContent = 'v' + (data.version || '?');
+  const version = 'v' + (data.version || '?');
+  document.getElementById('version-badge').textContent = version;
+  const logoVer = document.getElementById('logo-version');
+  if (logoVer) logoVer.textContent = version + ' \u00b7 integrity';
 
-  const dot = document.getElementById('status-indicator');
-  const stxt = document.getElementById('status-text');
   const status = data.status || 'unknown';
-  dot.className = 'status-dot ' + status;
-  stxt.textContent = status.charAt(0).toUpperCase() + status.slice(1);
-
+  const isScanning = status === 'scanning';
+  const statusWord = capitalize(status);
   const summary = data.summary || {};
-  setCardValue('dash-status', status.charAt(0).toUpperCase() + status.slice(1));
-  const dashStatusIcon = document.getElementById('dash-status-icon');
-  if (dashStatusIcon) dashStatusIcon.className = 'card-icon status-icon-' + status;
-  setCardValue('dash-mode', (data.mode || '--').toUpperCase());
-  setCardValue('dash-uptime', formatUptime(data.uptime));
-  setCardValue('dash-corrupt', summary.corrupted != null ? summary.corrupted : '--');
-  setCardValue('dash-library', summary.library_size_human || summary.library_files ?
-    (summary.library_size_human || summary.library_files + ' files') : '--');
-  setCardValue('dash-last-scan', summary.finished || '--');
-
   const prog = data.scan_progress;
-  const section = document.getElementById('scan-progress-section');
-  if (prog && status === 'scanning') {
-    section.style.display = '';
-    const pct = prog.total > 0 ? Math.round((prog.current / prog.total) * 100) : 0;
-    document.getElementById('progress-fill').style.width = pct + '%';
+  const pct = (prog && prog.total > 0) ? Math.round((prog.current / prog.total) * 100) : 0;
 
-    const bar = section.querySelector('.progress-bar');
-    if (bar) bar.setAttribute('aria-valuenow', pct);
+  // --- Header status pill ---
+  const dot = document.getElementById('status-indicator');
+  dot.className = 'status-dot ' + status;
+  setText('status-text', isScanning ? ('Scanning \u00b7 ' + pct + '%') : statusWord);
 
-    setText('progress-text', prog.current + ' / ' + prog.total + ' files (' + pct + '%)');
-    const corruptNum = data.corrupt_count || 0;
-    setText('progress-corrupt', corruptNum > 0 ? corruptNum + ' corrupt found' : '');
-    setText('progress-file', prog.file || '');
+  // --- Sidebar status card ---
+  const sideDot = document.getElementById('sidebar-status-dot');
+  if (sideDot) sideDot.className = 'status-dot ' + status;
+  setText('sidebar-status-word', statusWord);
+  const workers = data.workers != null ? data.workers : null;
+  const sideMeta = document.getElementById('sidebar-status-meta');
+  if (sideMeta) {
+    const line1 = (workers != null ? workers + ' workers' : 'idle') + ' \u00b7 nice(10)';
+    const line2 = (data.mode ? data.mode : 'setup') + ' mode';
+    sideMeta.innerHTML = escHtml(line1) + '<br>' + escHtml(line2);
+  }
 
-    if (!scanStartTime || scanStartCount > prog.current) {
-      scanStartTime = Date.now();
-      scanStartCount = prog.current;
-    }
-    const elapsed = (Date.now() - scanStartTime) / 1000;
-    const done = prog.current - scanStartCount;
-    if (prog.current >= prog.total) {
-      setText('progress-eta', 'Finalizing...');
-    } else if (done > 10) {
-      const rate = done / elapsed;
-      const remaining = (prog.total - prog.current) / rate;
-      const eta = formatUptime(Math.round(remaining));
-      const rateStr = Math.round(rate * 60);
-      setText('progress-eta', rateStr + ' files/min \u2022 ~' + eta + ' remaining');
-    } else {
-      setText('progress-eta', 'Calculating...');
-    }
+  // --- Stat cards ---
+  const dashStatusIcon = document.getElementById('dash-status-icon');
+  if (dashStatusIcon) dashStatusIcon.className = 'status-dot ' + status;
+  setCardValue('dash-status', statusWord);
+  setCardValue('dash-mode', capitalize(data.mode || '--'));
+  setCardValue('dash-workers', workers != null ? workers : '--');
+  setCardValue('dash-uptime', formatUptime(data.uptime));
+
+  // live corrupt count wins during a scan; otherwise the finished summary
+  const corruptNum = isScanning && data.corrupt_count != null
+    ? data.corrupt_count
+    : (summary.corrupted != null ? summary.corrupted : null);
+  setCardValue('dash-corrupt', corruptNum != null ? formatNumber(corruptNum) : '--');
+  setText('dash-corrupt-sub', summary.corrupt_size_human
+    ? ('flagged \u00b7 ' + summary.corrupt_size_human) : 'flagged');
+
+  setCardValue('dash-library', summary.library_files != null
+    ? formatNumber(summary.library_files)
+    : (summary.library_size_human || '--'));
+  setText('dash-library-sub', summary.library_size_human
+    ? ('files \u00b7 ' + summary.library_size_human) : '');
+
+  // --- Sidebar nav badge ---
+  updateNavCorruptBadge(corruptNum);
+
+  // --- Hero: scanning spectrogram vs idle card ---
+  const scanHero = document.getElementById('scan-hero');
+  const idleHero = document.getElementById('idle-hero');
+  if (isScanning && prog) {
+    if (idleHero) idleHero.style.display = 'none';
+    if (scanHero) scanHero.style.display = '';
+    renderScanHero(prog, pct, corruptNum || 0, workers);
+  } else if (status === 'idle') {
+    if (scanHero) scanHero.style.display = 'none';
+    if (idleHero) idleHero.style.display = '';
+    renderIdleHero(summary, corruptNum);
+    scanStartTime = null;
   } else {
-    section.style.display = 'none';
+    // starting / setup / unknown \u2014 no hero
+    if (scanHero) scanHero.style.display = 'none';
+    if (idleHero) idleHero.style.display = 'none';
     scanStartTime = null;
   }
 
-  // Disable rescan buttons while scanning, show cancel button
-  const isScanning = status === 'scanning';
+  // --- Action buttons ---
   document.querySelectorAll('.action-bar .btn:not(#cancel-scan-btn)').forEach(b => {
     b.disabled = isScanning;
   });
@@ -392,6 +431,149 @@ async function refreshDashboard() {
     cancelBtn.style.display = isScanning ? '' : 'none';
     cancelBtn.disabled = false;
   }
+
+  // Refresh the recently-flagged list when corrupt count changes or a scan
+  // just finished.
+  if (currentPage === 'dashboard') {
+    if (corruptNum !== lastDashCorruptCount || (wasScanning && !isScanning)) {
+      loadRecentFlagged();
+    }
+  }
+  lastDashCorruptCount = corruptNum;
+  wasScanning = isScanning;
+}
+
+function updateNavCorruptBadge(count) {
+  const badge = document.getElementById('nav-corrupt-badge');
+  if (!badge) return;
+  const n = count || 0;
+  badge.textContent = n;
+  badge.classList.toggle('zero', n === 0);
+}
+
+function renderIdleHero(summary, corruptNum) {
+  const meta = document.getElementById('idle-hero-meta');
+  if (!meta) return;
+  const parts = [];
+  if (summary.finished) parts.push('Last scan ' + summary.finished);
+  if (summary.library_files != null) parts.push(formatNumber(summary.library_files) + ' files');
+  let html = parts.map(escHtml).join(' \u00b7 ');
+  if (corruptNum != null) {
+    html += (html ? ' \u00b7 ' : '') + '<b>' + formatNumber(corruptNum) + ' flagged</b>';
+  }
+  meta.innerHTML = html || 'No scan run yet';
+}
+
+function renderScanHero(prog, pct, corruptNum, workers) {
+  setText('scan-hero-pct', pct + '%');
+  const checked = formatNumber(prog.current) + ' / ' + formatNumber(prog.total);
+  setText('scan-hero-checked', checked);
+  setText('shero-checked', checked);
+  setText('scan-hero-file', prog.file || '');
+  setText('shero-corrupt', (corruptNum || 0) + ' corrupt found');
+  setText('shero-workers', (workers != null ? workers : '?') + ' workers active');
+
+  // ETA \u2014 same rate model as before (reset if a fresh scan rewinds the count)
+  if (!scanStartTime || scanStartCount > prog.current) {
+    scanStartTime = Date.now();
+    scanStartCount = prog.current;
+  }
+  const elapsed = (Date.now() - scanStartTime) / 1000;
+  const done = prog.current - scanStartCount;
+  let etaText;
+  if (prog.current >= prog.total) {
+    etaText = 'Finalizing\u2026';
+  } else if (done > 10 && elapsed > 0) {
+    const rate = done / elapsed;
+    const remaining = (prog.total - prog.current) / rate;
+    etaText = 'ETA ' + formatUptime(Math.round(remaining));
+  } else {
+    etaText = 'ETA calculating\u2026';
+  }
+  setText('shero-eta', etaText);
+
+  updateSpectrogram(pct / 100, corruptNum || 0);
+}
+
+// --- Spectrogram visualization ---
+const SPEC_N = 150;
+const SPEC_SPECTRUM = ['#6c5cff', '#4b86ff', '#34e0a0', '#9ad94a', '#f5c24a', '#ff7a4d'];
+const SPEC_CORRUPT_IDX = [11, 22, 38, 47, 61, 74, 89, 103, 118, 131];
+let specBars = [];
+
+function buildSpectrogram() {
+  const container = document.getElementById('spectrogram');
+  if (!container || specBars.length) return;
+  const playhead = document.getElementById('spectrogram-playhead');
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return ((seed >> 8) / 0x7fffff) % 1; };
+  specBars = [];
+  for (let i = 0; i < SPEC_N; i++) {
+    let h = Math.max(8, Math.min(98, 18 + Math.abs(Math.sin(i * 0.19)) * 42 + rnd() * 36));
+    const color = SPEC_SPECTRUM[Math.min(5, Math.floor(h / 17))];
+    const el = document.createElement('div');
+    el.className = 'spec-bar';
+    el.style.height = h + '%';
+    el.style.background = color;
+    el.style.opacity = '0.15';
+    container.insertBefore(el, playhead);
+    specBars.push({ el, h, color, corruptSlot: SPEC_CORRUPT_IDX.indexOf(i) });
+  }
+}
+
+function updateSpectrogram(prog, corruptCount) {
+  buildSpectrogram();
+  const playhead = document.getElementById('spectrogram-playhead');
+  const wash = document.getElementById('spectrogram-wash');
+  const leftPct = Math.max(0, Math.min(100, prog * 100));
+  if (playhead) playhead.style.left = leftPct + '%';
+  if (wash) wash.style.width = leftPct + '%';
+  const spec = document.getElementById('spectrogram');
+  if (spec) spec.setAttribute('aria-valuenow', Math.round(leftPct));
+
+  const scannedCount = Math.floor(prog * SPEC_N);
+  specBars.forEach((b, i) => {
+    const scanned = i < scannedCount;
+    // mark a corrupt bar if its slot index is within the discovered count
+    const isCorrupt = b.corruptSlot >= 0 && b.corruptSlot < corruptCount && scanned;
+    if (isCorrupt) {
+      b.el.style.background = 'var(--dg, #ff4d6d)';
+      b.el.style.height = Math.min(100, b.h + 16) + '%';
+      b.el.style.opacity = '1';
+      b.el.style.boxShadow = '0 0 8px rgba(255,77,109,.85)';
+    } else {
+      b.el.style.background = b.color;
+      b.el.style.height = b.h + '%';
+      b.el.style.opacity = scanned ? '0.92' : '0.15';
+      b.el.style.boxShadow = 'none';
+    }
+  });
+}
+
+// --- Recently flagged (dashboard) ---
+async function loadRecentFlagged() {
+  const list = document.getElementById('recent-list');
+  if (!list) return;
+  const data = await api('corrupt');
+  if (!data) return;
+  const files = data.files || [];
+  if (files.length === 0) {
+    list.innerHTML = '<div class="recent-empty">No corrupt files \u2014 library is clean.</div>';
+    return;
+  }
+  // corrupt.txt is append-ordered (newest last) \u2014 show the most recent first.
+  const recent = files.slice(-6).reverse();
+  list.innerHTML = recent.map(f => {
+    const name = f.path.split('/').pop();
+    return `<div class="recent-row">
+      <div class="recent-dot"></div>
+      <div class="recent-main">
+        <div class="recent-name">${escHtml(name)}</div>
+        <div class="recent-error">${escHtml(f.reason || 'Corrupt')}</div>
+      </div>
+      <div class="recent-size">${f.missing ? 'N/A' : formatSize(f.size)}</div>
+    </div>`;
+  }).join('');
 }
 
 function setCardValue(id, val) {
@@ -418,13 +600,14 @@ async function loadCorrupt() {
   if (thisLoad !== corruptLoadId) return;  // stale response
   if (!data) {
     document.getElementById('corrupt-tbody').innerHTML =
-      '<tr><td colspan="5" class="empty-state">Failed to load data</td></tr>';
+      '<tr><td colspan="4" class="empty-state">Failed to load data</td></tr>';
     return;
   }
   corruptFiles = data.files || [];
   document.getElementById('corrupt-count').textContent = corruptFiles.length;
+  updateNavCorruptBadge(corruptFiles.length);
   const viewBtn = document.getElementById('view-toggle-btn');
-  if (viewBtn) viewBtn.textContent = corruptView === 'files' ? 'Group by Album' : 'Show All Files';
+  if (viewBtn) viewBtn.textContent = corruptView === 'files' ? 'Group by album' : 'Flat view';
   applyCorruptFilters();
 
   // Check if scanning — disable deletes and show banner
@@ -485,7 +668,7 @@ function toggleCorruptView() {
   corruptView = corruptView === 'files' ? 'albums' : 'files';
   localStorage.setItem('beatscheck-corrupt-view', corruptView);
   const btn = document.getElementById('view-toggle-btn');
-  if (btn) btn.textContent = corruptView === 'files' ? 'Group by Album' : 'Show All Files';
+  if (btn) btn.textContent = corruptView === 'files' ? 'Group by album' : 'Flat view';
   applyCorruptFilters();
   updateAlbumHelperVisibility();
 }
@@ -523,7 +706,7 @@ function applyCorruptFilters() {
 function renderCorruptAlbums(files) {
   const tbody = document.getElementById('corrupt-tbody');
   if (files.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No corrupt files found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No corrupt files — library is clean.</td></tr>';
     return;
   }
   // Group by parent folder
@@ -834,7 +1017,7 @@ function updateSortIndicators() {
 function renderCorruptTable(files) {
   const tbody = document.getElementById('corrupt-tbody');
   if (files.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No corrupt files found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No corrupt files — library is clean.</td></tr>';
     return;
   }
   tbody.innerHTML = files.map(f => {
@@ -842,10 +1025,10 @@ function renderCorruptTable(files) {
     const name = f.path.split('/').pop();
     const dir = f.path.split('/').slice(0, -1).join('/');
     const safePath = escHtml(f.path);
-    const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--text-muted)">${escHtml(f.reason)}</span>` : '';
+    const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--dg)">${escHtml(f.reason)}</span>` : '';
     return `<tr class="${cls}">
       <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
-      <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong>${reason}<br><span style="color:var(--text-dim);font-size:.75rem">${escHtml(dir)}</span></div></td>
+      <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong>${reason}<br><span style="color:var(--txd);font-size:.75rem">${escHtml(dir)}</span></div></td>
       <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
       <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''} aria-label="Delete ${escHtml(name)}">Delete</button></td>
     </tr>`;
@@ -1033,9 +1216,46 @@ async function loadConfig() {
   updateUnsavedIndicator();
 }
 
+function isBooleanField(item) {
+  return item.type === 'select' && Array.isArray(item.options)
+    && item.options.length === 2
+    && item.options.includes('true') && item.options.includes('false');
+}
+
+// Custom toggle switch backed by a hidden input so FormData (save +
+// unsaved-change detection) keeps working unchanged.
+function createConfigSwitch(key, on) {
+  const wrap = document.createElement('div');
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.id = 'cfg-' + key;
+  hidden.name = key;
+  hidden.value = on ? 'true' : 'false';
+
+  const sw = document.createElement('button');
+  sw.type = 'button';
+  sw.className = 'switch' + (on ? ' on' : '');
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  sw.innerHTML = '<span class="switch-knob"></span>';
+  sw.addEventListener('click', () => {
+    const next = hidden.value !== 'true';
+    hidden.value = next ? 'true' : 'false';
+    sw.classList.toggle('on', next);
+    sw.setAttribute('aria-checked', next ? 'true' : 'false');
+    updateUnsavedIndicator();
+  });
+
+  wrap.appendChild(hidden);
+  wrap.appendChild(sw);
+  return wrap;
+}
+
 function renderConfigForm(values) {
   const container = document.getElementById('config-fields');
   container.innerHTML = '';
+  let card = null;  // current section's field card
+
   CONFIG_SCHEMA.forEach(item => {
     if (item.section) {
       const title = document.createElement('div');
@@ -1048,55 +1268,68 @@ function renderConfigForm(values) {
         help.textContent = item.help;
         container.appendChild(help);
       }
+      card = document.createElement('div');
+      card.className = 'config-card';
+      container.appendChild(card);
       return;
     }
+    if (!card) { card = document.createElement('div'); card.className = 'config-card'; container.appendChild(card); }
+
     const group = document.createElement('div');
     group.className = 'config-group';
-    const label = document.createElement('label');
-    label.setAttribute('for', 'cfg-' + item.key);
-    label.textContent = item.label;
-    label.title = item.desc || '';
-    group.appendChild(label);
 
+    const keyCol = document.createElement('div');
+    keyCol.style.minWidth = '0';
+    const keyEl = document.createElement('div');
+    keyEl.className = 'config-key';
+    keyEl.textContent = item.label || item.key;
+    keyEl.title = item.key;
+    keyCol.appendChild(keyEl);
+    const keyName = document.createElement('span');
+    keyName.className = 'config-keyname';
+    keyName.textContent = item.key;
+    keyCol.appendChild(keyName);
     if (item.desc) {
       const desc = document.createElement('span');
       desc.className = 'config-desc';
       desc.textContent = item.desc;
-      group.appendChild(desc);
+      keyCol.appendChild(desc);
     }
+    group.appendChild(keyCol);
 
-    let input;
+    const control = document.createElement('div');
+    control.className = 'config-control';
+    const curVal = item.key in values ? values[item.key] : (item.default || '');
+
     if (item.type === 'path') {
-      const currentVal = item.key in values ? values[item.key] : (item.default || '');
-      const picker = createFolderPicker('cfg-' + item.key, currentVal);
-      group.appendChild(picker);
-      container.appendChild(group);
-      return;
+      control.appendChild(createFolderPicker('cfg-' + item.key, curVal));
+    } else if (isBooleanField(item)) {
+      control.appendChild(createConfigSwitch(item.key, String(curVal) === 'true'));
     } else if (item.type === 'select') {
-      input = document.createElement('select');
+      const sel = document.createElement('select');
       (item.options || []).forEach(opt => {
         const o = document.createElement('option');
-        o.value = opt;
-        o.textContent = opt;
-        input.appendChild(o);
+        o.value = opt; o.textContent = opt;
+        sel.appendChild(o);
       });
-      input.id = 'cfg-' + item.key;
-      input.name = item.key;
-      input.value = item.key in values ? values[item.key] : (item.default || '');
-      input.addEventListener('change', updateUnsavedIndicator);
-      group.appendChild(input);
+      sel.id = 'cfg-' + item.key;
+      sel.name = item.key;
+      sel.value = curVal;
+      sel.addEventListener('change', updateUnsavedIndicator);
+      control.appendChild(sel);
     } else {
-      input = document.createElement('input');
+      const input = document.createElement('input');
       input.type = item.type || 'text';
       if (item.type === 'number') { input.step = 'any'; input.min = '0'; }
       input.id = 'cfg-' + item.key;
       input.name = item.key;
-      input.value = item.key in values ? values[item.key] : (item.default || '');
+      input.value = curVal;
       input.addEventListener('input', updateUnsavedIndicator);
       input.addEventListener('change', updateUnsavedIndicator);
-      group.appendChild(input);
+      control.appendChild(input);
     }
-    container.appendChild(group);
+    group.appendChild(control);
+    card.appendChild(group);
   });
 }
 
@@ -1163,17 +1396,56 @@ const LOG_PATTERNS = [
   { regex: /\b(\d+(?:\.\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
 ];
 
+// Message-only highlight patterns (level + timestamp are rendered as their
+// own columns in the terminal layout, so they're excluded here).
+const LOG_MSG_PATTERNS = [
+  { regex: /\b(CORRUPT)\b/g, cls: 'log-corrupt' },
+  { regex: /(https?:\/\/\S+)/g, cls: 'log-url' },
+  { regex: /(\/data\/[^\n]+?\.\w{2,5})(?=\s|$)/g, cls: 'log-path' },
+  { regex: /(\/config\/[\w./-]+)/g, cls: 'log-path' },
+  { regex: /\b(\d+(?:[.,]\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
+];
+
+function highlightLogMessage(msg) {
+  let html = escHtml(msg);
+  LOG_MSG_PATTERNS.forEach(p => {
+    html = html.replace(p.regex, '<span class="' + p.cls + '">$1</span>');
+  });
+  return html;
+}
+
 function highlightLogLine(line, isSearchMatch) {
   let html = escHtml(line);
-  // Apply syntax highlighting
   LOG_PATTERNS.forEach(p => {
     html = html.replace(p.regex, '<span class="' + p.cls + '">$1</span>');
   });
-  // Search matches get a whole-line background highlight (safe — no regex on HTML)
   if (isSearchMatch) {
     html = '<span class="log-highlight-line">' + html + '</span>';
   }
   return html;
+}
+
+// Backend log format: "YYYY-MM-DD HH:MM:SS | LEVEL     | message"
+const LOG_LINE_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*(\w+)\s*\|\s*([\s\S]*)$/;
+const LOG_LEVELS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'];
+
+function renderLogLine(line, isSearchMatch) {
+  const m = LOG_LINE_RE.exec(line);
+  if (m && LOG_LEVELS.includes(m[2])) {
+    const ts = m[1];
+    const lv = m[2];
+    const msgHtml = highlightLogMessage(m[3]);
+    const hl = isSearchMatch ? ' log-highlight-line' : '';
+    return '<div class="log-line">'
+      + '<span class="log-ts">' + escHtml(ts) + '</span>'
+      + '<span class="log-chip ' + lv + '">' + lv + '</span>'
+      + '<span class="log-msg ' + lv + hl + '">' + msgHtml + '</span>'
+      + '</div>';
+  }
+  // Non-standard line (banners, multi-line output) — full highlight fallback
+  return '<div class="log-line"><span class="log-line-plain'
+    + (isSearchMatch ? ' log-highlight-line' : '')
+    + '">' + highlightLogLine(line, false) + '</span></div>';
 }
 
 let logLastMtime = 0;
@@ -1209,9 +1481,7 @@ function renderLogOutput() {
     lines = lines.filter(line => line.toLowerCase().includes(searchLower));
   }
 
-  viewer.innerHTML = lines.map(line =>
-    '<div class="log-line">' + highlightLogLine(line, hasSearch) + '</div>'
-  ).join('');
+  viewer.innerHTML = lines.map(line => renderLogLine(line, hasSearch)).join('');
 
   if (document.getElementById('log-autoscroll').checked) {
     viewer.scrollTop = viewer.scrollHeight;

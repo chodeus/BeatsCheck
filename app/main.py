@@ -3141,7 +3141,7 @@ def _start_webui(cfg):
         from webui import start_webui, app_state
         _webui_app_state = app_state
         app_state.update(version=__version__, mode=cfg.mode,
-                         status="starting")
+                         status="starting", workers=cfg.workers)
         start_webui(cfg.log_dir, cfg.webui_port)
     except Exception:
         logger.exception("WebUI failed to start")
@@ -3307,7 +3307,8 @@ def main():
 
         _clear_resume_if_fresh(cfg)
         _webui_app_state.update(
-            status="scanning", mode=cfg.mode, scan_progress=None)
+            status="scanning", mode=cfg.mode, scan_progress=None,
+            workers=cfg.workers)
         scan_failed = False
         try:
             run_scan(cfg.input_folder, cfg.output_folder, cfg.log_file,
