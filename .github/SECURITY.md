@@ -22,7 +22,8 @@ Please do **not** open a public issue for security vulnerabilities that could be
 - Runs as a non-root user via `su-exec` (configurable PUID/PGID)
 - Minimal Alpine base image with only required packages
 - Music directory mounted read-only by default (`:ro`)
-- No network access required (`--network none` supported)
+- Core scanning needs no network access (`--network none` is supported
+  when the optional Lidarr integration is not configured)
 - Tini init process for proper signal handling
 - HEALTHCHECK for container orchestrator monitoring
 - Supports two hardened deployment modes (both documented in `compose.yaml`):
@@ -42,10 +43,14 @@ Please do **not** open a public issue for security vulnerabilities that could be
 - Multi-arch builds with SBOM and build attestation
 
 ### Application Security
-- No external network calls — only local filesystem access
+- Outbound HTTP is limited to the configured Lidarr API (opt-in); the
+  Lidarr API key is sent via the `X-Api-Key` header (never in URLs),
+  redirects are blocked, and the key is never logged
 - ffmpeg arguments are list-based (no shell injection)
 - Symlink boundary checking prevents directory traversal
-- No secrets, tokens, or credentials handled by the application
+- Handles credentials: the Lidarr API key (stored in `beatscheck.conf`
+  or a Docker secret, masked in WebUI responses) and WebUI logins
+  (PBKDF2-SHA256 hashed passwords + in-memory session tokens)
 - All file operations use safe patterns (atomic JSON writes)
 
 ## Best Practices for Users

@@ -67,9 +67,23 @@ app_state = AppState()
 _AUTH_FILE = "webui_auth.json"
 _PBKDF2_ITERATIONS = 100_000
 _SESSION_MAX_AGE = 86400  # 24 hours
+_MIN_PASSWORD_LENGTH = 8
+
+# Sentinel returned by _load_auth() when the auth file EXISTS but cannot be
+# read/parsed (corruption or PUID/PGID permission drift). Callers must fail
+# closed on this — never treat it as "no credentials configured", which
+# would re-open the first-run setup wizard to an attacker.
+_AUTH_UNREADABLE = object()
 
 _sessions = {}
 _sessions_lock = threading.Lock()
+
+# Failed-login throttle (per client IP). In-memory; resets on restart.
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_LOCKOUT_SECONDS = 300
+_LOGIN_ATTEMPT_WINDOW = 900
+_login_attempts = {}
+_login_attempts_lock = threading.Lock()
 
 
 def _hash_password(password, salt=None):
@@ -94,18 +108,31 @@ def _verify_password(password, stored_hash):
 
 
 def _load_auth(config_dir):
-    """Load auth credentials from webui_auth.json."""
+    """Load auth credentials from webui_auth.json.
+
+    Returns None when the file is ABSENT (first-run setup allowed), the
+    credentials dict when present and valid, or the _AUTH_UNREADABLE
+    sentinel when the file exists but cannot be parsed / is missing
+    required fields. Callers must fail closed on the sentinel: mapping a
+    read error to None would let anyone re-run /api/setup and seize the
+    account (auth fail-open)."""
     path = os.path.join(config_dir, _AUTH_FILE)
     if not os.path.isfile(path):
         return None
     try:
         with open(path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-        if data.get('username') and data.get('password_hash'):
-            return data
     except (json.JSONDecodeError, OSError, ValueError):
-        pass
-    return None
+        logger.error(
+            "WebUI auth file %s exists but is unreadable/corrupt; "
+            "refusing setup and login (fail closed)", path)
+        return _AUTH_UNREADABLE
+    if data.get('username') and data.get('password_hash'):
+        return data
+    logger.error(
+        "WebUI auth file %s is present but missing username/"
+        "password_hash; refusing setup and login (fail closed)", path)
+    return _AUTH_UNREADABLE
 
 
 def _save_auth(config_dir, username, password):
@@ -161,6 +188,43 @@ def _cleanup_sessions():
                    if now > s["expires"]]
         for t in expired:
             del _sessions[t]
+
+
+def _login_lockout_remaining(key):
+    """Return remaining lockout seconds (>0) for *key*, else 0.
+    Expired attempt windows are pruned as a side effect."""
+    now = time.time()
+    with _login_attempts_lock:
+        rec = _login_attempts.get(key)
+        if not rec:
+            return 0
+        if rec["locked_until"] > now:
+            return int(rec["locked_until"] - now) + 1
+        if now - rec["first"] > _LOGIN_ATTEMPT_WINDOW:
+            _login_attempts.pop(key, None)
+        return 0
+
+
+def _login_record_failure(key):
+    """Record a failed login for *key*; lock it once the attempt cap is
+    exceeded within the sliding window."""
+    now = time.time()
+    with _login_attempts_lock:
+        rec = _login_attempts.get(key)
+        if not rec or now - rec["first"] > _LOGIN_ATTEMPT_WINDOW:
+            rec = {"count": 0, "first": now, "locked_until": 0}
+            _login_attempts[key] = rec
+        rec["count"] += 1
+        if rec["count"] >= _LOGIN_MAX_ATTEMPTS:
+            rec["locked_until"] = now + _LOGIN_LOCKOUT_SECONDS
+            rec["count"] = 0
+            rec["first"] = now
+
+
+def _login_record_success(key):
+    """Clear the failure counter for *key* on a successful login."""
+    with _login_attempts_lock:
+        _login_attempts.pop(key, None)
 
 
 # ---------------------------------------------------------------------------
@@ -661,10 +725,29 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         self._json_response({"error": "unauthorized"}, 401)
         return False
 
+    def _client_ip(self):
+        """Best-effort client IP for rate-limiting. Trusts the first
+        X-Forwarded-For hop when present (the README's remote-access
+        deployment sits behind a reverse proxy), else the socket peer."""
+        xff = self.headers.get('X-Forwarded-For', '')
+        if xff:
+            return xff.split(',')[0].strip()
+        return self.client_address[0]
+
     def _session_cookie(self, token, max_age=_SESSION_MAX_AGE):
-        """Build a Set-Cookie header value."""
+        """Build a Set-Cookie header value. The Secure attribute is added
+        when the request arrived over HTTPS (directly or via a reverse
+        proxy that sets X-Forwarded-Proto), or when explicitly forced via
+        WEBUI_FORCE_SECURE_COOKIE — so it hardens the documented HTTPS
+        deployment without breaking a plain-HTTP LAN install."""
+        xfp = self.headers.get(
+            'X-Forwarded-Proto', '').split(',')[0].strip().lower()
+        forced = os.environ.get(
+            'WEBUI_FORCE_SECURE_COOKIE', '').strip().lower() \
+            in ('1', 'true', 'yes', 'on')
+        secure = "Secure; " if (xfp == 'https' or forced) else ""
         return (f"{_SESSION_COOKIE}={token}; "
-                f"HttpOnly; SameSite=Strict; Path=/; "
+                f"HttpOnly; SameSite=Strict; {secure}Path=/; "
                 f"Max-Age={max_age}")
 
     def do_GET(self):
@@ -674,6 +757,16 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         if self.path == '/api/auth-status':
             auth = _load_auth(config_dir)
             token = self._get_session_token()
+            if auth is _AUTH_UNREADABLE:
+                # Fail closed: do NOT report setup_required (that would
+                # re-open the setup wizard). Existing valid sessions still
+                # work; a fresh client is sent to the login page.
+                self._json_response({
+                    "setup_required": False,
+                    "authenticated": _validate_session(token),
+                    "error": "auth store unreadable",
+                }, 503)
+                return
             self._json_response({
                 "setup_required": auth is None,
                 "authenticated": _validate_session(token),
@@ -764,7 +857,13 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
     def _handle_setup(self, config_dir):
         """Handle POST /api/setup — first-run credential creation."""
-        if _load_auth(config_dir) is not None:
+        auth = _load_auth(config_dir)
+        if auth is _AUTH_UNREADABLE:
+            self._json_response(
+                {"error": "auth store unreadable — refusing setup"},
+                503)
+            return
+        if auth is not None:
             self._json_response(
                 {"error": "already configured"}, 400)
             return
@@ -777,10 +876,10 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response(
                 {"error": "username required"}, 400)
             return
-        if len(password) < 4:
+        if len(password) < _MIN_PASSWORD_LENGTH:
             self._json_response(
-                {"error": "password must be at least "
-                 "4 characters"}, 400)
+                {"error": f"password must be at least "
+                 f"{_MIN_PASSWORD_LENGTH} characters"}, 400)
             return
         _save_auth(config_dir, username, password)
         token = _create_session(username)
@@ -790,10 +889,21 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
     def _handle_login(self, config_dir):
         """Handle POST /api/login — credential validation."""
+        key = self._client_ip()
+        locked = _login_lockout_remaining(key)
+        if locked:
+            self._json_response(
+                {"error": f"too many failed attempts — try again in "
+                 f"{locked}s"}, 429)
+            return
         body = self._read_body()
         if body is None:
             return
         auth = _load_auth(config_dir)
+        if auth is _AUTH_UNREADABLE:
+            self._json_response(
+                {"error": "auth store unreadable"}, 503)
+            return
         if auth is None:
             self._json_response(
                 {"error": "setup required"}, 400)
@@ -803,11 +913,13 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         if (username == auth['username']
                 and _verify_password(
                     password, auth['password_hash'])):
+            _login_record_success(key)
             token = _create_session(username)
             self._json_response(
                 {"ok": True},
                 cookies=[self._session_cookie(token)])
         else:
+            _login_record_failure(key)
             self._json_response(
                 {"error": "invalid credentials"}, 401)
 

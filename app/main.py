@@ -767,6 +767,16 @@ def delete_album_folders(folders, config_dir, music_dir=None,
     lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
     corrupt_details = _load_corrupt_details(config_dir)
 
+    # mode='whole' wipes the entire folder, so restrict it to folders that
+    # actually contain a file flagged in corrupt.txt (the canonical delete
+    # allowlist). Without this a mis-driven UI / authenticated request could
+    # rmtree any album folder under the rw-mounted MUSIC_DIR.
+    corrupt_dirs = {
+        os.path.dirname(cf)
+        for cf in _load_lines_as_set(
+            os.path.join(config_dir, "corrupt.txt"))
+    }
+
     deleted_files = []
     affected_albums = []
     cancelled = False
@@ -785,6 +795,15 @@ def delete_album_folders(folders, config_dir, music_dir=None,
                 cancelled = True
                 log.write(f"CANCELLED at folder {i}/{total}\n")
                 break
+
+            if mode == "whole" and folder not in corrupt_dirs:
+                log.write(
+                    f"REFUSED whole-delete (no flagged corrupt file): "
+                    f"{folder}\n")
+                errors.append({
+                    "folder": folder,
+                    "error": "no flagged corrupt files in folder"})
+                continue
 
             if progress_cb:
                 progress_cb(i, total, folder, "deleting")

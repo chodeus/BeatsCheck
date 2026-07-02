@@ -181,7 +181,7 @@ function doSetup(e) {
   const confirm = document.getElementById('setup-confirm').value;
   const error = document.getElementById('setup-error');
   if (!username) { e.preventDefault(); error.textContent = 'Username is required'; return; }
-  if (password.length < 4) { e.preventDefault(); error.textContent = 'Password must be at least 4 characters'; return; }
+  if (password.length < 8) { e.preventDefault(); error.textContent = 'Password must be at least 8 characters'; return; }
   if (password !== confirm) { e.preventDefault(); error.textContent = 'Passwords do not match'; return; }
   return submitAuth(e, 'setup', { username, password }, error, 'Setup failed');
 }
@@ -733,9 +733,9 @@ function renderCorruptAlbums(files) {
       <td><strong>${escHtml(albumName)}</strong><br><span class="album-count">${countLabel}</span></td>
       <td class="col-size">${formatSize(totalSize)}</td>
       <td class="col-actions album-actions">
-        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbum('${safeDir}')" ${allMissing ? 'disabled' : ''} title="Delete corrupt files only">Delete</button>
-        <button class="btn btn-danger btn-sm" onclick="event.stopPropagation();deleteAlbumWhole('${safeDir}', ${albumTotal})" title="Delete the entire album folder">Delete Album</button>
-        <button class="btn btn-outline btn-sm" onclick="event.stopPropagation();ignoreAlbum('${safeDir}')" title="Hide until next scan">Ignore</button>
+        <button class="btn btn-danger btn-sm" data-dir="${safeDir}" onclick="event.stopPropagation();deleteAlbum(this.dataset.dir)" ${allMissing ? 'disabled' : ''} title="Delete corrupt files only">Delete</button>
+        <button class="btn btn-danger btn-sm" data-dir="${safeDir}" data-total="${albumTotal}" onclick="event.stopPropagation();deleteAlbumWhole(this.dataset.dir, +this.dataset.total)" title="Delete the entire album folder">Delete Album</button>
+        <button class="btn btn-outline btn-sm" data-dir="${safeDir}" onclick="event.stopPropagation();ignoreAlbum(this.dataset.dir)" title="Hide until next scan">Ignore</button>
       </td>
     </tr>`;
     tracks.forEach(f => {
@@ -1036,9 +1036,16 @@ function renderCorruptTable(files) {
 }
 
 function escHtml(s) {
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
+  // Escapes for BOTH text and double-quoted attribute contexts. The
+  // textContent trick escaped &<> but not " or ', letting a file/folder
+  // name break out of data-*/title/aria-label attributes (XSS) or a
+  // single-quoted inline handler.
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // Search filter
