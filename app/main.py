@@ -993,6 +993,36 @@ def _clean_ffmpeg_errors(stderr):
     return ' | '.join(unique) if unique else "Non-zero exit code"
 
 
+# ID3v2 tag-parse errors ffmpeg logs at *error* level but recovers from by
+# skipping the tag frame (bad UTF-16 BOM, unreadable comment/lyrics/text frame).
+# A malformed metadata tag is never audio corruption. Older ffmpeg (4.x-6.x)
+# prints these at error level; 8.x no longer does. From libavformat/id3v2.c.
+_BENIGN_METADATA_MARKERS = (
+    "Incorrect BOM value",
+    "Cannot read BOM value",
+    "Error reading comment frame",
+    "Error reading lyrics",
+    "Error reading frame",
+)
+
+
+def _is_benign_metadata_noise(line):
+    """True if an ffmpeg stderr line is an ID3 tag-parse error the demuxer
+    recovered from by skipping the tag (a metadata defect, not corruption)."""
+    return any(marker in line for marker in _BENIGN_METADATA_MARKERS)
+
+
+def _strip_benign_metadata_noise(stderr):
+    """Return stderr with benign ID3 tag-parse lines removed. Empty result means
+    ffmpeg emitted only metadata noise and the decode is clean; real decoder
+    errors (Header missing, Invalid data, backstep) are kept so we fail closed."""
+    if not stderr or not stderr.strip():
+        return ""
+    kept = [ln for ln in stderr.splitlines()
+            if ln.strip() and not _is_benign_metadata_noise(ln)]
+    return "\n".join(kept).strip()
+
+
 def check_audio_file(file_path):
     """Decode-test a single audio file. Pure function — no shared state.
     Returns (file_path, is_corrupt, reason, size)."""
@@ -1006,8 +1036,8 @@ def check_audio_file(file_path):
 
     try:
         result = subprocess.run(
-            ["ffmpeg", "-v", "error", "-xerror", "-nostdin",
-             "-i", file_path, "-map", "0:a", "-f", "null", "-"],
+            ["ffmpeg", "-v", "error", "-err_detect", "explode", "-xerror",
+             "-nostdin", "-i", file_path, "-map", "0:a", "-f", "null", "-"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -1019,6 +1049,16 @@ def check_audio_file(file_path):
     if result.returncode != 0:
         return (file_path, True,
                 _clean_ffmpeg_errors(result.stderr), file_size)
+
+    # Defence in depth: -xerror alone lets the decoder skip a bad frame and
+    # still exit 0; -err_detect explode makes it abort, but a skipped frame that
+    # never reaches the transcode loop can still exit 0 with error-level stderr.
+    # At -v error any leftover stderr is an error, so treat it as corrupt after
+    # stripping benign ID3 tag-parse noise (a bad tag is not bad audio).
+    significant = _strip_benign_metadata_noise(result.stderr)
+    if significant:
+        return (file_path, True,
+                _clean_ffmpeg_errors(significant), file_size)
 
     return (file_path, False, None, file_size)
 

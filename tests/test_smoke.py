@@ -137,3 +137,35 @@ def test_is_subpath_separator_aware():
     assert webui._is_subpath("/data/x", "/data")
     assert webui._is_subpath("/data", "/data")
     assert not webui._is_subpath("/data2", "/data")
+
+
+# --- ffmpeg benign metadata-noise stripping --------------------------------
+
+def test_strip_benign_metadata_noise_id3_only_is_empty():
+    # Old ffmpeg (4.x-6.x) stderr for a bad-comment-tag file with clean audio.
+    stderr = "Incorrect BOM value\nError reading comment frame, skipped"
+    assert main._strip_benign_metadata_noise(stderr) == ""
+
+
+def test_strip_benign_metadata_noise_keeps_real_decoder_error():
+    stderr = "[mp3 @ 0x1] invalid new backstep -1"
+    assert "invalid new backstep -1" in main._strip_benign_metadata_noise(stderr)
+
+
+def test_strip_benign_metadata_noise_keeps_real_error_mixed_with_benign():
+    stderr = ("Incorrect BOM value\nHeader missing\n"
+              "Error reading comment frame, skipped")
+    assert main._strip_benign_metadata_noise(stderr) == "Header missing"
+
+
+def test_strip_benign_metadata_noise_blank_is_empty():
+    assert main._strip_benign_metadata_noise("") == ""
+    assert main._strip_benign_metadata_noise("   \n") == ""
+
+
+def test_is_benign_metadata_noise_flags_id3_not_decode_errors():
+    assert main._is_benign_metadata_noise("Incorrect BOM value: 0x1234")
+    assert main._is_benign_metadata_noise("Error reading frame TXXX, skipped")
+    assert not main._is_benign_metadata_noise("Header missing")
+    assert not main._is_benign_metadata_noise(
+        "[mp3 @ 0x1] invalid new backstep -1")
