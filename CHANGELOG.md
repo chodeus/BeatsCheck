@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/chodeus/BeatsCheck/compare/v1.3.0...v1.3.1) (2026-07-09)
+
+
+### Bug Fixes
+
+* strengthen decode-check and ignore benign ID3 tag errors ([f267968](https://github.com/chodeus/BeatsCheck/commit/f267968609883bc1c2330b0a94f654ac25fc9409))
+
 ## [1.3.0](https://github.com/chodeus/BeatsCheck/compare/v1.2.0...v1.3.0) (2026-06-05)
 
 
