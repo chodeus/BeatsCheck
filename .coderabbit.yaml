@@ -1,0 +1,142 @@
+# .coderabbit.yaml — BeatsCheck (audio integrity / ID3 analysis; raw-Python HTTP server + Docker)
+language: "en-US"
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  auto_review:
+    enabled: true
+    drafts: false
+  # Single branch: main is the default and is always auto-reviewed. No other PR
+  # targets exist, so base_branches is intentionally omitted.
+  path_filters:
+    - "!**/*.png"
+    - "!design_handoff_beatscheck_redesign/**"
+    - "!**/.pytest_cache/**"
+    - "!**/__pycache__/**"
+    - "!**/*.pyc"
+  path_instructions:
+    - path: "app/webui.py"
+      instructions: |
+        Raw http.server request handler — there is NO framework doing input
+        validation, routing safety, or auth for you. Enforce:
+        - FAIL CLOSED on every guard. _load_auth() must refuse setup AND login
+          when the auth file exists but is unreadable/corrupt or is missing
+          username/password_hash (it returns a sentinel for this — verify callers
+          treat the sentinel as DENY, never as "no account / allow setup").
+          _check_auth() and _validate_session() must return False on any missing/
+          expired/malformed token or lookup failure — never fall through to the
+          authorated path. Flag any `if config and not allowed(): deny` shape
+          (that skips the check when config is falsy) and any except-clause that
+          calls the handler / serves content on error instead of sending 401/503.
+        - PATH TRAVERSAL: any filesystem path derived from self.path (static
+          files, /api/paths parent, log/corrupt files) must be resolved with
+          os.path.realpath() and re-asserted inside the allowed root via
+          _is_subpath() BEFORE opening. A string-only prefix/".." check is
+          defeated by a symlinked component or ../ collapse — require the
+          realpath re-confinement. _serve_static must reject anything whose
+          realpath escapes static_dir; /api/paths must reject anything whose
+          realpath escapes /data. Flag new file-serving/listing endpoints that
+          skip this.
+        - Validate and bound every request input (query params, JSON body,
+          Content-Length, headers) before use; malformed/oversized/absent input
+          must return 4xx, not raise or default-through.
+        - Never place the session token (secrets.token_hex) in a URL, redirect,
+          <img>/EventSource src, or log line — it is a 24h bearer credential.
+          Keep it in the HttpOnly cookie path only.
+        - Failed-login throttle (_login_lockout_remaining / _login_record_failure)
+          must count and lock BEFORE password verification, and must not be
+          bypassable by a malformed body reaching an early return.
+    - path: "app/main.py"
+      instructions: |
+        Scan engine, ID3 detector, and irreversible bulk-delete of user music.
+        - DOMAIN (ID3 false-positive): _strip_benign_metadata_noise /
+          _is_benign_metadata_noise must strip ONLY genuine ID3 tag-parse noise
+          (the _BENIGN_METADATA_MARKERS set) and MUST keep real decoder errors
+          (Header missing / Invalid data / backstep) so a corrupt file still
+          fails closed. Flag any broadening of the benign markers, substring
+          match, or logic that could make check_audio_file return is_corrupt=False
+          for a file with real decode errors. Old-ffmpeg (4.x-6.x) emits this
+          noise at error level; do not let that re-introduce false positives on
+          clean audio.
+        - TRANSIENT != CLEAN: a scan/decode failure that is transient — OSError
+          on stat, subprocess.TimeoutExpired, ffmpeg spawn failure, I/O error —
+          must NOT be recorded or cached as a "clean"/negative result. Distinguish
+          genuine decode-failure (real result) from infrastructure failure (retry,
+          do not persist as clean). Flag any except path that swallows a transient
+          error and returns/persists is_corrupt=False.
+        - DESTRUCTIVE BULK OPS (irrecoverable — rmtree/os.remove of the user's
+          music library): default to NOT deleting and gate on explicit intent.
+          Before any shutil.rmtree / os.remove, the RESOLVED physical target must
+          pass _validate_delete_folders: realpath, reject == music-root (mount
+          root), reject anything not under music_real + os.sep, reject symlinks,
+          reject non-directories. An EMPTY validated/allowed set means a FAILED
+          READ (corrupt.txt/details unreadable) — treat it as "delete nothing",
+          never "delete everything". delete_corrupt_files must only remove paths
+          confirmed present in the corrupt.txt allowed set; a path "not in corrupt
+          list" is an error, not a pass.
+        - DIFF THE SIBLING DELETE BRANCHES. _delete_one_folder has two destructive
+          arms: mode 'whole' -> _rmtree_and_collect (shutil.rmtree) and mode
+          'corrupt' -> _direct_delete_untracked (os.remove). A containment/symlink/
+          mount-root guard present on one arm and absent on the other is the bug —
+          require both arms to share the _validate_delete_folders confinement, and
+          flag any new delete path that reaches rmtree/remove without it.
+        - Confirm state cleanup (corrupt.txt / corrupt_details.json /
+          corrupt_tracking.json rewrite) is atomic (tmp + os.rename) and cannot
+          leave a deleted file still listed as corrupt or a surviving file dropped.
+    - path: "app/**/*.py"
+      instructions: |
+        - Python truthiness / 0-is-falsy: for durations, file sizes, counts,
+          corrupt totals, timestamps, and exit codes where 0 (or "") is a
+          legitimate value, use explicit `is None` / `is not None` checks, not
+          bare `if x:` / `x or default`. Flag `count or default`, `size or 0`,
+          `if not duration:` where 0 must be honoured.
+        - Read live config each pass in long-lived threads/handlers (scan loop,
+          background delete jobs); do not snapshot a config/state object at
+          startup and act on it after config is replaced on reload.
+        - Comments: navigational / gotcha only (<=1-2 lines, the non-obvious
+          "why"), matching existing density. Do not add restating-the-code or
+          history-essay comments.
+    - path: "app/static/app.js"
+      instructions: |
+        - JS 0/"" are falsy: do not use `||` to supply a fallback for a value
+          where 0 or "" is legitimate (corrupt counts, sizes, progress current/
+          total, durations). Use `??` or an explicit null/NaN check
+          (Number.isFinite, `x == null`). The `n == null || isNaN(n)` guard is the
+          correct pattern; flag new `count || 0` / `value || '--'` fallbacks that
+          would mask a real 0.
+        - Never put the session/auth token in a URL, fetch query string, EventSource
+          src, or <img> src — auth rides the HttpOnly cookie. Flag any polling/
+          streaming endpoint that appends a credential to the URL.
+    - path: "scripts/**/*.sh"
+      instructions: |
+        Container helper wrappers (delete/rescan/reset-password/entrypoint) that
+        run as root then drop to PUID/PGID via su-exec.
+        - FAIL CLOSED: delete.sh must abort when MUSIC_DIR is not writable / not
+          present (it already checks `-w`); a destructive wrapper must never
+          proceed on an unverified or unreadable target. Quote every path
+          expansion ("$MUSIC_DIR", "${PUID}") to survive spaces.
+        - Preserve correct PUID/PGID drop (default 99:100) and UMASK; do not run
+          the delete/scan Python as root.
+        - No secrets echoed or baked into the script or its logs.
+    - path: "**/Dockerfile"
+      instructions: |
+        - Base image must stay pinned by digest (alpine@sha256:...) on every
+          stage; flag an unpinned or floating tag. Keep the ffmpeg fetch stage's
+          SHA-256 verification intact — a download without checksum verification
+          is a supply-chain hole.
+        - HEALTHCHECK must be present and meaningful (pgrep main.py + heartbeat
+          freshness); flag its removal or weakening.
+        - PUID/PGID/UMASK handling: keep the su-exec privilege drop; do not switch
+          the runtime to root or bake a fixed UID that breaks the drop.
+        - No secrets/tokens/credentials baked into any layer, ARG default, or
+          LABEL; nothing sensitive in ENV.
+        - Run a LIVE dependency/CVE audit (pip-audit for Python, and re-check the
+          apk-added packages + the pinned ffmpeg version) before tagging a release;
+          never rely on a stale offline CVE list.
+  tools:
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    hadolint:
+      enabled: true
