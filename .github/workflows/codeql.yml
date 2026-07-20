@@ -5,10 +5,16 @@ on:
     branches: [ "main" ]
     paths:
       - '**/*.py'
+      - '.release-please-manifest.json'
+      - 'VERSION'
+      - '.github/workflows/codeql.yml'
   pull_request:
     branches: [ "main" ]
     paths:
       - '**/*.py'
+      - '.release-please-manifest.json'
+      - 'VERSION'
+      - '.github/workflows/codeql.yml'
   schedule:
     - cron: '27 3 * * 1'
 
