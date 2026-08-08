@@ -60,10 +60,10 @@ RUN apk --no-cache upgrade && \
     tini \
     tzdata
 
-# The pinned FFmpeg from the fetch stage above (see FFMPEG_VERSION), replacing
-# Alpine's older packaged ffmpeg. The self-check fails the build loudly if the
-# static binary can't run on Alpine's musl — turning a would-be runtime failure
-# into a build-time one.
+# The pinned FFmpeg from the fetch stage above (see FFMPEG_VERSION) is copied
+# into the final image; no ffmpeg is installed from apk. The self-check fails
+# the build loudly if the static binary can't run on Alpine's musl — turning a
+# would-be runtime failure into a build-time one.
 COPY --from=ffmpeg-fetch /out/ffmpeg /usr/local/bin/ffmpeg
 RUN ffmpeg -version
 
