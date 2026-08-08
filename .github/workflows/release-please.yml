@@ -12,3 +12,43 @@ permissions:
 jobs:
   release:
     uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@af17d8ce986da0b92cbdfc84d2170e199e34a3fb # main
+
+  # docker-publish.yml's tags:['v*'] trigger never fires: release-please pushes
+  # its tag with GITHUB_TOKEN, and GitHub runs no workflow for events raised by
+  # that token — so no release has ever produced a version-tagged image. Build it
+  # here instead, where release_created and the version are already known. The
+  # push-triggered build cannot do it: it starts in the same second as this
+  # workflow, before the tag exists.
+  version-tag-meta:
+    needs: release
+    if: needs.release.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      build_number: ${{ steps.m.outputs.number }}
+      build_date: ${{ steps.m.outputs.date }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: m
+        run: |
+          set -euo pipefail
+          echo "number=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+          echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
+  version-tag-image:
+    needs: [release, version-tag-meta]
+    # The workflow default above has no packages:write; the reusable build needs it.
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # release_version support
+    with:
+      release_version: ${{ needs.release.outputs.version }}
+      build_args: |
+        BUILD_DATE=${{ needs.version-tag-meta.outputs.build_date }}
+        VCS_REF=${{ github.sha }}
+        VERSION=${{ needs.release.outputs.tag_name }}
+        BUILD_NUMBER=${{ needs.version-tag-meta.outputs.build_number }}
+    secrets: inherit
