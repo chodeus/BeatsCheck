@@ -1,7 +1,8 @@
 # ---- ffmpeg fetch stage ----
-# Download + SHA-256 verify the static ffmpeg from chodeus/ffmpeg-static (our
-# verified mirror of the FFmpeg-project-recommended BtbN builds). Runs on the
-# build host; the binary is validated against musl in the final stage below.
+# Download + SHA-256 verify the static ffmpeg from chodeus/ffmpeg-static. The
+# linux assets are built there from pinned upstream source (LGPL-3.0), not
+# mirrored — only that repo's Windows assets are BtbN mirrors, and we take none.
+# Runs on the build host; validated against musl in the final stage below.
 FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS ffmpeg-fetch
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=chodeus/ffmpeg-static
@@ -59,10 +60,10 @@ RUN apk --no-cache upgrade && \
     tini \
     tzdata
 
-# FFmpeg 8.1.x from chodeus/ffmpeg-static (fetched + verified in the stage
-# above), replacing Alpine's older packaged ffmpeg. The self-check fails the
-# build loudly if the glibc-static binary can't run on Alpine's musl — turning
-# a would-be runtime failure into a build-time one.
+# The pinned FFmpeg from the fetch stage above (see FFMPEG_VERSION) is copied
+# into the final image; no ffmpeg is installed from apk. The self-check fails
+# the build loudly if the static binary can't run on Alpine's musl — turning a
+# would-be runtime failure into a build-time one.
 COPY --from=ffmpeg-fetch /out/ffmpeg /usr/local/bin/ffmpeg
 RUN ffmpeg -version
 
