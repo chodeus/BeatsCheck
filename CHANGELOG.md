@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2](https://github.com/chodeus/BeatsCheck/compare/v1.3.1...v1.3.2) (2026-08-08)
+
+
+### Bug Fixes
+
+* let Renovate see ffmpeg tags without a patch component ([#210](https://github.com/chodeus/BeatsCheck/issues/210)) ([37c8c52](https://github.com/chodeus/BeatsCheck/commit/37c8c52d00eb2cd723e2b32497d876b258f23041))
+* move ffmpeg to n9.0 for the 8.1.2 advisory set ([9597705](https://github.com/chodeus/BeatsCheck/commit/959770504b9154c82962bd6bc9fb6d91d4740241))
+
 ## [1.3.1](https://github.com/chodeus/BeatsCheck/compare/v1.3.0...v1.3.1) (2026-07-09)
 
 
