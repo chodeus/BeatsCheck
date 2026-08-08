@@ -4,13 +4,13 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "Track the pinned FFMPEG_VERSION ARG against chodeus/ffmpeg-static releases (tags like n8.1.1).",
+      "description": "Track the pinned FFMPEG_VERSION ARG against chodeus/ffmpeg-static releases. Tags follow FFmpeg's own, which drops the patch on a .0 release (n8.1.2, but n9.0) — so patch must be optional or those releases silently never match and no PR is ever raised.",
       "fileMatch": ["(^|/)Dockerfile$"],
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=github-releases depName=(?<depName>\\S+)\\s+ARG FFMPEG_VERSION=(?<currentValue>\\S+)"
       ],
       "datasourceTemplate": "github-releases",
-      "versioningTemplate": "regex:^n?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)$"
+      "versioningTemplate": "regex:^n?(?<major>\\d+)\\.(?<minor>\\d+)(?:\\.(?<patch>\\d+))?$"
     }
   ],
   "packageRules": [
