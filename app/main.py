@@ -1003,7 +1003,23 @@ _BENIGN_METADATA_MARKERS = (
     "Error reading comment frame",
     "Error reading lyrics",
     "Error reading frame",
+    # Cover-art block, not audio (libavformat/flac_picture.c). Without
+    # -err_detect explode the demuxer skips the picture and decodes normally.
+    "Could not read mimetype from an attached picture",
+    "Error parsing attached picture",
 )
+
+_ATTACHED_PICTURE_MARKERS = (
+    "Could not read mimetype from an attached picture",
+    "Error parsing attached picture",
+)
+
+
+def _is_attached_picture_failure(stderr):
+    """True when ffmpeg failed parsing an embedded cover-art block. Under
+    -err_detect explode that aborts input open BEFORE -map 0:a excludes the
+    picture, so the audio was never judged — mirrors sleezer's scanner."""
+    return bool(stderr) and any(m in stderr for m in _ATTACHED_PICTURE_MARKERS)
 
 
 def _is_benign_metadata_noise(line):
@@ -1023,6 +1039,43 @@ def _strip_benign_metadata_noise(stderr):
     return "\n".join(kept).strip()
 
 
+def _ffmpeg_decode(file_path, explode=True):
+    """Run the null-decode. Returns the CompletedProcess, or None on timeout."""
+    cmd = ["ffmpeg", "-v", "error"]
+    if explode:
+        cmd += ["-err_detect", "explode"]
+    cmd += ["-xerror", "-nostdin", "-i", file_path,
+            "-map", "0:a", "-f", "null", "-"]
+    try:
+        return subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=600,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def _recheck_past_attached_picture(file_path, file_size):
+    """Second decode without explode so the demuxer skips the malformed
+    picture and the AUDIO is judged on its own. Still fails closed — any
+    non-picture error in this pass is corruption."""
+    result = _ffmpeg_decode(file_path, explode=False)
+    if result is None:
+        return (file_path, True, "Decode timed out (>10 minutes)", file_size)
+
+    significant = _strip_benign_metadata_noise(result.stderr)
+    if result.returncode != 0 or significant:
+        return (file_path, True,
+                _clean_ffmpeg_errors(significant or result.stderr), file_size)
+
+    logger.info("Malformed embedded cover art but audio decodes clean, "
+                "keeping: %s", file_path)
+    return (file_path, False, None, file_size)
+
+
 def check_audio_file(file_path):
     """Decode-test a single audio file. Pure function — no shared state.
     Returns (file_path, is_corrupt, reason, size)."""
@@ -1034,19 +1087,15 @@ def check_audio_file(file_path):
     except OSError as e:
         return (file_path, True, f"File not accessible: {e}", 0)
 
-    try:
-        result = subprocess.run(
-            ["ffmpeg", "-v", "error", "-err_detect", "explode", "-xerror",
-             "-nostdin", "-i", file_path, "-map", "0:a", "-f", "null", "-"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=600,
-        )
-    except subprocess.TimeoutExpired:
+    result = _ffmpeg_decode(file_path)
+    if result is None:
         return (file_path, True, "Decode timed out (>10 minutes)", file_size)
 
     if result.returncode != 0:
+        # A malformed cover-art block aborts input open under explode before
+        # -map 0:a excludes the picture — the audio was never judged.
+        if _is_attached_picture_failure(result.stderr):
+            return _recheck_past_attached_picture(file_path, file_size)
         return (file_path, True,
                 _clean_ffmpeg_errors(result.stderr), file_size)
 
@@ -1162,7 +1211,7 @@ def _log_scan_banner(mode, workers, input_folder, output_folder, log_file,
 
 def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
                    output_folder, scan_stats,
-                   lidarr_url=None, lidarr_api_key=None):
+                   lidarr_url=None, lidarr_api_key=None, healed=None):
     """Post-scan cleanup: update state files and write summary."""
     details_path = os.path.join(log_dir, "corrupt_details.json")
 
@@ -1179,9 +1228,12 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
                                      output_real + os.sep))
     }
 
-    # Clean stale entries from corrupt.txt (e.g. files moved in move mode)
+    # Clean stale entries from corrupt.txt (files moved in move mode, deleted
+    # files, and paths re-scanned clean this run)
+    healed = healed or set()
     current_corrupt = _load_lines_as_set(corrupt_list_path)
-    live_corrupt = [p for p in current_corrupt if os.path.exists(p)]
+    live_corrupt = [p for p in current_corrupt
+                    if os.path.exists(p) and p not in healed]
     tmp_corrupt = corrupt_list_path + ".tmp"
     with open(tmp_corrupt, 'w', encoding='utf-8') as f:
         for p in live_corrupt:
@@ -1260,6 +1312,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
 
     corrupt_details = _load_corrupt_details(log_dir)
     existing_corrupt = _load_lines_as_set(corrupt_list_path)
+    healed = set()
 
     heartbeat_path = os.path.join(log_dir, ".heartbeat")
     with open(log_file, 'a', encoding='utf-8') as log, \
@@ -1307,6 +1360,17 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                     existing_corrupt, corrupt_details,
                     log_dir=log_dir,
                     lidarr_index=lidarr_index)
+            elif file_path in existing_corrupt:
+                # A fresh rescan found a previously-flagged file clean (e.g. a
+                # verdict recorded mid-tag-rewrite) — let the false positive
+                # age out instead of keeping it corrupt forever.
+                existing_corrupt.discard(file_path)
+                healed.add(file_path)
+                corrupt_details.pop(file_path, None)
+                log.write(f"HEALED: {file_path} - re-scanned clean\n")
+                log.flush()
+                logger.info("HEALED: %s (re-scanned clean, clearing "
+                            "corrupt status)", file_path)
 
             _write_heartbeat(heartbeat_path)
 
@@ -1404,6 +1468,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                        "version": __version__,
                        "finished": time.strftime('%Y-%m-%d %H:%M:%S'),
                        "duration": format_eta(elapsed),
+                       "healed": len(healed),
                        "library_files": len(all_files),
                        "library_size": total_library_size,
                        "library_size_human": format_size(total_library_size),
@@ -1412,7 +1477,7 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
                        "corrupt_size": corrupt_size,
                        "corrupt_size_human": format_size(corrupt_size),
                        "mode": mode,
-                   }, lidarr_url, lidarr_api_key)
+                   }, lidarr_url, lidarr_api_key, healed=healed)
 
     return corrupted
 
@@ -2022,6 +2087,40 @@ def _post_auto_delete_lidarr(log_dir, album_ids, lidarr_url,
                     len(unmonitored))
 
 
+def _reverify_before_delete(to_delete, tracking, log_dir, log_file):
+    """Re-decode every auto-delete candidate and drop the ones that are now
+    clean (a verdict recorded during a scan that overlapped an in-place tag
+    rewrite can be a stale false positive). Files that cannot be verified are
+    kept on disk this run — never delete on uncertainty."""
+    still_corrupt = []
+    healed = []
+    for path in to_delete:
+        try:
+            _, is_corrupt, _, _ = check_audio_file(path)
+        except Exception:
+            logger.exception("Re-verify failed for %s — skipping delete", path)
+            continue
+        if is_corrupt:
+            still_corrupt.append(path)
+        else:
+            healed.append(path)
+
+    if healed:
+        logger.info("%d file(s) re-verified clean — clearing corrupt status "
+                    "instead of deleting", len(healed))
+        with open(log_file, 'a', encoding='utf-8') as log:
+            for path in healed:
+                log.write(f"HEALED: {path} - re-verified clean at auto-delete\n")
+        details_path = os.path.join(log_dir, "corrupt_details.json")
+        details = _load_json(details_path)
+        for path in healed:
+            tracking.pop(path, None)
+            details.pop(path, None)
+        write_json_atomic(details_path, details)
+
+    return still_corrupt
+
+
 def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
                     lidarr_url=None, lidarr_api_key=None,
                     lidarr_search=False, lidarr_blocklist=False):
@@ -2033,11 +2132,15 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
     tracking = _load_json(tracking_path)
 
     now = time.strftime('%Y-%m-%dT%H:%M:%S')
-    for path in _load_lines_as_set(corrupt_list_path):
+    corrupt_set = _load_lines_as_set(corrupt_list_path)
+    for path in corrupt_set:
         if path not in tracking:
             tracking[path] = now
 
-    tracking = {p: t for p, t in tracking.items() if os.path.exists(p)}
+    # Drop entries that left corrupt.txt (healed) or left the disk — a healed
+    # file must not keep its old first-seen countdown if it ever re-flags.
+    tracking = {p: t for p, t in tracking.items()
+                if os.path.exists(p) and p in corrupt_set}
 
     if not tracking:
         write_json_atomic(tracking_path, tracking)
@@ -2077,6 +2180,17 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
                 f"threshold of {max_deletes}\n"
             )
         write_json_atomic(tracking_path, tracking)
+        return
+
+    # Confirm the evidence before the destructive step: re-decode candidates
+    # so a stale false positive is healed, never deleted or blocklisted.
+    to_delete = _reverify_before_delete(to_delete, tracking, log_dir, log_file)
+
+    if not to_delete:
+        write_json_atomic(tracking_path, tracking)
+        with open(corrupt_list_path, 'w', encoding='utf-8') as f:
+            for path in tracking:
+                f.write(path + "\n")
         return
 
     logger.info("Auto-deleting %d corrupt files (older than %d days):",
