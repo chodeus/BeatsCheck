@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@af17d8ce986da0b92cbdfc84d2170e199e34a3fb # main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
 
   # docker-publish.yml's tags:['v*'] trigger never fires: release-please pushes
   # its tag with GITHUB_TOKEN, and GitHub runs no workflow for events raised by
