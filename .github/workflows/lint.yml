@@ -10,11 +10,6 @@ on:
       - '.github/workflows/lint.yml'
   pull_request:
     branches: [ "main" ]
-    paths:
-      - '**/*.py'
-      - '.release-please-manifest.json'
-      - 'VERSION'
-      - '.github/workflows/lint.yml'
 
 permissions:
   contents: read
