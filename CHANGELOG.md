@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/chodeus/BeatsCheck/compare/v1.3.2...v1.3.3) (2026-08-13)
+
+
+### Bug Fixes
+
+* re-verify corrupt verdicts before auto-delete and heal stale flags on clean rescan ([0168a43](https://github.com/chodeus/BeatsCheck/commit/0168a432f7e8a2e0fc57b277d43622a943042bc4))
+
 ## [1.3.2](https://github.com/chodeus/BeatsCheck/compare/v1.3.1...v1.3.2) (2026-08-08)
 
 
