@@ -133,6 +133,37 @@ reviews:
         - Run a LIVE dependency/CVE audit (pip-audit for Python, and re-check the
           apk-added packages + the pinned ffmpeg version) before tagging a release;
           never rely on a stale offline CVE list.
+        - A recursive chown/chmod after a COPY re-materialises the whole tree in a
+          new layer and duplicates it in the image — use COPY --chown instead.
+    - path: "test_*.py"
+      instructions: |
+        - Tests sit at the repo root, so app/**/*.py does not reach them.
+        - No side-effecting call inside an assert: python -O strips assert
+          statements and takes the call with them. Bind to a local, then assert.
+        - A guard that cannot fail is worse than none — an assertion reachable only
+          when a collection is non-empty passes vacuously. Pair it with a control
+          that fails when the defect is injected.
+        - Never let a test invoke real ffmpeg on a real library path or hit the
+          network; stub the boundary.
+    - path: "compose.yaml"
+      instructions: |
+        - Keep PUID/PGID/UMASK and the volume layout consistent with the Dockerfile
+          and README; a drift here silently breaks the privilege drop for users.
+        - No secrets inline — reference an env file or an existing environment
+          variable, never a literal token.
+        - Don't add privileged, host network mode, or a docker-socket mount.
+    - path: ".github/workflows/**"
+      instructions: |
+        - A gate that stops blocking (a lint/CVE/test step made non-blocking or
+          continue-on-error) must have every downstream step that relied on it
+          audited in the same change.
+        - Enumerate allowed states positively (== 'success' || == 'skipped'), never
+          by negation — a third state slips through `!= 'failure'`.
+        - Pin third-party actions by commit SHA, not a mutable tag.
+        - Never echo a token, and never interpolate untrusted input (PR title,
+          branch name, issue body) straight into a `run:` block — pass it via env.
+        - A paths filter added or renamed must stay in step with what the job
+          actually needs, or the image silently stops being built when it changes.
   tools:
     ruff:
       enabled: true
