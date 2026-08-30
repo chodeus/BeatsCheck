@@ -135,9 +135,9 @@ reviews:
           never rely on a stale offline CVE list.
         - A recursive chown/chmod after a COPY re-materialises the whole tree in a
           new layer and duplicates it in the image — use COPY --chown instead.
-    - path: "test_*.py"
+    - path: "tests/**/*.py"
       instructions: |
-        - Tests sit at the repo root, so app/**/*.py does not reach them.
+        - Tests live under tests/, so app/**/*.py does not reach them.
         - No side-effecting call inside an assert: python -O strips assert
           statements and takes the call with them. Bind to a local, then assert.
         - A guard that cannot fail is worse than none — an assertion reachable only
