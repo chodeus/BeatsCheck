@@ -36,7 +36,7 @@ if [ "$(id -u)" != "0" ]; then
     done
 
     umask "${UMASK}"
-    exec env HOME=/app PYTHONUNBUFFERED=1 python3 -u /app/main.py "$@"
+    exec env HOME=/config PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 python3 -u /app/main.py "$@"
 fi
 
 # Validate PUID/PGID are numeric
@@ -69,11 +69,14 @@ done
 
 # Ensure writable dirs exist and are owned correctly
 mkdir -p /config
-chown -R "${PUID}:${PGID}" /config
+# Chown only what is wrong; an already-correct tree costs a stat pass.
+find /config \( ! -user "${PUID}" -o ! -group "${PGID}" \) \
+    -exec chown "${PUID}:${PGID}" {} + 2>/dev/null || true
 
 umask "${UMASK}"
 
 exec su-exec "${PUID}:${PGID}" env \
-    HOME=/app \
+    HOME=/config \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     python3 -u /app/main.py "$@"

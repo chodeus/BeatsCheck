@@ -77,9 +77,13 @@ COPY scripts/reset-webui-password.sh /app/
 COPY app/static/ /app/static/
 COPY app/webui.py /app/
 COPY app/main.py /app/
+# Bytecode baked here; PYTHONDONTWRITEBYTECODE keeps /app read-only at runtime.
+# The assertion replaces `chmod -R a+rX`, which re-materialised the tree in a layer.
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
              /app/reset-webui-password.sh && \
-    chmod -R a+rX /app && \
+    python3 -m compileall -q /app/main.py /app/webui.py >/dev/null 2>&1 || true && \
+    unreadable="$(find /app \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=x \) | head -20)"; \
+    if [ -n "$unreadable" ]; then echo "not world-readable:"; echo "$unreadable"; exit 1; fi && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
     ln -s /app/rescan.sh /usr/local/bin/rescan && \
     ln -s /app/reset-webui-password.sh /usr/local/bin/reset-webui-password
