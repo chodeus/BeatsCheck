@@ -82,7 +82,7 @@ COPY app/main.py /app/
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
              /app/reset-webui-password.sh && \
     python3 -m compileall -q /app/main.py /app/webui.py >/dev/null 2>&1 || true && \
-    unreadable="$(find /app \( -type f ! -perm -o=r \) -o \( -type d ! -perm -o=x \) | head -20)"; \
+    unreadable="$(find /app \( -type f ! -perm -0004 \) -o \( -type d ! -perm -0001 \) | head -20)"; \
     if [ -n "$unreadable" ]; then echo "not world-readable:"; echo "$unreadable"; exit 1; fi && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
     ln -s /app/rescan.sh /usr/local/bin/rescan && \
