@@ -75,11 +75,13 @@ find /config \( ! -user "${PUID}" -o ! -group "${PGID}" \) \
 
 # Fail closed on the thing that matters. A per-file chown error can be benign
 # (foreign uids on a network mount); an unwritable /config is not.
-if ! su-exec "${PUID}:${PGID}" test -w /config; then
+probe="/config/.beatscheck-write-probe.$$"
+if ! su-exec "${PUID}:${PGID}" touch "${probe}" 2>/dev/null; then
     echo "FATAL: /config is not writable by ${PUID}:${PGID} after ownership correction."
     echo "Pre-chown it on the host: sudo chown -R ${PUID}:${PGID} /path/to/config"
     exit 1
 fi
+su-exec "${PUID}:${PGID}" rm -f "${probe}"
 
 umask "${UMASK}"
 
