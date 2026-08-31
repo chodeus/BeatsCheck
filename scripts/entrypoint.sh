@@ -71,7 +71,7 @@ done
 mkdir -p /config
 # Chown only what is wrong; an already-correct tree costs a stat pass.
 find /config \( ! -user "${PUID}" -o ! -group "${PGID}" \) \
-    -exec chown "${PUID}:${PGID}" {} + 2>/dev/null || true
+    -exec chown -h "${PUID}:${PGID}" {} + 2>/dev/null || true
 
 umask "${UMASK}"
 

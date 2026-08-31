@@ -81,7 +81,7 @@ COPY app/main.py /app/
 # The assertion replaces `chmod -R a+rX`, which re-materialised the tree in a layer.
 RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
              /app/reset-webui-password.sh && \
-    python3 -m compileall -q /app/main.py /app/webui.py >/dev/null 2>&1 || true && \
+    python3 -m compileall -q /app/main.py /app/webui.py && \
     unreadable="$(find /app \( -type f ! -perm -0004 \) -o \( -type d ! -perm -0001 \) | head -20)"; \
     if [ -n "$unreadable" ]; then echo "not world-readable:"; echo "$unreadable"; exit 1; fi && \
     ln -s /app/delete.sh /usr/local/bin/delete && \
