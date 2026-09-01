@@ -72,6 +72,7 @@ WORKDIR /app
 
 COPY VERSION /app/VERSION
 COPY scripts/entrypoint.sh /app/
+COPY scripts/fix_ownership.py /app/
 COPY scripts/delete.sh /app/
 COPY scripts/rescan.sh /app/
 COPY scripts/reset-webui-password.sh /app/

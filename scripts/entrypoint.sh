@@ -11,25 +11,32 @@ TZ=${TZ:-UTC}
 if [ -f "/etc/localtime" ] && [ ! -L "/etc/localtime" ]; then
     : # bind-mounted regular file from host
 elif [ -n "$TZ" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
-    ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime
+    # Rootless cannot write /etc/localtime; TZ in the environment still applies.
+    ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime 2>/dev/null || true
     export TZ
 fi
 
-# Detect rootless mode (`docker run --user uid:gid`). PUID/PGID env vars
-# are ignored — we can't usermod/chown without root, and the supplied uid
-# is already what the operator wants.
+# `test -w` passes on a mode-600 dir and never sees a read-only mount.
+# RUN_AS is empty when we are already the target uid, so leave it unquoted.
+require_writable_config() {
+    probe="/config/.beatscheck-write-probe.$$"
+    if ! ${RUN_AS} touch "${probe}" 2>/dev/null; then
+        echo "FATAL: /config is not writable by ${PUID}:${PGID}."
+        echo "Pre-chown it on the host: sudo chown -R ${PUID}:${PGID} /path/to/config"
+        exit 1
+    fi
+    ${RUN_AS} rm -f "${probe}"
+}
+
+# Rootless (`docker run --user uid:gid`): PUID/PGID are ignored because we
+# cannot usermod without root.
 if [ "$(id -u)" != "0" ]; then
     PUID=$(id -u)
     PGID=$(id -g)
-    USER_NAME=$(id -un 2>/dev/null || echo "uid-${PUID}")
 
-    # Operator must pre-chown /config on the host. Fail fast with a clear
-    # message if they haven't.
-    if [ ! -w /config ]; then
-        echo "Rootless mode but /config is not writable by uid:gid ${PUID}:${PGID}"
-        echo "Pre-chown the host config dir: sudo chown -R ${PUID}:${PGID} /path/to/config"
-        exit 1
-    fi
+    # No chown is possible here, so the operator must pre-chown /config.
+    RUN_AS=""
+    require_writable_config
 
     for cmd in ffmpeg python3; do
         command -v "$cmd" >/dev/null 2>&1 || { echo "Missing required tool: $cmd"; exit 1; }
@@ -55,9 +62,9 @@ GROUP_NAME=$(getent group "${PGID}" | cut -d: -f1)
 
 # Create user if it doesn't exist
 if ! getent passwd "${PUID}" > /dev/null 2>&1; then
-    adduser -D -u "${PUID}" -G "${GROUP_NAME}" -h /app -s /sbin/nologin checker
+    # -H so adduser never creates or chmods the home dir.
+    adduser -D -H -h /config -u "${PUID}" -G "${GROUP_NAME}" -s /sbin/nologin checker
 fi
-USER_NAME=$(getent passwd "${PUID}" | cut -d: -f1)
 
 # Validate dependencies
 for cmd in ffmpeg python3; do
@@ -69,19 +76,14 @@ done
 
 # Ensure writable dirs exist and are owned correctly
 mkdir -p /config
-# Chown only what is wrong; an already-correct tree costs a stat pass.
-find /config \( ! -user "${PUID}" -o ! -group "${PGID}" \) \
-    -exec chown -h "${PUID}:${PGID}" {} + 2>/dev/null || true
+# Chowns only what is wrong, through NOFOLLOW directory fds: a path-based
+# chown follows an intermediate dir swapped for a symlink mid-sweep.
+python3 /app/fix_ownership.py /config "${PUID}" "${PGID}" || true
 
 # Fail closed on the thing that matters. A per-file chown error can be benign
 # (foreign uids on a network mount); an unwritable /config is not.
-probe="/config/.beatscheck-write-probe.$$"
-if ! su-exec "${PUID}:${PGID}" touch "${probe}" 2>/dev/null; then
-    echo "FATAL: /config is not writable by ${PUID}:${PGID} after ownership correction."
-    echo "Pre-chown it on the host: sudo chown -R ${PUID}:${PGID} /path/to/config"
-    exit 1
-fi
-su-exec "${PUID}:${PGID}" rm -f "${probe}"
+RUN_AS="su-exec ${PUID}:${PGID}"
+require_writable_config
 
 umask "${UMASK}"
 
