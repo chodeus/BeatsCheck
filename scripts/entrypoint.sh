@@ -36,7 +36,7 @@ if [ "$(id -u)" != "0" ]; then
     done
 
     umask "${UMASK}"
-    exec env HOME=/app PYTHONUNBUFFERED=1 python3 -u /app/main.py "$@"
+    exec env HOME=/config PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 python3 -u /app/main.py "$@"
 fi
 
 # Validate PUID/PGID are numeric
@@ -69,11 +69,24 @@ done
 
 # Ensure writable dirs exist and are owned correctly
 mkdir -p /config
-chown -R "${PUID}:${PGID}" /config
+# Chown only what is wrong; an already-correct tree costs a stat pass.
+find /config \( ! -user "${PUID}" -o ! -group "${PGID}" \) \
+    -exec chown -h "${PUID}:${PGID}" {} + 2>/dev/null || true
+
+# Fail closed on the thing that matters. A per-file chown error can be benign
+# (foreign uids on a network mount); an unwritable /config is not.
+probe="/config/.beatscheck-write-probe.$$"
+if ! su-exec "${PUID}:${PGID}" touch "${probe}" 2>/dev/null; then
+    echo "FATAL: /config is not writable by ${PUID}:${PGID} after ownership correction."
+    echo "Pre-chown it on the host: sudo chown -R ${PUID}:${PGID} /path/to/config"
+    exit 1
+fi
+su-exec "${PUID}:${PGID}" rm -f "${probe}"
 
 umask "${UMASK}"
 
 exec su-exec "${PUID}:${PGID}" env \
-    HOME=/app \
+    HOME=/config \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     python3 -u /app/main.py "$@"

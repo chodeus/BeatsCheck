@@ -41,7 +41,7 @@ LABEL org.opencontainers.image.title="beatscheck" \
       org.opencontainers.image.authors="chodeus" \
       org.opencontainers.image.source="https://github.com/chodeus/BeatsCheck" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.base.name="alpine:3.23" \
+      org.opencontainers.image.base.name="alpine:3.24" \
       net.unraid.docker.icon="https://raw.githubusercontent.com/chodeus/BeatsCheck/main/icon.png" \
       build.number="${BUILD_NUMBER}"
 
@@ -50,6 +50,7 @@ ENV PUID=99 \
     UMASK=002 \
     TZ=UTC \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     CONFIG_DIR=/config \
     BUILD_NUMBER=${BUILD_NUMBER}
 
@@ -77,11 +78,16 @@ COPY scripts/reset-webui-password.sh /app/
 COPY app/static/ /app/static/
 COPY app/webui.py /app/
 COPY app/main.py /app/
-RUN chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
-             /app/reset-webui-password.sh && \
-    chmod -R a+rX /app && \
-    ln -s /app/delete.sh /usr/local/bin/delete && \
-    ln -s /app/rescan.sh /usr/local/bin/rescan && \
+# Bytecode baked here; PYTHONDONTWRITEBYTECODE keeps /app read-only at runtime.
+# The assertion replaces `chmod -R a+rX`, which re-materialised the tree in a layer.
+RUN set -e; \
+    chmod +x /app/entrypoint.sh /app/delete.sh /app/rescan.sh \
+             /app/reset-webui-password.sh; \
+    python3 -m compileall -q /app/main.py /app/webui.py; \
+    unreadable="$(find /app \( -type f ! -perm -0004 \) -o \( -type d ! -perm -0005 \) | head -20)"; \
+    if [ -n "$unreadable" ]; then echo "not world-readable:"; echo "$unreadable"; exit 1; fi; \
+    ln -s /app/delete.sh /usr/local/bin/delete; \
+    ln -s /app/rescan.sh /usr/local/bin/rescan; \
     ln -s /app/reset-webui-password.sh /usr/local/bin/reset-webui-password
 
 EXPOSE 8484
