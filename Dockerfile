@@ -41,7 +41,7 @@ LABEL org.opencontainers.image.title="beatscheck" \
       org.opencontainers.image.authors="chodeus" \
       org.opencontainers.image.source="https://github.com/chodeus/BeatsCheck" \
       org.opencontainers.image.licenses="MIT" \
-      org.opencontainers.image.base.name="alpine:3.23" \
+      org.opencontainers.image.base.name="alpine:3.24" \
       net.unraid.docker.icon="https://raw.githubusercontent.com/chodeus/BeatsCheck/main/icon.png" \
       build.number="${BUILD_NUMBER}"
 
@@ -50,6 +50,7 @@ ENV PUID=99 \
     UMASK=002 \
     TZ=UTC \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     CONFIG_DIR=/config \
     BUILD_NUMBER=${BUILD_NUMBER}
 
