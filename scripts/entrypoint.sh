@@ -36,7 +36,6 @@ require_writable_config() {
 if [ "$(id -u)" != "0" ]; then
     PUID=$(id -u)
     PGID=$(id -g)
-    USER_NAME=$(id -un 2>/dev/null || echo "uid-${PUID}")
 
     # No chown is possible here, so the operator must pre-chown /config.
     RUN_AS=""
@@ -70,7 +69,6 @@ if ! getent passwd "${PUID}" > /dev/null 2>&1; then
     # -h /config made it chmod the operator's config dir to 2755.
     adduser -D -H -h /config -u "${PUID}" -G "${GROUP_NAME}" -s /sbin/nologin checker
 fi
-USER_NAME=$(getent passwd "${PUID}" | cut -d: -f1)
 
 # Validate dependencies
 for cmd in ffmpeg python3; do
