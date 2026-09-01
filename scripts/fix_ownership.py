@@ -27,6 +27,13 @@ def main(root: str, uid: int, gid: int) -> int:
     except OSError:
         return 1
     try:
+        # fwalk yields entries within each directory, never the root itself.
+        info = os.fstat(root_fd)
+        if info.st_uid != uid or info.st_gid != gid:
+            try:
+                os.fchown(root_fd, uid, gid)
+            except OSError:
+                pass
         for _, dirnames, filenames, dir_fd in os.fwalk(
             ".", dir_fd=root_fd, follow_symlinks=False
         ):

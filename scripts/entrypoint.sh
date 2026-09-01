@@ -16,10 +16,8 @@ elif [ -n "$TZ" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
     export TZ
 fi
 
-# Creating a file is the only reliable test: `test -w` passes on a directory the
-# process cannot use — mode 600 satisfies it while the missing search bit blocks
-# everything below — and it never sees a read-only mount. RUN_AS is empty when we
-# are already the target uid, so it must stay unquoted.
+# `test -w` passes on a mode-600 dir and never sees a read-only mount.
+# RUN_AS is empty when we are already the target uid, so leave it unquoted.
 require_writable_config() {
     probe="/config/.beatscheck-write-probe.$$"
     if ! ${RUN_AS} touch "${probe}" 2>/dev/null; then
@@ -30,9 +28,8 @@ require_writable_config() {
     ${RUN_AS} rm -f "${probe}"
 }
 
-# Detect rootless mode (`docker run --user uid:gid`). PUID/PGID env vars
-# are ignored — we can't usermod/chown without root, and the supplied uid
-# is already what the operator wants.
+# Rootless (`docker run --user uid:gid`): PUID/PGID are ignored because we
+# cannot usermod without root.
 if [ "$(id -u)" != "0" ]; then
     PUID=$(id -u)
     PGID=$(id -g)
@@ -65,8 +62,7 @@ GROUP_NAME=$(getent group "${PGID}" | cut -d: -f1)
 
 # Create user if it doesn't exist
 if ! getent passwd "${PUID}" > /dev/null 2>&1; then
-    # -H: never create or chmod the home dir. -h /app made adduser chown /app;
-    # -h /config made it chmod the operator's config dir to 2755.
+    # -H so adduser never creates or chmods the home dir.
     adduser -D -H -h /config -u "${PUID}" -G "${GROUP_NAME}" -s /sbin/nologin checker
 fi
 
@@ -80,9 +76,8 @@ done
 
 # Ensure writable dirs exist and are owned correctly
 mkdir -p /config
-# Chown only what is wrong; an already-correct tree costs a stat pass.
-# Walks through NOFOLLOW directory fds: a path-based chown follows an
-# intermediate directory swapped for a symlink mid-sweep.
+# Chowns only what is wrong, through NOFOLLOW directory fds: a path-based
+# chown follows an intermediate dir swapped for a symlink mid-sweep.
 python3 /app/fix_ownership.py /config "${PUID}" "${PGID}" || true
 
 # Fail closed on the thing that matters. A per-file chown error can be benign
