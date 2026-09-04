@@ -1,8 +1,22 @@
 # .coderabbit.yaml — BeatsCheck (audio integrity / ID3 analysis; raw-Python HTTP server + Docker)
 language: "en-US"
 reviews:
-  profile: "chill"
+  # assertive: chill passed a diff clean that assertive flagged with two Major findings (2026-09-03); the "**" rule keeps style nits out
+  profile: "assertive"
   request_changes_workflow: false
+  pre_merge_checks:
+    # off: the 80% docstring-coverage warning contradicts the one-line-docstring rule under "**"
+    docstrings:
+      mode: "off"
+    title:
+      mode: warning
+      requirements: |-
+        Conventional Commits, `type(scope)?: subject`. release-please reads the
+        squash-merge title to pick the next version: feat bumps minor, fix bumps
+        patch, a `!` after the type or a BREAKING CHANGE footer bumps major, and
+        chore/ci/test/build are hidden from the changelog and never release on
+        their own. Flag a title whose type understates the diff (a behaviour
+        change labelled chore or ci ships unversioned) or overstates it.
   auto_review:
     enabled: true
     drafts: false
@@ -107,10 +121,15 @@ reviews:
         - Never put the session/auth token in a URL, fetch query string, EventSource
           src, or <img> src — auth rides the HttpOnly cookie. Flag any polling/
           streaming endpoint that appends a credential to the URL.
-    - path: "scripts/**/*.sh"
+    - path: "scripts/**"
       instructions: |
         Container helper wrappers (delete/rescan/reset-password/entrypoint) that
-        run as root then drop to PUID/PGID via su-exec.
+        run as root then drop to PUID/PGID via su-exec, plus fix_ownership.py.
+        - fix_ownership.py opens the root O_NOFOLLOW and walks with fwalk
+          follow_symlinks=False so a directory swapped for a symlink is never
+          descended or chowned through; flag any change that follows symlinks or
+          that turns a per-file chown failure into a start failure — the
+          entrypoint's write probe is the real gate, by design.
         - FAIL CLOSED: delete.sh must abort when MUSIC_DIR is not writable / not
           present (it already checks `-w`); a destructive wrapper must never
           proceed on an unverified or unreadable target. Quote every path
@@ -164,6 +183,17 @@ reviews:
           branch name, issue body) straight into a `run:` block — pass it via env.
         - A paths filter added or renamed must stay in step with what the job
           actually needs, or the image silently stops being built when it changes.
+    - path: "beats-check.xml"
+      instructions: |-
+        Published Unraid CA template — what a fresh install gets:
+        - <Network> stays bridge; a personal network name belongs only in the
+          user's my-*.xml copy, never in the repo template.
+        - /data defaults to Mode="ro" (report mode is the safe default); flag a
+          change to rw or a new host path that widens what the container can
+          delete.
+        - Every <Config> (PUID/PGID/UMASK/TZ, /config, port 8484) must match the
+          Dockerfile, compose.yaml and README; a renamed env var here without
+          the matching entrypoint change breaks fresh installs silently.
     - path: "**"
       instructions: |-
         Applies to every file, whatever the language:
@@ -171,9 +201,16 @@ reviews:
           what a non-obvious block does, or the gotcha it guards. No why/history
           essays, no before/after narrative, no restating the code, no section
           banners. Docstrings: one line unless the signature genuinely cannot
-          carry it.
+          carry it. Never ask for a docstring to be added; a missing docstring
+          is not a finding.
         - The 1-2 line cap wins even inside an already heavily-commented file —
           matching local density is not licence to exceed it.
+        - A comment, docstring, help text, column header, log message or UI label
+          that disagrees with what the code does is a correctness finding, not a
+          stale-comment nit: report it and say which side is wrong.
+        - Do not flag stylistic preferences that are consistent across the file
+          (naming, quoting, import order, formatting, line length). Report
+          correctness, security, data-loss and the classes named above.
 
   tools:
     ruff:
