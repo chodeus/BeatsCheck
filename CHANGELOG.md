@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.4](https://github.com/chodeus/BeatsCheck/compare/v1.3.3...v1.3.4) (2026-09-05)
+
+
+### Bug Fixes
+
+* **coderabbit:** point the tests instruction at tests/, not the repo root ([dd7169d](https://github.com/chodeus/BeatsCheck/commit/dd7169d0b5de08f51ead5629dbcc269e39451b9d))
+* **docker:** keep /app read-only and chown /config conditionally ([#253](https://github.com/chodeus/BeatsCheck/issues/253)) ([394fb79](https://github.com/chodeus/BeatsCheck/commit/394fb79607befaf141c8d80d645572becf5d3c90))
+* **entrypoint:** stop touching /app and /config, and share one write probe ([#254](https://github.com/chodeus/BeatsCheck/issues/254)) ([570f99c](https://github.com/chodeus/BeatsCheck/commit/570f99c509a2db9f07f3db70344e90c88f9b1cce))
+
 ## [1.3.3](https://github.com/chodeus/BeatsCheck/compare/v1.3.2...v1.3.3) (2026-08-13)
 
 
