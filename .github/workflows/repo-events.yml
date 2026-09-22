@@ -14,6 +14,9 @@ on:
   discussion:
     types: [created]
 
+permissions:
+  contents: read
+
 jobs:
   notify:
     uses: chodeus/chodeus-ops/.github/workflows/repo-events.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
