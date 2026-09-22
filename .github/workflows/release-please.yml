@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@143b4da181660d72e7ca4404c7c1e1e1dd5be750 # main
 
   # docker-publish.yml's tags:['v*'] trigger never fires: release-please pushes
   # its tag with GITHUB_TOKEN, and GitHub runs no workflow for events raised by
@@ -43,7 +43,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # release_version support
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@143b4da181660d72e7ca4404c7c1e1e1dd5be750 # release_version support
     with:
       release_version: ${{ needs.release.outputs.version }}
       build_args: |
