@@ -29,13 +29,10 @@ concurrency:
   group: docker-build-${{ github.ref_name }}
   cancel-in-progress: true
 
-permissions:
-  contents: read
-  packages: write
-  security-events: write
-
 jobs:
   build-number:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     outputs:
       number: ${{ steps.count.outputs.number }}
@@ -50,6 +47,8 @@ jobs:
   # main can't publish :latest. (CodeQL runs in its own workflow; enforce it
   # as a required status check via branch protection.)
   lint:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -65,6 +64,8 @@ jobs:
         run: flake8 . --count --max-complexity=25 --max-line-length=127 --statistics
 
   test:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,6 +82,12 @@ jobs:
 
   build:
     needs: [build-number, lint, test]
+    # The union the called workflow's jobs declare: checkout, the GHCR push,
+    # and the Trivy SARIF upload. A called workflow can only reduce these.
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
     uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
     with:
       push: ${{ github.event_name != 'pull_request' }}
@@ -93,6 +100,8 @@ jobs:
 
   notify-failure:
     needs: build
+    # notify-discord.yml declares permissions: {} — it needs no scopes.
+    permissions: {}
     if: failure() && github.event_name != 'pull_request'
     uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
     with:
