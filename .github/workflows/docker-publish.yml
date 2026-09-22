@@ -88,7 +88,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@143b4da181660d72e7ca4404c7c1e1e1dd5be750 # main
     with:
       push: ${{ github.event_name != 'pull_request' }}
       build_args: |
@@ -103,7 +103,7 @@ jobs:
     # notify-discord.yml declares permissions: {} — it needs no scopes.
     permissions: {}
     if: failure() && github.event_name != 'pull_request'
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@579feb04e3219248963bd27843298a8c2ea6b2fd # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@143b4da181660d72e7ca4404c7c1e1e1dd5be750 # main
     with:
       event_type: build
       status: failure
