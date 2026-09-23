@@ -1,6 +1,6 @@
 name: "Docker Build & Publish"
 
-# Builds on main, v* tags and every PR (PRs never push, and always report the scan legs);
+# Builds on main, v* tags and every PR (PRs never push; the scan legs run once lint and test pass);
 # workflow_dispatch is what image-refresh.yml sends on package drift.
 
 on:
