@@ -3,12 +3,9 @@ name: "Docker Build & Publish"
 # Triggers:
 #   push.branches.main → always build (cheap via GHA cache)
 #   push.tags.v*       → always build (releases must produce tagged images)
-#   pull_request       → build-only (no push) for Dockerfile/scripts/app changes
-#   workflow_dispatch  → manual
-#
-# Note: GitHub Actions applies `on.push.paths` to the whole push event
-# (branches AND tags), so a path-filtered tag push would silently skip
-# release builds. We keep paths filtering on pull_request only.
+#   pull_request       → build-only (no push) on every PR, so the scan legs can
+#                        be required checks without deadlocking a docs-only PR
+#   workflow_dispatch  → manual, and what image-refresh.yml dispatches daily
 
 on:
   push:
@@ -19,10 +16,6 @@ on:
   pull_request:
     branches:
       - main
-    paths:
-      - 'Dockerfile'
-      - 'scripts/**'
-      - 'app/**'
   workflow_dispatch:
 
 concurrency:
@@ -36,12 +29,17 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       number: ${{ steps.count.outputs.number }}
+      date: ${{ steps.count.outputs.date }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - id: count
-        run: echo "number=$(git rev-list --count HEAD)" >> "$GITHUB_OUTPUT"
+        run: |
+          {
+            echo "number=$(git rev-list --count HEAD)"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
 
   # Gate the image build/publish on lint + smoke tests so a broken push to
   # main can't publish :latest. (CodeQL runs in its own workflow; enforce it
@@ -88,11 +86,13 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@05f4e436f2400295e71046a85e853b422417b172 # main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@69da92834f50ecc5e040c89699775bbbdca2381c # chodeus-ops#28
     with:
       push: ${{ github.event_name != 'pull_request' }}
+      # Start the image on each platform and wait for its HEALTHCHECK before pushing.
+      smoke_healthcheck: true
       build_args: |
-        BUILD_DATE=${{ github.event.head_commit.timestamp || github.event.pull_request.updated_at }}
+        BUILD_DATE=${{ needs.build-number.outputs.date }}
         VCS_REF=${{ github.sha }}
         VERSION=${{ github.ref_name }}
         BUILD_NUMBER=${{ needs.build-number.outputs.number }}
@@ -103,7 +103,7 @@ jobs:
     # notify-discord.yml declares permissions: {} — it needs no scopes.
     permissions: {}
     if: failure() && github.event_name != 'pull_request'
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@05f4e436f2400295e71046a85e853b422417b172 # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@69da92834f50ecc5e040c89699775bbbdca2381c # chodeus-ops#28
     with:
       event_type: build
       status: failure

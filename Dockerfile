@@ -5,7 +5,7 @@
 # Runs on the build host; validated against musl in the final stage below.
 FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b AS ffmpeg-fetch
 ARG TARGETARCH
-# renovate: datasource=github-releases depName=chodeus/ffmpeg-static
+# renovate: datasource=github-releases depName=chodeus/ffmpeg-static versioning=regex:^n?(?<major>\d+)\.(?<minor>\d+)(?:\.(?<patch>\d+))?$
 ARG FFMPEG_VERSION=n9.0.1
 RUN apk add --no-cache ca-certificates wget
 RUN set -eux; \
