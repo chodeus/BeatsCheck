@@ -5,7 +5,7 @@ name: "Docker Build & Publish"
 #   push.tags.v*       → always build (releases must produce tagged images)
 #   pull_request       → build-only (no push) on every PR, so the scan legs can
 #                        be required checks without deadlocking a docs-only PR
-#   workflow_dispatch  → manual, and what image-refresh.yml dispatches daily
+#   workflow_dispatch  → manual, and what image-refresh.yml dispatches on package drift
 
 on:
   push:

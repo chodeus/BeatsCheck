@@ -54,7 +54,9 @@ ENV PUID=99 \
     CONFIG_DIR=/config \
     BUILD_NUMBER=${BUILD_NUMBER}
 
-RUN apk --no-cache upgrade && \
+# Echoing BUILD_DATE makes every build re-run the upgrade instead of reusing a cached layer.
+RUN echo "packages as of ${BUILD_DATE}" && \
+    apk --no-cache upgrade && \
     apk --no-cache add \
     python3 \
     su-exec \
