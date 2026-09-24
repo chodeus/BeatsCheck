@@ -43,9 +43,11 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@05f4e436f2400295e71046a85e853b422417b172 # release_version support
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@96cf0be225f5bd5fd4774ea539d9789dd316443e # main
     with:
       release_version: ${{ needs.release.outputs.version }}
+      # Start the image on each platform and wait for its HEALTHCHECK before pushing.
+      smoke_healthcheck: true
       build_args: |
         BUILD_DATE=${{ needs.version-tag-meta.outputs.build_date }}
         VCS_REF=${{ github.sha }}
