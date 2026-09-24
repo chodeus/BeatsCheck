@@ -4,14 +4,22 @@ on:
   push:
     branches: [main]
   workflow_dispatch: {}
+  # Merges a release PR whose checks finished after the run that updated it.
+  schedule:
+    - cron: '17,47 * * * *'
 
 permissions:
   contents: write
   pull-requests: write
+  # release-please.yml approves its release PR's CI runs.
+  actions: write
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@05f4e436f2400295e71046a85e853b422417b172 # main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@aaf1f3e848f30db28548cd5a5eb2768b5dd71229 # main
+    with:
+      # Keep the release PR current and merge it once its checks pass; the release follows.
+      automerge: true
 
   # docker-publish.yml's tags:['v*'] trigger never fires: release-please pushes
   # its tag with GITHUB_TOKEN, and GitHub runs no workflow for events raised by
@@ -43,7 +51,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@96cf0be225f5bd5fd4774ea539d9789dd316443e # main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@c36f1a3c7e8108f86b3be0e19c5e0d08502f681f # main
     with:
       release_version: ${{ needs.release.outputs.version }}
       # Start the image on each platform and wait for its HEALTHCHECK before pushing.
