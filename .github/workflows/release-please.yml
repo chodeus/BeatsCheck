@@ -4,6 +4,9 @@ on:
   push:
     branches: [main]
   workflow_dispatch: {}
+  # Merges a release PR whose checks finished after the run that updated it.
+  schedule:
+    - cron: '17,47 * * * *'
 
 permissions:
   contents: write
@@ -13,7 +16,10 @@ permissions:
 
 jobs:
   release:
-    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@1fcf653ea7ccc8c3cc5b8897d38c4b3f640010c0 # main
+    uses: chodeus/chodeus-ops/.github/workflows/release-please.yml@aaf1f3e848f30db28548cd5a5eb2768b5dd71229 # main
+    with:
+      # Keep the release PR current and merge it once its checks pass; the release follows.
+      automerge: true
 
   # docker-publish.yml's tags:['v*'] trigger never fires: release-please pushes
   # its tag with GITHUB_TOKEN, and GitHub runs no workflow for events raised by
