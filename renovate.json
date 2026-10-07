@@ -7,6 +7,11 @@
       "matchDepNames": ["chodeus/chodeus-ops"],
       "matchUpdateTypes": ["digest"],
       "automerge": false
+    },
+    {
+      "description": "BeatsCheck's own image. Every build on main publishes a new :latest digest, so a digest pin on it reopens a bump PR after each merge, and merging that PR builds again. The compose example stays on bare :latest; do not pin or update it.",
+      "matchPackageNames": ["ghcr.io/chodeus/beatscheck"],
+      "enabled": false
     }
   ]
 }
