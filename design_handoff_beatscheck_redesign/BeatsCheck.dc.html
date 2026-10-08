@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+@keyframes bc-pulse{0%,100%{opacity:1}50%{opacity:.28}}
+@keyframes bc-sweep{0%,100%{opacity:.55}50%{opacity:1}}
+@keyframes bc-page{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--bds,#30333d);border-radius:5px}
+::-webkit-scrollbar-track{background:transparent}
+input,select,button{font-family:inherit}
+</style>
+</helmet>
+<div style="{{ rootStyle }}">
+
+  <aside style="width:238px;flex-shrink:0;background:var(--bg1,#121319);border-right:1px solid var(--bd,#23252e);display:flex;flex-direction:column;height:100vh;position:sticky;top:0">
+    <div style="display:flex;align-items:center;gap:12px;padding:20px 20px 16px">
+      <div style="width:36px;height:36px;border-radius:11px;background:radial-gradient(circle at 50% 38%,#1d1f28,#08090c);border:1px solid var(--bds,#30333d);display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0">
+        <div style="width:4px;height:15px;border-radius:2px;background:var(--spectrum,linear-gradient(180deg,#6c5cff,#ff7a4d))"></div>
+        <div style="width:4px;height:4px;border-radius:50%;background:#ff4d6d;position:absolute;bottom:7px"></div>
+      </div>
+      <div style="min-width:0">
+        <div style="font-size:16px;font-weight:800;letter-spacing:-.02em;color:var(--tx,#ecedf1);line-height:1">Beats<span style="color:var(--ac,#34e0a0)">Check</span></div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;color:var(--txd,#5f626d);letter-spacing:.04em;margin-top:3px">v1.0.0 · integrity</div>
+      </div>
+    </div>
+    <div style="height:1px;background:var(--bd,#23252e);margin:4px 0 10px"></div>
+
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.14em;color:var(--txd,#5f626d);padding:2px 22px 8px">MONITOR</div>
+    <a onClick="{{ navGo.dashboard }}" style="{{ nav.dashboard }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);width:15px;flex-shrink:0">01</span>Dashboard</a>
+    <a onClick="{{ navGo.corrupt }}" style="{{ nav.corrupt }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);width:15px;flex-shrink:0">02</span>Corrupt files <span style="{{ navBadge }}">{{ corruptCount }}</span></a>
+    <a onClick="{{ navGo.config }}" style="{{ nav.config }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);width:15px;flex-shrink:0">03</span>Configuration</a>
+    <a onClick="{{ navGo.logs }}" style="{{ nav.logs }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);width:15px;flex-shrink:0">04</span>Logs</a>
+
+    <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.14em;color:var(--txd,#5f626d);padding:18px 22px 8px">ACCESS PREVIEW</div>
+    <a onClick="{{ navGo.login }}" style="{{ nav.login }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);width:15px;flex-shrink:0">05</span>Login</a>
+    <a onClick="{{ navGo.setup }}" style="{{ nav.setup }}"><span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);width:15px;flex-shrink:0">06</span>Setup wizard</a>
+
+    <div style="margin-top:auto;padding:16px 18px">
+      <div style="background:var(--bg2,#1a1c23);border:1px solid var(--bd,#23252e);border-radius:11px;padding:12px 13px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:7px">
+          <span style="{{ statusDotStyle }}"></span>
+          <span style="font-size:11.5px;font-weight:700;color:var(--tx,#ecedf1)">{{ statusWord }}</span>
+        </div>
+        <div style="font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd,#5f626d);line-height:1.5">6 workers · nice(10)<br>read-only mount · ro</div>
+      </div>
+    </div>
+  </aside>
+
+  <div style="flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg,#0a0b0e)">
+
+    <header style="display:flex;align-items:center;justify-content:space-between;gap:16px;padding:15px 30px;border-bottom:1px solid var(--bd,#23252e);background:var(--bg1,#121319);position:sticky;top:0;z-index:20">
+      <div style="font-size:18px;font-weight:700;letter-spacing:-.015em;color:var(--tx,#ecedf1)">{{ screenTitle }}</div>
+      <div style="display:flex;align-items:center;gap:11px">
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 13px;border-radius:999px;background:var(--bg2,#1a1c23);border:1px solid var(--bd,#23252e)">
+          <span style="{{ statusDotStyle }}"></span>
+          <span style="font-size:12.5px;color:var(--txm,#9396a3);font-weight:600">{{ statusText }}</span>
+        </div>
+        <button onClick="{{ toggleTheme }}" style="padding:7px 13px;border-radius:8px;background:transparent;border:1px solid var(--bd,#23252e);color:var(--txm,#9396a3);font-size:12.5px;font-weight:600;cursor:pointer">{{ themeLabel }}</button>
+      </div>
+    </header>
+
+    <main style="flex:1;overflow:auto;padding:26px 30px">
+
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+        <div style="max-width:1080px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(168px,1fr));gap:var(--gap,14px);margin-bottom:20px">
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;padding:var(--cardpad,18px)">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--txm,#9396a3);text-transform:uppercase;margin-bottom:10px;font-weight:600">Status</div>
+              <div style="display:flex;align-items:center;gap:9px"><span style="{{ statusDotStyle }}"></span><span style="font-size:21px;font-weight:700;letter-spacing:-.02em;color:var(--tx,#ecedf1)">{{ statusWord }}</span></div>
+            </div>
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;padding:var(--cardpad,18px)">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--txm,#9396a3);text-transform:uppercase;margin-bottom:10px;font-weight:600">Mode</div>
+              <div style="font-size:23px;font-weight:700;letter-spacing:-.02em;color:var(--tx,#ecedf1)">Report</div>
+            </div>
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;padding:var(--cardpad,18px)">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--txm,#9396a3);text-transform:uppercase;margin-bottom:10px;font-weight:600">Library</div>
+              <div style="font-size:23px;font-weight:700;letter-spacing:-.02em;color:var(--tx,#ecedf1)">98,432</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);margin-top:3px">files · 2.8 TB</div>
+            </div>
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;padding:var(--cardpad,18px)">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--txm,#9396a3);text-transform:uppercase;margin-bottom:10px;font-weight:600">Corrupt</div>
+              <div style="font-size:23px;font-weight:700;letter-spacing:-.02em;color:var(--dg,#ff4d6d)">{{ corruptCount }}</div>
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);margin-top:3px">flagged · 142.5 MB</div>
+            </div>
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;padding:var(--cardpad,18px)">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--txm,#9396a3);text-transform:uppercase;margin-bottom:10px;font-weight:600">Workers</div>
+              <div style="font-size:23px;font-weight:700;letter-spacing:-.02em;color:var(--tx,#ecedf1)">6</div>
+            </div>
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;padding:var(--cardpad,18px)">
+              <div style="font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.1em;color:var(--txm,#9396a3);text-transform:uppercase;margin-bottom:10px;font-weight:600">Uptime</div>
+              <div style="font-size:23px;font-weight:700;letter-spacing:-.02em;color:var(--tx,#ecedf1)">3d 4h</div>
+            </div>
+          </div>
+
+          <sc-if value="{{ scanning }}" hint-placeholder-val="{{ true }}">
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:16px;padding:20px 22px;margin-bottom:20px;position:relative;overflow:hidden">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap">
+                <div style="min-width:0">
+                  <div style="font-size:13px;font-weight:700;color:var(--tx,#ecedf1);margin-bottom:4px">Decoding library</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--txd,#5f626d);max-width:540px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ currentFile }}</div>
+                </div>
+                <div style="text-align:right;flex-shrink:0">
+                  <div style="font-size:30px;font-weight:800;letter-spacing:-.03em;color:var(--ac,#34e0a0);line-height:1">62%</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txm,#9396a3);margin-top:4px">{{ checkedText }}</div>
+                </div>
+              </div>
+              <div style="position:relative;height:118px;display:flex;align-items:flex-end;gap:2px;margin:20px 0 14px">
+                <div style="position:absolute;top:0;bottom:0;left:0;width:62%;background:linear-gradient(90deg,var(--acd,rgba(52,224,160,.14)),transparent);z-index:0;pointer-events:none;border-radius:6px"></div>
+                <sc-for list="{{ bars }}" as="b" hint-placeholder-count="90"><div style="{{ b.style }}"></div></sc-for>
+                <div style="position:absolute;top:-4px;bottom:-4px;left:62%;width:2px;background:var(--ac,#34e0a0);box-shadow:0 0 14px var(--ac,#34e0a0);z-index:3;animation:bc-sweep 1.6s ease-in-out infinite">
+                  <div style="position:absolute;top:0;left:-3px;width:8px;height:8px;border-radius:50%;background:var(--ac,#34e0a0);box-shadow:0 0 10px var(--ac,#34e0a0)"></div>
+                </div>
+              </div>
+              <div style="display:flex;gap:24px;flex-wrap:wrap;font-size:12.5px;align-items:center">
+                <span style="color:var(--txm,#9396a3)"><b style="color:var(--tx,#ecedf1)">{{ checkedText }}</b> checked</span>
+                <span style="color:var(--dg,#ff4d6d);font-weight:600">{{ corruptCount }} corrupt found</span>
+                <span style="color:var(--ac,#34e0a0);font-weight:600">ETA 1h 24m</span>
+                <span style="color:var(--txm,#9396a3)">6 workers active</span>
+              </div>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ idle }}" hint-placeholder-val="{{ true }}">
+            <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:16px;padding:22px;margin-bottom:20px;display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+              <div style="width:52px;height:52px;border-radius:14px;background:var(--acd,rgba(52,224,160,.14));display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--ac,#34e0a0);font-size:24px;font-weight:700">✓</div>
+              <div style="min-width:0">
+                <div style="font-size:17px;font-weight:700;color:var(--tx,#ecedf1);letter-spacing:-.01em">Scanner idle</div>
+                <div style="font-size:12.5px;color:var(--txm,#9396a3);margin-top:3px">Last scan 2h ago · 98,432 files · <b style="color:var(--dg,#ff4d6d)">{{ corruptCount }} flagged</b></div>
+              </div>
+              <button onClick="{{ startReport }}" style="margin-left:auto;padding:10px 18px;border-radius:10px;border:none;background:var(--ac,#34e0a0);color:var(--acft,#06120d);font-weight:700;font-size:13px;cursor:pointer">Start scan</button>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:22px">
+            <button onClick="{{ startReport }}" style="padding:10px 17px;border-radius:10px;border:none;background:var(--ac,#34e0a0);color:var(--acft,#06120d);font-weight:700;font-size:13px;cursor:pointer">Scan — Report</button>
+            <button style="padding:10px 17px;border-radius:10px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-weight:600;font-size:13px;cursor:pointer">Scan — Move</button>
+            <sc-if value="{{ scanning }}" hint-placeholder-val="{{ true }}"><button onClick="{{ stopScan }}" style="padding:10px 17px;border-radius:10px;border:none;background:var(--dg,#ff4d6d);color:#fff;font-weight:700;font-size:13px;cursor:pointer">Cancel scan</button></sc-if>
+            <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txm,#9396a3);cursor:pointer;margin-left:6px"><input type="checkbox" style="accent-color:var(--ac,#34e0a0)"> Fresh scan (ignore resume cache)</label>
+          </div>
+
+          <div style="font-size:13px;font-weight:700;color:var(--tx,#ecedf1);margin-bottom:12px;display:flex;align-items:center;gap:9px">Recently flagged <span style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);font-weight:500">last 24h</span></div>
+          <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;overflow:hidden">
+            <sc-for list="{{ recent }}" as="f" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:14px;padding:13px 16px;border-bottom:1px solid var(--bd,#23252e)">
+                <div style="width:6px;height:6px;border-radius:50%;background:var(--dg,#ff4d6d);flex-shrink:0;box-shadow:0 0 7px var(--dg,#ff4d6d)"></div>
+                <div style="min-width:0;flex:1">
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--tx,#ecedf1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.name }}</div>
+                  <div style="font-size:11px;color:var(--dg,#ff4d6d);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.error }}</div>
+                </div>
+                <div style="font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--txm,#9396a3);flex-shrink:0">{{ f.size }}</div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isCorrupt }}" hint-placeholder-val="{{ true }}">
+        <div style="max-width:1080px">
+          <div style="display:flex;align-items:center;gap:11px;flex-wrap:wrap;margin-bottom:16px">
+            <input onInput="{{ onCorruptSearch }}" placeholder="Search files, albums, errors…" style="flex:1;min-width:200px;padding:9px 13px;border-radius:9px;border:1px solid var(--bd,#23252e);background:var(--bg1,#121319);color:var(--tx,#ecedf1);font-size:13px">
+            <button onClick="{{ toggleAlbum }}" style="padding:8px 13px;border-radius:9px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-weight:600;font-size:12.5px;cursor:pointer">{{ viewToggleLabel }}</button>
+            <button onClick="{{ deleteSel }}" disabled="{{ noSelection }}" style="{{ delBtnStyle }}">Delete selected{{ selCountLabel }}</button>
+            <button onClick="{{ clearSel }}" style="padding:8px 13px;border-radius:9px;border:1px solid var(--bd,#23252e);background:transparent;color:var(--txm,#9396a3);font-weight:600;font-size:12.5px;cursor:pointer">Clear</button>
+          </div>
+
+          <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;overflow:hidden">
+            <div style="display:grid;grid-template-columns:34px 1fr 230px 84px 74px;gap:12px;align-items:center;padding:11px 16px;border-bottom:1px solid var(--bd,#23252e);font-family:'IBM Plex Mono',monospace;font-size:9.5px;letter-spacing:.08em;color:var(--txm,#9396a3);text-transform:uppercase;font-weight:600">
+              <div></div><div>File</div><div>Error</div><div style="text-align:right">Size</div><div></div>
+            </div>
+
+            <sc-if value="{{ noFiles }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:40px;text-align:center;color:var(--txd,#5f626d);font-size:13px">No corrupt files — library is clean.</div>
+            </sc-if>
+
+            <sc-if value="{{ albumViewOff }}" hint-placeholder-val="{{ true }}">
+              <sc-for list="{{ files }}" as="f" hint-placeholder-count="8">
+                <div style="{{ f.rowStyle }}">
+                  <input type="checkbox" checked="{{ f.checked }}" onChange="{{ f.onToggle }}" style="width:15px;height:15px;accent-color:var(--ac,#34e0a0);cursor:pointer">
+                  <div style="min-width:0">
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--tx,#ecedf1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.name }}</div>
+                    <div style="font-size:11px;color:var(--txd,#5f626d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">{{ f.folder }}</div>
+                  </div>
+                  <div style="font-size:11.5px;color:var(--dg,#ff4d6d);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.error }}</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--txm,#9396a3);text-align:right">{{ f.size }}</div>
+                  <button onClick="{{ f.onDelete }}" style="justify-self:end;padding:5px 11px;border-radius:7px;border:1px solid var(--bd,#23252e);background:transparent;color:var(--dg,#ff4d6d);font-size:11.5px;font-weight:600;cursor:pointer">Delete</button>
+                </div>
+              </sc-for>
+            </sc-if>
+
+            <sc-if value="{{ albumView }}" hint-placeholder-val="{{ false }}">
+              <sc-for list="{{ albums }}" as="al" hint-placeholder-count="4">
+                <div style="display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;padding:11px 16px;background:var(--bg2,#1a1c23);border-bottom:1px solid var(--bd,#23252e)">
+                  <div style="font-size:13px;font-weight:700;color:var(--tx,#ecedf1)">{{ al.name }}</div>
+                  <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--dg,#ff4d6d);font-weight:600">{{ al.count }}</div>
+                </div>
+                <sc-for list="{{ al.files }}" as="f" hint-placeholder-count="2">
+                  <div style="{{ f.rowStyle }}">
+                    <input type="checkbox" checked="{{ f.checked }}" onChange="{{ f.onToggle }}" style="width:15px;height:15px;accent-color:var(--ac,#34e0a0);cursor:pointer">
+                    <div style="min-width:0">
+                      <div style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--tx,#ecedf1);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ f.name }}</div>
+                      <div style="font-size:11px;color:var(--txd,#5f626d);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">{{ f.folder }}</div>
+                    </div>
+                    <div style="font-size:11.5px;color:var(--dg,#ff4d6d);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ f.error }}</div>
+                    <div style="font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--txm,#9396a3);text-align:right">{{ f.size }}</div>
+                    <button onClick="{{ f.onDelete }}" style="justify-self:end;padding:5px 11px;border-radius:7px;border:1px solid var(--bd,#23252e);background:transparent;color:var(--dg,#ff4d6d);font-size:11.5px;font-weight:600;cursor:pointer">Delete</button>
+                  </div>
+                </sc-for>
+              </sc-for>
+            </sc-if>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isConfig }}" hint-placeholder-val="{{ false }}">
+        <div style="max-width:840px">
+          <p style="color:var(--txm,#9396a3);font-size:13px;margin:0 0 22px;line-height:1.5">Changes save to <code style="font-family:'IBM Plex Mono',monospace;background:var(--bg2,#1a1c23);padding:2px 7px;border-radius:5px;font-size:12px;color:var(--tx,#ecedf1)">beatscheck.conf</code> and apply on the next scan.</p>
+          <sc-for list="{{ configSections }}" as="sec" hint-placeholder-count="4">
+            <div style="margin-bottom:26px">
+              <div style="font-size:14px;font-weight:700;color:var(--ac,#34e0a0);margin-bottom:3px;letter-spacing:-.01em">{{ sec.title }}</div>
+              <div style="font-size:12px;color:var(--txm,#9396a3);margin-bottom:13px;line-height:1.45">{{ sec.help }}</div>
+              <div style="background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:14px;overflow:hidden">
+                <sc-for list="{{ sec.fields }}" as="f" hint-placeholder-count="3">
+                  <div style="display:grid;grid-template-columns:210px 1fr;gap:16px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--bd,#23252e)">
+                    <div style="min-width:0">
+                      <div style="font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--tx,#ecedf1);font-weight:600">{{ f.key }}</div>
+                      <div style="font-size:10.5px;color:var(--txd,#5f626d);margin-top:4px;line-height:1.45">{{ f.desc }}</div>
+                    </div>
+                    <div style="display:flex;justify-content:flex-end">
+                      <sc-if value="{{ f.isSwitch }}" hint-placeholder-val="{{ false }}"><div style="{{ f.switchTrack }}"><div style="{{ f.switchKnob }}"></div></div></sc-if>
+                      <sc-if value="{{ f.isSelect }}" hint-placeholder-val="{{ false }}"><select defaultValue="{{ f.value }}" style="padding:8px 12px;border-radius:8px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:12.5px;font-family:'IBM Plex Mono',monospace;min-width:210px;max-width:300px;cursor:pointer"><sc-for list="{{ f.options }}" as="o" hint-placeholder-count="3"><option value="{{ o.v }}">{{ o.v }}</option></sc-for></select></sc-if>
+                      <sc-if value="{{ f.isText }}" hint-placeholder-val="{{ true }}"><input defaultValue="{{ f.value }}" style="padding:8px 12px;border-radius:8px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:12.5px;font-family:'IBM Plex Mono',monospace;min-width:210px;max-width:300px"></sc-if>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+          <div style="display:flex;align-items:center;gap:14px;margin-top:4px">
+            <button style="padding:10px 18px;border-radius:10px;border:none;background:var(--ac,#34e0a0);color:var(--acft,#06120d);font-weight:700;font-size:13px;cursor:pointer">Save configuration</button>
+            <span style="font-size:12.5px;color:var(--txm,#9396a3)">Last saved 2h ago</span>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isLogs }}" hint-placeholder-val="{{ false }}">
+        <div>
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+            <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--txm,#9396a3);cursor:pointer"><input type="checkbox" checked style="accent-color:var(--ac,#34e0a0)">Auto-scroll</label>
+            <select onChange="{{ setLogLevel }}" style="padding:8px 12px;border-radius:8px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:12.5px;cursor:pointer">
+              <option value="">All levels</option>
+              <option value="ERROR">Error</option>
+              <option value="WARNING">Warning</option>
+              <option value="INFO">Info</option>
+              <option value="DEBUG">Debug</option>
+            </select>
+            <input onInput="{{ onLogSearch }}" placeholder="Search logs…" style="flex:1;min-width:180px;padding:8px 13px;border-radius:8px;border:1px solid var(--bd,#23252e);background:var(--bg1,#121319);color:var(--tx,#ecedf1);font-size:13px">
+            <button style="padding:8px 13px;border-radius:8px;border:1px solid var(--bd,#23252e);background:transparent;color:var(--txm,#9396a3);font-weight:600;font-size:12.5px;cursor:pointer">Copy</button>
+            <button style="padding:8px 13px;border-radius:8px;border:1px solid var(--bd,#23252e);background:transparent;color:var(--txm,#9396a3);font-weight:600;font-size:12.5px;cursor:pointer">Download</button>
+          </div>
+          <div style="background:#08090c;border:1px solid var(--bd,#23252e);border-radius:14px;padding:14px 16px;font-family:'IBM Plex Mono',monospace;font-size:12px;line-height:1.75;max-height:64vh;overflow:auto">
+            <sc-for list="{{ logLines }}" as="l" hint-placeholder-count="14">
+              <div style="display:flex;gap:11px;align-items:baseline;padding:1px 0">
+                <span style="color:#5a5d68;flex-shrink:0">{{ l.t }}</span>
+                <span style="{{ l.chipStyle }}">{{ l.lv }}</span>
+                <span style="{{ l.msgStyle }}">{{ l.m }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isLogin }}" hint-placeholder-val="{{ false }}">
+        <div style="min-height:62vh;display:flex;align-items:center;justify-content:center">
+          <div style="width:368px;background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:18px;padding:32px 30px">
+            <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:24px">
+              <div style="width:46px;height:46px;border-radius:13px;background:radial-gradient(circle at 50% 38%,#1d1f28,#08090c);border:1px solid var(--bds,#30333d);display:flex;align-items:center;justify-content:center;position:relative;margin-bottom:14px">
+                <div style="width:5px;height:18px;border-radius:2px;background:var(--spectrum,linear-gradient(180deg,#6c5cff,#ff7a4d))"></div>
+                <div style="width:5px;height:5px;border-radius:50%;background:#ff4d6d;position:absolute;bottom:8px"></div>
+              </div>
+              <div style="font-size:19px;font-weight:800;letter-spacing:-.02em;color:var(--tx,#ecedf1)">Welcome back</div>
+              <div style="font-size:12.5px;color:var(--txm,#9396a3);margin-top:4px">Sign in to BeatsCheck</div>
+            </div>
+            <label style="display:block;font-size:12px;font-weight:600;color:var(--txm,#9396a3);margin-bottom:6px">Username</label>
+            <input style="width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:14px;margin-bottom:14px">
+            <label style="display:block;font-size:12px;font-weight:600;color:var(--txm,#9396a3);margin-bottom:6px">Password</label>
+            <input type="password" value="passw0rd" style="width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:14px;margin-bottom:20px">
+            <button style="width:100%;padding:12px;border-radius:10px;border:none;background:var(--ac,#34e0a0);color:var(--acft,#06120d);font-weight:700;font-size:14px;cursor:pointer">Log in</button>
+            <div style="font-family:'IBM Plex Mono',monospace;font-size:10.5px;color:var(--txd,#5f626d);text-align:center;margin-top:18px;line-height:1.6">Forgot your password?<br>docker exec beatscheck reset-webui-password</div>
+          </div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{ isSetup }}" hint-placeholder-val="{{ false }}">
+        <div style="min-height:62vh;display:flex;align-items:center;justify-content:center">
+          <div style="width:380px;background:var(--bg1,#121319);border:1px solid var(--bd,#23252e);border-radius:18px;padding:32px 30px">
+            <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:24px">
+              <div style="width:46px;height:46px;border-radius:13px;background:radial-gradient(circle at 50% 38%,#1d1f28,#08090c);border:1px solid var(--bds,#30333d);display:flex;align-items:center;justify-content:center;position:relative;margin-bottom:14px">
+                <div style="width:5px;height:18px;border-radius:2px;background:var(--spectrum,linear-gradient(180deg,#6c5cff,#ff7a4d))"></div>
+                <div style="width:5px;height:5px;border-radius:50%;background:#ff4d6d;position:absolute;bottom:8px"></div>
+              </div>
+              <div style="font-size:19px;font-weight:800;letter-spacing:-.02em;color:var(--tx,#ecedf1)">Create your credentials</div>
+              <div style="font-size:12.5px;color:var(--txm,#9396a3);margin-top:4px;line-height:1.5">First-run setup. These are stored hashed in the container.</div>
+            </div>
+            <label style="display:block;font-size:12px;font-weight:600;color:var(--txm,#9396a3);margin-bottom:6px">Username</label>
+            <input style="width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:14px;margin-bottom:14px">
+            <label style="display:block;font-size:12px;font-weight:600;color:var(--txm,#9396a3);margin-bottom:6px">Password</label>
+            <input type="password" style="width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:14px;margin-bottom:14px">
+            <label style="display:block;font-size:12px;font-weight:600;color:var(--txm,#9396a3);margin-bottom:6px">Confirm password</label>
+            <input type="password" style="width:100%;padding:11px 13px;border-radius:10px;border:1px solid var(--bd,#23252e);background:var(--bg2,#1a1c23);color:var(--tx,#ecedf1);font-size:14px;margin-bottom:20px">
+            <button style="width:100%;padding:12px;border-radius:10px;border:none;background:var(--ac,#34e0a0);color:var(--acft,#06120d);font-weight:700;font-size:14px;cursor:pointer">Create account</button>
+          </div>
+        </div>
+      </sc-if>
+
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;accent&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;signal&quot;,&quot;options&quot;:[&quot;signal&quot;,&quot;amber&quot;,&quot;indigo&quot;],&quot;tsType&quot;:&quot;'signal'|'amber'|'indigo'&quot;},&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;comfortable&quot;,&quot;options&quot;:[&quot;comfortable&quot;,&quot;compact&quot;],&quot;tsType&quot;:&quot;'comfortable'|'compact'&quot;},&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;dark&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;tsType&quot;:&quot;'dark'|'light'&quot;},&quot;scanState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;default&quot;:&quot;scanning&quot;,&quot;options&quot;:[&quot;scanning&quot;,&quot;idle&quot;],&quot;tsType&quot;:&quot;'scanning'|'idle'&quot;}}">
+class Component extends DCLogic {
+  state = {
+    screen: 'dashboard',
+    theme: this.props.defaultTheme === 'light' ? 'light' : 'dark',
+    scanning: this.props.scanState !== 'idle',
+    albumView: false,
+    selected: {},
+    removed: {},
+    corruptSearch: '',
+    logSearch: '',
+    logLevel: ''
+  };
+
+  rawFiles() {
+    const F = [
+      { folder: 'Boards of Canada/Geogaddi', name: '04 - 1969.flac', album: 'Boards of Canada — Geogaddi', size: '38.4 MB', error: 'Decoding error: Invalid data found' },
+      { folder: 'Boards of Canada/Geogaddi', name: '17 - Over the Horizon Radar.flac', album: 'Boards of Canada — Geogaddi', size: '21.7 MB', error: 'decode_frame() failed' },
+      { folder: 'Aphex Twin/Selected Ambient Works 85-92', name: '02 - Ageispolis.flac', album: 'Aphex Twin — SAW 85-92', size: '42.1 MB', error: 'Decode error rate exceeds maximum' },
+      { folder: 'Radiohead/In Rainbows', name: '06 - Faust Arp.flac', album: 'Radiohead — In Rainbows', size: '17.9 MB', error: 'invalid residual' },
+      { folder: 'Radiohead/In Rainbows', name: '09 - Videotape.flac', album: 'Radiohead — In Rainbows', size: '33.5 MB', error: 'Invalid data found in input' },
+      { folder: 'Burial/Untrue', name: '05 - Endorphin.flac', album: 'Burial — Untrue', size: '512 B', error: 'File too small (512 bytes)' },
+      { folder: 'Burial/Untrue', name: '11 - Raver.flac', album: 'Burial — Untrue', size: '29.3 MB', error: 'Decoding error: Invalid data found' },
+      { folder: 'Four Tet/Rounds', name: '03 - My Angel Rocks Back.m4a', album: 'Four Tet — Rounds', size: '14.2 MB', error: 'Header missing / truncated' }
+    ];
+    return F.map(f => ({ ...f, path: '/data/' + f.folder + '/' + f.name }));
+  }
+
+  buildBars() {
+    const spectrum = ['#6c5cff', '#4b86ff', '#34e0a0', '#9ad94a', '#f5c24a', '#ff7a4d'];
+    const N = 150, prog = 0.62;
+    const corrupt = new Set([22, 47, 61, 89]);
+    let seed = 7;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return ((seed >> 8) / 0x7fffff) % 1; };
+    const bars = [];
+    for (let i = 0; i < N; i++) {
+      let h = Math.max(8, Math.min(98, 18 + Math.abs(Math.sin(i * 0.19)) * 42 + rnd() * 36));
+      const scanned = i / N < prog;
+      const isC = corrupt.has(i);
+      let color = spectrum[Math.min(5, Math.floor(h / 17))];
+      if (isC) { h = Math.min(100, h + 16); color = '#ff4d6d'; }
+      bars.push({ style: {
+        flex: '1 1 0', height: h + '%', background: color,
+        opacity: scanned ? (isC ? 1 : 0.92) : 0.15,
+        borderRadius: '2px', alignSelf: 'flex-end',
+        boxShadow: isC ? '0 0 8px rgba(255,77,109,.85)' : 'none',
+        transition: 'opacity .3s'
+      } });
+    }
+    return bars;
+  }
+
+  configData() {
+    return [
+      { title: 'Scanning', help: 'How the library is decoded and how often it runs.', fields: [
+        { key: 'mode', value: 'report', type: 'select', options: ['setup', 'report', 'delete', 'move'], desc: 'setup = idle · report = scan & log · delete = interactive · move = quarantine' },
+        { key: 'workers', value: '6', type: 'number', desc: 'Parallel ffmpeg decode workers. 2 conservative · 4 balanced · 8+ fast.' },
+        { key: 'run_interval', value: '168', type: 'number', desc: 'Hours between scans. 0 = run once · 24 = daily · 168 = weekly.' },
+        { key: 'min_file_age', value: '30', type: 'number', desc: 'Skip files modified within N minutes — avoids flagging active downloads.' },
+        { key: 'log_level', value: 'INFO', type: 'select', options: ['DEBUG', 'INFO', 'WARNING', 'ERROR'], desc: 'Logging verbosity.' }
+      ]},
+      { title: 'Deletion & quarantine', help: 'What happens to corrupt files once found.', fields: [
+        { key: 'delete_after', value: '0', type: 'number', desc: 'Days before auto-delete. 0 = never (manual only) · 7 = 7-day review window.' },
+        { key: 'max_auto_delete', value: '50', type: 'number', desc: 'Safety threshold — abort auto-delete if more than this many files would go.' },
+        { key: 'output_dir', value: '/corrupted', type: 'text', desc: 'Quarantine destination for move mode. Must match a mounted volume.' }
+      ]},
+      { title: 'Lidarr integration', help: 'Optional. Removes trackfiles via the Lidarr API and triggers re-downloads.', fields: [
+        { key: 'lidarr_url', value: 'http://lidarr:8686', type: 'text', desc: 'Lidarr instance URL.' },
+        { key: 'lidarr_api_key', value: '••••••••••', type: 'text', desc: 'Stored hashed, kept off the command line and out of docker inspect.' },
+        { key: 'lidarr_search', value: true, type: 'switch', desc: 'Queue search for unmonitored albums after delete.' },
+        { key: 'lidarr_blocklist', value: true, type: 'switch', desc: 'Blocklist the release before deleting to prevent re-grabbing the same copy.' }
+      ]},
+      { title: 'Web interface', help: 'Settings for this dashboard.', fields: [
+        { key: 'webui', value: true, type: 'switch', desc: 'Enable this web interface.' },
+        { key: 'webui_port', value: '8484', type: 'number', desc: 'Port for the web interface. Requires a published port.' }
+      ]}
+    ];
+  }
+
+  logData() {
+    return [
+      { t: '10:00:00', lv: 'INFO', m: 'BeatsCheck v1.0.0 starting' },
+      { t: '10:00:00', lv: 'INFO', m: 'Mode: report · Workers: 6 · Library: 98,432 files (2.8 TB)' },
+      { t: '10:00:01', lv: 'INFO', m: 'To scan: 98,432 files (0 already processed)' },
+      { t: '10:05:12', lv: 'INFO', m: '[5%] 5,000/98,432 checked, 2 corrupt, ETA 3h42m' },
+      { t: '10:21:48', lv: 'WARNING', m: 'Skipping /data/Various/Incoming/track.part — modified 4m ago' },
+      { t: '10:48:03', lv: 'ERROR', m: 'CORRUPT /data/Boards of Canada/Geogaddi/04 - 1969.flac — Invalid data found' },
+      { t: '11:02:55', lv: 'INFO', m: '[25%] 24,608/98,432 checked, 6 corrupt, ETA 2h51m' },
+      { t: '11:30:17', lv: 'ERROR', m: 'CORRUPT /data/Burial/Untrue/05 - Endorphin.flac — File too small (512 bytes)' },
+      { t: '11:31:02', lv: 'DEBUG', m: 'ffmpeg exit 1 after 0.04s (xerror) on Endorphin.flac' },
+      { t: '12:14:39', lv: 'INFO', m: '[50%] 49,216/98,432 checked, 11 corrupt, ETA 1h44m' },
+      { t: '12:55:20', lv: 'WARNING', m: 'Hardlink detected (2 links) on Four Tet/Rounds/03 - ....m4a' },
+      { t: '13:20:08', lv: 'ERROR', m: 'CORRUPT /data/Aphex Twin/SAW 85-92/02 - Ageispolis.flac — Decode error rate exceeds maximum' },
+      { t: '13:41:55', lv: 'INFO', m: '[62%] 61,030/98,432 checked, 14 corrupt, ETA 1h24m' },
+      { t: '13:41:56', lv: 'INFO', m: 'Heartbeat ok · 6 workers active · nice(10)' }
+    ];
+  }
+
+  toggleSel(p) { this.setState(s => ({ selected: { ...s.selected, [p]: !s.selected[p] } })); }
+  removeFile(p) { this.setState(s => { const r = { ...s.removed }; r[p] = true; const sel = { ...s.selected }; delete sel[p]; return { removed: r, selected: sel }; }); }
+
+  renderVals() {
+    const dark = { bg: '#0a0b0e', bg1: '#121319', bg2: '#1a1c23', bgh: '#22242d', bd: '#23252e', bds: '#30333d', tx: '#ecedf1', txm: '#9396a3', txd: '#5f626d' };
+    const light = { bg: '#eef0f4', bg1: '#ffffff', bg2: '#f3f4f8', bgh: '#e7e9f0', bd: '#e3e5ed', bds: '#d2d5df', tx: '#16171c', txm: '#5b5f6b', txd: '#9094a0' };
+    const accents = {
+      signal: { dark: '#34e0a0', light: '#0f9d6e', dim: 'rgba(52,224,160,.14)' },
+      amber: { dark: '#f5a623', light: '#bf7d0c', dim: 'rgba(245,166,35,.15)' },
+      indigo: { dark: '#6c7bff', light: '#4a59e6', dim: 'rgba(108,123,255,.16)' }
+    };
+    const accentKey = this.props.accent || 'signal';
+    const ac = accents[accentKey] || accents.signal;
+    const isDark = this.state.theme === 'dark';
+    const p = isDark ? dark : light;
+    const accentHex = isDark ? ac.dark : ac.light;
+    const acft = accentKey === 'indigo' ? '#ffffff' : '#06120d';
+    const danger = isDark ? '#ff4d6d' : '#d6294e';
+    const dangerDim = isDark ? 'rgba(255,77,109,.13)' : 'rgba(214,41,78,.1)';
+    const warn = isDark ? '#f5b94a' : '#b9831a';
+    const info = isDark ? '#5a9cf0' : '#2f72d6';
+    const spectrum = 'linear-gradient(180deg,#6c5cff,#4b86ff,#34e0a0,#9ad94a,#f5c24a,#ff7a4d)';
+    const dens = this.props.density === 'compact' ? { cardpad: '13px', rowpad: '9px', gap: '10px' } : { cardpad: '18px', rowpad: '13px', gap: '14px' };
+
+    const rootStyle = {
+      display: 'flex', minHeight: '100vh', width: '100%',
+      fontFamily: "'Hanken Grotesk',system-ui,-apple-system,sans-serif",
+      WebkitFontSmoothing: 'antialiased', background: p.bg, color: p.tx,
+      '--bg': p.bg, '--bg1': p.bg1, '--bg2': p.bg2, '--bgh': p.bgh, '--bd': p.bd, '--bds': p.bds,
+      '--tx': p.tx, '--txm': p.txm, '--txd': p.txd,
+      '--ac': accentHex, '--acd': ac.dim, '--acft': acft, '--dg': danger, '--dgd': dangerDim, '--wn': warn, '--inf': info,
+      '--spectrum': spectrum, '--cardpad': dens.cardpad, '--rowpad': dens.rowpad, '--gap': dens.gap
+    };
+
+    const screen = this.state.screen;
+    const mkNav = (k) => {
+      const a = screen === k;
+      return { display: 'flex', alignItems: 'center', gap: '11px', padding: '9px 14px', margin: '1px 12px', borderRadius: '9px', color: a ? 'var(--ac,#34e0a0)' : 'var(--txm,#9396a3)', background: a ? 'var(--acd,rgba(52,224,160,.14))' : 'transparent', fontSize: '13.5px', fontWeight: 600, textDecoration: 'none', cursor: 'pointer' };
+    };
+    const mkGo = (k) => () => this.setState({ screen: k });
+    const nav = { dashboard: mkNav('dashboard'), corrupt: mkNav('corrupt'), config: mkNav('config'), logs: mkNav('logs'), login: mkNav('login'), setup: mkNav('setup') };
+    const navGo = { dashboard: mkGo('dashboard'), corrupt: mkGo('corrupt'), config: mkGo('config'), logs: mkGo('logs'), login: mkGo('login'), setup: mkGo('setup') };
+    const navBadge = { marginLeft: 'auto', fontFamily: "'IBM Plex Mono',monospace", fontSize: '10px', fontWeight: 700, color: 'var(--dg,#ff4d6d)', background: 'var(--dgd,rgba(255,77,109,.13))', padding: '1px 7px', borderRadius: '999px' };
+
+    const scanning = this.state.scanning;
+    const statusDotStyle = { width: '8px', height: '8px', borderRadius: '50%', flexShrink: 0, background: scanning ? 'var(--wn,#f5b94a)' : 'var(--ac,#34e0a0)', boxShadow: scanning ? '0 0 8px var(--wn,#f5b94a)' : '0 0 8px var(--ac,#34e0a0)', animation: scanning ? 'bc-pulse 1.4s ease-in-out infinite' : 'none' };
+
+    const titles = { dashboard: 'Dashboard', corrupt: 'Corrupt files', config: 'Configuration', logs: 'Logs', login: 'Login', setup: 'Setup wizard' };
+
+    // files
+    const raw = this.rawFiles();
+    const q = this.state.corruptSearch.trim().toLowerCase();
+    let list = raw.filter(f => !this.state.removed[f.path]);
+    if (q) list = list.filter(f => (f.name + ' ' + f.folder + ' ' + f.error).toLowerCase().includes(q));
+    const mkFile = (f) => {
+      const checked = !!this.state.selected[f.path];
+      return { ...f, checked,
+        onToggle: () => this.toggleSel(f.path),
+        onDelete: () => this.removeFile(f.path),
+        rowStyle: { display: 'grid', gridTemplateColumns: '34px 1fr 230px 84px 74px', gap: '12px', alignItems: 'center', padding: 'var(--rowpad,13px) 16px', borderBottom: '1px solid var(--bd,#23252e)', background: checked ? 'var(--acd,rgba(52,224,160,.14))' : 'transparent', transition: 'background .15s' } };
+    };
+    const files = list.map(mkFile);
+    const selectedCount = files.filter(f => f.checked).length;
+    const noSelection = selectedCount === 0;
+    const selCountLabel = selectedCount ? ' (' + selectedCount + ')' : '';
+    const delBtnStyle = { padding: '8px 13px', borderRadius: '9px', border: 'none', background: 'var(--dg,#ff4d6d)', color: '#fff', fontWeight: 700, fontSize: '12.5px', cursor: noSelection ? 'not-allowed' : 'pointer', opacity: noSelection ? 0.4 : 1 };
+    const amap = {};
+    files.forEach(f => { (amap[f.album] = amap[f.album] || []).push(f); });
+    const albums = Object.keys(amap).map(name => ({ name, files: amap[name], count: amap[name].length + (amap[name].length > 1 ? ' files' : ' file') }));
+
+    const deleteSel = () => this.setState(s => { const r = { ...s.removed }; Object.keys(s.selected).forEach(k => { if (s.selected[k]) r[k] = true; }); return { removed: r, selected: {} }; });
+    const clearSel = () => this.setState({ selected: {} });
+
+    // config
+    const configSections = this.configData().map(sec => ({ title: sec.title, help: sec.help, fields: sec.fields.map(f => {
+      const on = f.value === true;
+      const isSwitch = f.type === 'switch';
+      const isSelect = f.type === 'select';
+      const isText = !isSwitch && !isSelect;
+      return { key: f.key, desc: f.desc, isSwitch, isSelect, isText,
+        value: isSwitch ? '' : String(f.value),
+        options: (f.options || []).map(o => ({ v: o })),
+        switchTrack: { width: '40px', height: '22px', borderRadius: '999px', background: on ? 'var(--ac,#34e0a0)' : 'var(--bg2,#1a1c23)', border: '1px solid ' + (on ? 'transparent' : 'var(--bds,#30333d)'), position: 'relative', cursor: 'pointer', flexShrink: 0, transition: 'background .2s' },
+        switchKnob: { position: 'absolute', top: '2px', left: on ? '20px' : '2px', width: '16px', height: '16px', borderRadius: '50%', background: '#fff', transition: 'left .2s', boxShadow: '0 1px 2px rgba(0,0,0,.3)' } };
+    }) }));
+
+    // logs
+    const lcolor = { INFO: '#5a9cf0', WARNING: '#f5b94a', ERROR: '#ff5775', DEBUG: '#6b6f7d', CRITICAL: '#ff3868' };
+    const ltint = { INFO: 'rgba(90,156,240,.14)', WARNING: 'rgba(245,185,74,.14)', ERROR: 'rgba(255,87,117,.15)', DEBUG: 'rgba(107,111,125,.18)', CRITICAL: 'rgba(255,56,104,.16)' };
+    const lq = this.state.logSearch.trim().toLowerCase();
+    let logs = this.logData();
+    if (this.state.logLevel) logs = logs.filter(l => l.lv === this.state.logLevel);
+    if (lq) logs = logs.filter(l => l.m.toLowerCase().includes(lq));
+    const logLines = logs.map(l => ({ t: l.t, lv: l.lv, m: l.m,
+      chipStyle: { display: 'inline-block', minWidth: '60px', textAlign: 'center', padding: '1px 6px', borderRadius: '5px', fontSize: '10px', fontWeight: 700, letterSpacing: '.05em', flexShrink: 0, color: lcolor[l.lv], background: ltint[l.lv] },
+      msgStyle: { color: l.lv === 'ERROR' ? '#ff8095' : '#c9ccd6', opacity: l.lv === 'DEBUG' ? 0.65 : 0.95 } }));
+
+    return {
+      rootStyle, nav, navGo, navBadge,
+      isDashboard: screen === 'dashboard', isCorrupt: screen === 'corrupt', isConfig: screen === 'config', isLogs: screen === 'logs', isLogin: screen === 'login', isSetup: screen === 'setup',
+      screenTitle: titles[screen] || 'BeatsCheck',
+      scanning, idle: !scanning,
+      statusDotStyle,
+      statusWord: scanning ? 'Scanning' : 'Idle',
+      statusText: scanning ? 'Scanning · 62%' : 'Idle',
+      themeLabel: isDark ? 'Light' : 'Dark',
+      toggleTheme: () => this.setState(s => ({ theme: s.theme === 'dark' ? 'light' : 'dark' })),
+      startReport: () => this.setState({ scanning: true }),
+      stopScan: () => this.setState({ scanning: false }),
+      bars: this.buildBars(),
+      currentFile: '/data/Aphex Twin/Selected Ambient Works 85-92/02 - Ageispolis.flac',
+      checkedText: '61,030 / 98,432',
+      corruptCount: files.length,
+      recent: raw.slice(0, 4),
+      files, albums,
+      albumView: this.state.albumView, albumViewOff: !this.state.albumView,
+      toggleAlbum: () => this.setState(s => ({ albumView: !s.albumView })),
+      viewToggleLabel: this.state.albumView ? 'Flat view' : 'Group by album',
+      onCorruptSearch: (e) => this.setState({ corruptSearch: e.target.value }),
+      noSelection, selCountLabel, delBtnStyle, deleteSel, clearSel,
+      noFiles: files.length === 0,
+      configSections, logLines,
+      setLogLevel: (e) => this.setState({ logLevel: e.target.value }),
+      onLogSearch: (e) => this.setState({ logSearch: e.target.value })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+name: "Lint"
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - '**/*.py'
+      - '.release-please-manifest.json'
+      - 'VERSION'
+      - '.github/workflows/lint.yml'
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Syntax errors and undefined names
+        run: flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Style warnings
+        run: flake8 . --count --max-complexity=25 --max-line-length=127 --statistics

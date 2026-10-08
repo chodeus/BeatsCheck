@@ -1,0 +1,1664 @@
+/* ============================================================
+   BeatsCheck WebUI — Frontend Application
+   Patterns adapted from DAPS experimental frontend
+   ============================================================ */
+
+// --- State ---
+let currentPage = 'dashboard';
+let corruptFiles = [];
+let pollTimer = null;
+let logTimer = null;
+let sortColumn = localStorage.getItem('beatscheck-sort-col') || null;
+let sortDirection = localStorage.getItem('beatscheck-sort-dir') || 'asc';
+let configSnapshot = null;  // tracks unsaved changes
+let scanStartTime = null;
+let scanStartCount = 0;
+let logRawLines = [];  // unfiltered log lines for client-side filtering
+let isAuthenticated = false;
+let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; // 'files' or 'albums'
+let corruptLoadId = 0;  // monotonic ID to discard stale loadCorrupt() responses
+
+// --- Config metadata for form rendering ---
+const CONFIG_SCHEMA = [
+  { section: 'Scanning',
+    help: 'How and when BeatsCheck scans your music library for corruption.' },
+  { key: 'music_dir',        label: 'Scan Location',    type: 'path',   default: '/data',
+    desc: 'Folder to scan for audio files' },
+  { key: 'mode',             label: 'Scan Mode',        type: 'select', options: ['setup','report','move'], default: 'setup',
+    desc: 'setup = idle (no scanning), report = scan and log only, move = quarantine corrupt files' },
+  { key: 'workers',          label: 'Workers',          type: 'number', default: '4',
+    desc: 'Number of files checked in parallel. More = faster but uses more CPU (2-4 recommended)' },
+  { key: 'run_interval',     label: 'Scan Interval',    type: 'number', default: '0',
+    desc: 'Hours between automatic scans. 0 = scan once then wait. 24 = daily. 168 = weekly' },
+  { key: 'min_file_age',     label: 'Min File Age',     type: 'number', default: '30',
+    desc: 'Skip files modified in the last N minutes (avoids flagging active downloads)' },
+
+  { section: 'When Corrupt Files Are Found',
+    help: 'What happens after a scan finds corrupt files. By default, corrupt files are only logged — nothing is deleted unless you configure it here or use the Corrupt Files page.' },
+  { key: 'delete_after',     label: 'Auto-Delete After',type: 'number', default: '0',
+    desc: 'Automatically delete corrupt files after this many days. 0 = never (use Corrupt Files page to delete manually). 7 = one week review window' },
+  { key: 'max_auto_delete',  label: 'Safety Limit',     type: 'number', default: '50',
+    desc: 'Abort auto-delete if more than this many files would be removed in one run. Prevents mass deletion from filesystem issues. 0 = no limit' },
+  { key: 'output_dir',       label: 'Quarantine Folder', type: 'path',  default: '/data/corrupted',
+    desc: 'Only for move mode — corrupt files are moved here instead of deleted' },
+
+  { section: 'Lidarr (Automatic Re-download)',
+    help: 'Connect to Lidarr so deleted corrupt files are automatically re-downloaded. Monitored albums are re-searched by Lidarr after deletion — no extra config needed.' },
+  { key: 'lidarr_url',       label: 'Lidarr URL',       type: 'text',   default: '',
+    desc: 'Your Lidarr address, e.g. http://lidarr:8686 or http://192.168.1.100:8686' },
+  { key: 'lidarr_api_key',   label: 'API Key',          type: 'password', default: '',
+    desc: 'Find this in Lidarr under Settings > General > API Key' },
+  { key: 'lidarr_blocklist', label: 'Blocklist',        type: 'select', options: ['false','true'], default: 'false',
+    desc: 'Blocklist the corrupt release before deleting so Lidarr downloads a different copy' },
+  { key: 'lidarr_search',    label: 'Search Unmonitored', type: 'select', options: ['false','true'], default: 'false',
+    desc: 'Queue search for unmonitored albums after auto-delete. Monitored albums are searched automatically by Lidarr' },
+
+  { section: 'Logging' },
+  { key: 'log_level',        label: 'Log Level',        type: 'select', options: ['DEBUG','INFO','WARNING','ERROR'], default: 'INFO',
+    desc: 'INFO = normal. DEBUG = verbose (for troubleshooting). WARNING/ERROR = quiet' },
+  { key: 'max_log_mb',       label: 'Max Log Size (MB)', type: 'number', default: '50',
+    desc: 'Rotate log when it exceeds this size. Triggers a fresh full rescan. 0 = never rotate' },
+
+  { section: 'Web Interface' },
+  { key: 'webui',      label: 'Enabled',       type: 'select', options: ['false','true'], default: 'false',
+    desc: 'Enable the web interface (requires container restart to take effect)' },
+  { key: 'webui_port', label: 'Port',           type: 'number', default: '8484',
+    desc: 'Port number for the web interface (requires container restart)' },
+];
+
+// --- API helpers ---
+async function api(path, opts = {}) {
+  try {
+    const res = await fetch('/api/' + path, {
+      headers: { 'Content-Type': 'application/json' },
+      ...opts,
+    });
+    if (res.status === 401) {
+      // Session expired — redirect to login
+      isAuthenticated = false;
+      showAuthPage();
+      return null;
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      console.error('API error:', res.status, data.error || res.statusText);
+      return null;
+    }
+    return await res.json();
+  } catch (e) {
+    console.error('API error:', e);
+    return null;
+  }
+}
+
+function apiPost(path, body) {
+  return api(path, { method: 'POST', body: JSON.stringify(body) });
+}
+
+// --- Authentication ---
+async function checkAuth() {
+  try {
+    const res = await fetch('/api/auth-status');
+    const data = await res.json();
+    if (data.setup_required) {
+      showPage('setup');
+      return;
+    }
+    if (!data.authenticated) {
+      showPage('login');
+      return;
+    }
+    isAuthenticated = true;
+    showApp();
+  } catch (e) {
+    showPage('login');
+  }
+}
+
+function showPage(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+  const title = document.getElementById('screen-title');
+  if (title) title.textContent = SCREEN_TITLES[page] || 'BeatsCheck';
+  // Hide/show app chrome for auth pages
+  const sidebar = document.getElementById('sidebar');
+  const logoutBtn = document.getElementById('logout-btn');
+  if (page === 'login' || page === 'setup') {
+    stopStatusPoll();
+    sidebar.style.display = 'none';
+    if (logoutBtn) logoutBtn.style.display = 'none';
+    document.body.classList.add('auth-view');
+  } else {
+    sidebar.style.display = '';
+    if (logoutBtn) logoutBtn.style.display = '';
+    document.body.classList.remove('auth-view');
+  }
+}
+
+function showApp() {
+  document.body.classList.remove('auth-view');
+  const sidebar = document.getElementById('sidebar');
+  sidebar.style.display = '';
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.style.display = '';
+  initRouter();
+}
+
+function showAuthPage() {
+  stopStatusPoll();
+  stopLogPoll();
+  checkAuth();
+}
+
+async function submitAuth(e, endpoint, body, errorEl, failLabel) {
+  e.preventDefault();
+  errorEl.textContent = '';
+  const btn = e.target.querySelector('[type="submit"]');
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/' + endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      isAuthenticated = true;
+      showApp();
+    } else {
+      errorEl.textContent = data.error || failLabel;
+    }
+  } catch (err) {
+    errorEl.textContent = 'Connection error';
+  }
+  btn.disabled = false;
+}
+
+function doSetup(e) {
+  const username = document.getElementById('setup-username').value.trim();
+  const password = document.getElementById('setup-password').value;
+  const confirm = document.getElementById('setup-confirm').value;
+  const error = document.getElementById('setup-error');
+  if (!username) { e.preventDefault(); error.textContent = 'Username is required'; return; }
+  if (password.length < 8) { e.preventDefault(); error.textContent = 'Password must be at least 8 characters'; return; }
+  if (password !== confirm) { e.preventDefault(); error.textContent = 'Passwords do not match'; return; }
+  return submitAuth(e, 'setup', { username, password }, error, 'Setup failed');
+}
+
+function doLogin(e) {
+  const username = document.getElementById('login-username').value.trim();
+  const password = document.getElementById('login-password').value;
+  const error = document.getElementById('login-error');
+  if (!username || !password) {
+    e.preventDefault();
+    error.textContent = 'Username and password required';
+    return;
+  }
+  return submitAuth(e, 'login', { username, password }, error, 'Login failed');
+}
+
+async function doLogout() {
+  await apiPost('logout', {});
+  isAuthenticated = false;
+  stopStatusPoll();
+  stopLogPoll();
+  showPage('login');
+  // Clear form fields
+  const fields = ['login-username', 'login-password'];
+  fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+}
+
+// --- Theme ---
+function initTheme() {
+  const saved = localStorage.getItem('beatscheck-theme') || 'dark';
+  document.documentElement.setAttribute('data-theme', saved);
+  updateThemeIcon(saved);
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('beatscheck-theme', next);
+  updateThemeIcon(next);
+}
+
+function updateThemeIcon(theme) {
+  const btn = document.getElementById('theme-toggle');
+  // Header toggle is labeled with the *other* theme's name (per design).
+  btn.textContent = theme === 'dark' ? 'Light' : 'Dark';
+}
+
+// --- Navigation ---
+const SCREEN_TITLES = {
+  dashboard: 'Dashboard', corrupt: 'Corrupt files', config: 'Configuration',
+  logs: 'Logs', login: 'Login', setup: 'Setup wizard',
+};
+
+function navigate(page) {
+  if (currentPage === 'config' && page !== 'config' && hasUnsavedConfig()) {
+    if (!confirm('You have unsaved configuration changes. Leave anyway?')) return;
+  }
+
+  currentPage = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
+  const el = document.getElementById('page-' + page);
+  if (el) el.classList.add('active');
+  const nav = document.querySelector(`[data-page="${page}"]`);
+  if (nav) nav.classList.add('active');
+
+  const title = document.getElementById('screen-title');
+  if (title) title.textContent = SCREEN_TITLES[page] || 'BeatsCheck';
+
+  closeSidebar();
+
+  // Status drives the header pill + sidebar card on every screen, so the
+  // poll runs continuously while authenticated (not just on the dashboard).
+  startStatusPoll();
+
+  if (page === 'dashboard') loadRecentFlagged();
+  if (page === 'corrupt') loadCorrupt();
+  if (page === 'config') loadConfig();
+  if (page === 'logs') { refreshLogs(); startLogPoll(); }
+  else stopLogPoll();
+}
+
+function initRouter() {
+  window.addEventListener('hashchange', () => {
+    const page = location.hash.slice(1) || 'dashboard';
+    navigate(page);
+  });
+  const initial = location.hash.slice(1) || 'dashboard';
+  navigate(initial);
+}
+
+// --- Mobile sidebar ---
+function initSidebar() {
+  const toggle = document.getElementById('menu-toggle');
+  toggle.addEventListener('click', () => {
+    document.getElementById('sidebar').classList.toggle('open');
+    getOrCreateOverlay().classList.toggle('visible');
+  });
+
+  const sidebar = document.getElementById('sidebar');
+  sidebar.addEventListener('keydown', (e) => {
+    const links = Array.from(sidebar.querySelectorAll('.nav-link'));
+    const idx = links.indexOf(document.activeElement);
+    if (idx === -1) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      links[(idx + 1) % links.length].focus();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      links[(idx - 1 + links.length) % links.length].focus();
+    }
+  });
+}
+
+function closeSidebar() {
+  document.getElementById('sidebar').classList.remove('open');
+  const overlay = document.querySelector('.sidebar-overlay');
+  if (overlay) overlay.classList.remove('visible');
+}
+
+function getOrCreateOverlay() {
+  let overlay = document.querySelector('.sidebar-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay';
+    overlay.addEventListener('click', closeSidebar);
+    document.body.appendChild(overlay);
+  }
+  return overlay;
+}
+
+// --- Dashboard ---
+function formatUptime(secs) {
+  if (!secs && secs !== 0) return '--';
+  const d = Math.floor(secs / 86400);
+  const h = Math.floor((secs % 86400) / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  if (d > 0) return d + 'd ' + h + 'h';
+  if (h > 0) return h + 'h ' + m + 'm';
+  return m + 'm';
+}
+
+function formatSize(bytes) {
+  if (!bytes) return '0 B';
+  if (bytes >= 1024**4) return (bytes / 1024**4).toFixed(1) + ' TB';
+  if (bytes >= 1024**3) return (bytes / 1024**3).toFixed(1) + ' GB';
+  if (bytes >= 1024**2) return (bytes / 1024**2).toFixed(1) + ' MB';
+  if (bytes >= 1024)    return (bytes / 1024).toFixed(1) + ' KB';
+  return bytes + ' B';
+}
+
+let prevCardValues = {};
+let lastDashCorruptCount = null;
+let wasScanning = false;
+
+function formatNumber(n) {
+  if (n == null || isNaN(n)) return '--';
+  return Number(n).toLocaleString('en-US');
+}
+
+function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
+
+async function refreshDashboard() {
+  const data = await api('status');
+  if (!data) return;
+
+  const version = 'v' + (data.version || '?');
+  document.getElementById('version-badge').textContent = version;
+  const logoVer = document.getElementById('logo-version');
+  if (logoVer) logoVer.textContent = version + ' \u00b7 integrity';
+
+  const status = data.status || 'unknown';
+  const isScanning = status === 'scanning';
+  const statusWord = capitalize(status);
+  const summary = data.summary || {};
+  const prog = data.scan_progress;
+  const pct = (prog && prog.total > 0) ? Math.round((prog.current / prog.total) * 100) : 0;
+
+  // --- Header status pill ---
+  const dot = document.getElementById('status-indicator');
+  dot.className = 'status-dot ' + status;
+  setText('status-text', isScanning ? ('Scanning \u00b7 ' + pct + '%') : statusWord);
+
+  // --- Sidebar status card ---
+  const sideDot = document.getElementById('sidebar-status-dot');
+  if (sideDot) sideDot.className = 'status-dot ' + status;
+  setText('sidebar-status-word', statusWord);
+  const workers = data.workers != null ? data.workers : null;
+  const sideMeta = document.getElementById('sidebar-status-meta');
+  if (sideMeta) {
+    const line1 = (workers != null ? workers + ' workers' : 'idle') + ' \u00b7 nice(10)';
+    const line2 = (data.mode ? data.mode : 'setup') + ' mode';
+    sideMeta.innerHTML = escHtml(line1) + '<br>' + escHtml(line2);
+  }
+
+  // --- Stat cards ---
+  const dashStatusIcon = document.getElementById('dash-status-icon');
+  if (dashStatusIcon) dashStatusIcon.className = 'status-dot ' + status;
+  setCardValue('dash-status', statusWord);
+  setCardValue('dash-mode', capitalize(data.mode || '--'));
+  setCardValue('dash-workers', workers != null ? workers : '--');
+  setCardValue('dash-uptime', formatUptime(data.uptime));
+
+  // live corrupt count wins during a scan; otherwise the finished summary
+  const corruptNum = isScanning && data.corrupt_count != null
+    ? data.corrupt_count
+    : (summary.corrupted != null ? summary.corrupted : null);
+  setCardValue('dash-corrupt', corruptNum != null ? formatNumber(corruptNum) : '--');
+  setText('dash-corrupt-sub', summary.corrupt_size_human
+    ? ('flagged \u00b7 ' + summary.corrupt_size_human) : 'flagged');
+
+  setCardValue('dash-library', summary.library_files != null
+    ? formatNumber(summary.library_files)
+    : (summary.library_size_human || '--'));
+  setText('dash-library-sub', summary.library_size_human
+    ? ('files \u00b7 ' + summary.library_size_human) : '');
+
+  // --- Sidebar nav badge ---
+  updateNavCorruptBadge(corruptNum);
+
+  // --- Hero: scanning spectrogram vs idle card ---
+  const scanHero = document.getElementById('scan-hero');
+  const idleHero = document.getElementById('idle-hero');
+  if (isScanning && prog) {
+    if (idleHero) idleHero.style.display = 'none';
+    if (scanHero) scanHero.style.display = '';
+    renderScanHero(prog, pct, corruptNum || 0, workers);
+  } else if (status === 'idle') {
+    if (scanHero) scanHero.style.display = 'none';
+    if (idleHero) idleHero.style.display = '';
+    renderIdleHero(summary, corruptNum);
+    scanStartTime = null;
+  } else {
+    // starting / setup / unknown \u2014 no hero
+    if (scanHero) scanHero.style.display = 'none';
+    if (idleHero) idleHero.style.display = 'none';
+    scanStartTime = null;
+  }
+
+  // --- Action buttons ---
+  document.querySelectorAll('.action-bar .btn:not(#cancel-scan-btn)').forEach(b => {
+    b.disabled = isScanning;
+  });
+  const cancelBtn = document.getElementById('cancel-scan-btn');
+  if (cancelBtn) {
+    cancelBtn.style.display = isScanning ? '' : 'none';
+    cancelBtn.disabled = false;
+  }
+
+  // Refresh the recently-flagged list when corrupt count changes or a scan
+  // just finished.
+  if (currentPage === 'dashboard') {
+    if (corruptNum !== lastDashCorruptCount || (wasScanning && !isScanning)) {
+      loadRecentFlagged();
+    }
+  }
+  lastDashCorruptCount = corruptNum;
+  wasScanning = isScanning;
+}
+
+function updateNavCorruptBadge(count) {
+  const badge = document.getElementById('nav-corrupt-badge');
+  if (!badge) return;
+  const n = count || 0;
+  badge.textContent = n;
+  badge.classList.toggle('zero', n === 0);
+}
+
+function renderIdleHero(summary, corruptNum) {
+  const meta = document.getElementById('idle-hero-meta');
+  if (!meta) return;
+  const parts = [];
+  if (summary.finished) parts.push('Last scan ' + summary.finished);
+  if (summary.library_files != null) parts.push(formatNumber(summary.library_files) + ' files');
+  let html = parts.map(escHtml).join(' \u00b7 ');
+  if (corruptNum != null) {
+    html += (html ? ' \u00b7 ' : '') + '<b>' + formatNumber(corruptNum) + ' flagged</b>';
+  }
+  meta.innerHTML = html || 'No scan run yet';
+}
+
+function renderScanHero(prog, pct, corruptNum, workers) {
+  setText('scan-hero-pct', pct + '%');
+  const checked = formatNumber(prog.current) + ' / ' + formatNumber(prog.total);
+  setText('scan-hero-checked', checked);
+  setText('shero-checked', checked);
+  setText('scan-hero-file', prog.file || '');
+  setText('shero-corrupt', (corruptNum || 0) + ' corrupt found');
+  setText('shero-workers', (workers != null ? workers : '?') + ' workers active');
+
+  // ETA \u2014 same rate model as before (reset if a fresh scan rewinds the count)
+  if (!scanStartTime || scanStartCount > prog.current) {
+    scanStartTime = Date.now();
+    scanStartCount = prog.current;
+  }
+  const elapsed = (Date.now() - scanStartTime) / 1000;
+  const done = prog.current - scanStartCount;
+  let etaText;
+  if (prog.current >= prog.total) {
+    etaText = 'Finalizing\u2026';
+  } else if (done > 10 && elapsed > 0) {
+    const rate = done / elapsed;
+    const remaining = (prog.total - prog.current) / rate;
+    etaText = 'ETA ' + formatUptime(Math.round(remaining));
+  } else {
+    etaText = 'ETA calculating\u2026';
+  }
+  setText('shero-eta', etaText);
+
+  updateSpectrogram(pct / 100, corruptNum || 0);
+}
+
+// --- Spectrogram visualization ---
+const SPEC_N = 150;
+const SPEC_SPECTRUM = ['#6c5cff', '#4b86ff', '#34e0a0', '#9ad94a', '#f5c24a', '#ff7a4d'];
+const SPEC_CORRUPT_IDX = [11, 22, 38, 47, 61, 74, 89, 103, 118, 131];
+let specBars = [];
+
+function buildSpectrogram() {
+  const container = document.getElementById('spectrogram');
+  if (!container || specBars.length) return;
+  const playhead = document.getElementById('spectrogram-playhead');
+  let seed = 7;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return ((seed >> 8) / 0x7fffff) % 1; };
+  specBars = [];
+  for (let i = 0; i < SPEC_N; i++) {
+    let h = Math.max(8, Math.min(98, 18 + Math.abs(Math.sin(i * 0.19)) * 42 + rnd() * 36));
+    const color = SPEC_SPECTRUM[Math.min(5, Math.floor(h / 17))];
+    const el = document.createElement('div');
+    el.className = 'spec-bar';
+    el.style.height = h + '%';
+    el.style.background = color;
+    el.style.opacity = '0.15';
+    container.insertBefore(el, playhead);
+    specBars.push({ el, h, color, corruptSlot: SPEC_CORRUPT_IDX.indexOf(i) });
+  }
+}
+
+function updateSpectrogram(prog, corruptCount) {
+  buildSpectrogram();
+  const playhead = document.getElementById('spectrogram-playhead');
+  const wash = document.getElementById('spectrogram-wash');
+  const leftPct = Math.max(0, Math.min(100, prog * 100));
+  if (playhead) playhead.style.left = leftPct + '%';
+  if (wash) wash.style.width = leftPct + '%';
+  const spec = document.getElementById('spectrogram');
+  if (spec) spec.setAttribute('aria-valuenow', Math.round(leftPct));
+
+  const scannedCount = Math.floor(prog * SPEC_N);
+  specBars.forEach((b, i) => {
+    const scanned = i < scannedCount;
+    // mark a corrupt bar if its slot index is within the discovered count
+    const isCorrupt = b.corruptSlot >= 0 && b.corruptSlot < corruptCount && scanned;
+    if (isCorrupt) {
+      b.el.style.background = 'var(--dg, #ff4d6d)';
+      b.el.style.height = Math.min(100, b.h + 16) + '%';
+      b.el.style.opacity = '1';
+      b.el.style.boxShadow = '0 0 8px rgba(255,77,109,.85)';
+    } else {
+      b.el.style.background = b.color;
+      b.el.style.height = b.h + '%';
+      b.el.style.opacity = scanned ? '0.92' : '0.15';
+      b.el.style.boxShadow = 'none';
+    }
+  });
+}
+
+// --- Recently flagged (dashboard) ---
+async function loadRecentFlagged() {
+  const list = document.getElementById('recent-list');
+  if (!list) return;
+  const data = await api('corrupt');
+  if (!data) return;
+  const files = data.files || [];
+  if (files.length === 0) {
+    list.innerHTML = '<div class="recent-empty">No corrupt files \u2014 library is clean.</div>';
+    return;
+  }
+  // corrupt.txt is append-ordered (newest last) \u2014 show the most recent first.
+  const recent = files.slice(-6).reverse();
+  list.innerHTML = recent.map(f => {
+    const name = f.path.split('/').pop();
+    return `<div class="recent-row">
+      <div class="recent-dot"></div>
+      <div class="recent-main">
+        <div class="recent-name">${escHtml(name)}</div>
+        <div class="recent-error">${escHtml(f.reason || 'Corrupt')}</div>
+      </div>
+      <div class="recent-size">${f.missing ? 'N/A' : formatSize(f.size)}</div>
+    </div>`;
+  }).join('');
+}
+
+function setCardValue(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const strVal = String(val);
+  if (prevCardValues[id] !== undefined && prevCardValues[id] !== strVal) {
+    el.classList.add('changed');
+    setTimeout(() => el.classList.remove('changed'), 600);
+  }
+  prevCardValues[id] = strVal;
+  el.textContent = val;
+}
+
+function setText(id, val) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = val;
+}
+
+// --- Corrupt Files ---
+async function loadCorrupt() {
+  const thisLoad = ++corruptLoadId;
+  const data = await api('corrupt');
+  if (thisLoad !== corruptLoadId) return;  // stale response
+  if (!data) {
+    document.getElementById('corrupt-tbody').innerHTML =
+      '<tr><td colspan="4" class="empty-state">Failed to load data</td></tr>';
+    return;
+  }
+  corruptFiles = data.files || [];
+  document.getElementById('corrupt-count').textContent = corruptFiles.length;
+  updateNavCorruptBadge(corruptFiles.length);
+  const viewBtn = document.getElementById('view-toggle-btn');
+  if (viewBtn) viewBtn.textContent = corruptView === 'files' ? 'Group by album' : 'Flat view';
+  applyCorruptFilters();
+
+  // Check if scanning — disable deletes and show banner
+  const status = await api('status');
+  const scanning = status && status.status === 'scanning';
+  const banner = document.getElementById('corrupt-scan-banner');
+  if (banner) banner.style.display = scanning ? '' : 'none';
+  document.querySelectorAll('#page-corrupt .btn-danger, #page-corrupt .btn-primary').forEach(b => b.disabled = scanning);
+  document.querySelectorAll('#page-corrupt .file-check, #page-corrupt .album-check, #select-all').forEach(c => c.disabled = scanning);
+
+  // Show Lidarr info banner if any files have Lidarr IDs
+  const hasAnyLidarr = corruptFiles.some(f => f.has_lidarr_id);
+  const infoBanner = document.getElementById('corrupt-info-banner');
+  if (infoBanner) {
+    if (hasAnyLidarr) {
+      const cfgData = await api('config');
+      const cfgEntries = cfgData && cfgData.config ? cfgData.config : [];
+      const cfgVal = key => { const e = cfgEntries.find(c => c.key === key); return e ? e.value : ''; };
+      const blocklist = cfgVal('lidarr_blocklist') === 'true';
+      const searchUnmon = cfgVal('lidarr_search') === 'true';
+      const blTag = blocklist
+        ? '<span class="info-tag on">Enabled</span>'
+        : '<span class="info-tag off">Disabled</span>';
+      const collapsed = localStorage.getItem('beatscheck-info-collapsed') === '1';
+      const lines = [];
+      lines.push('<strong>Delete</strong> — removes corrupt files. Lidarr-tracked files are deleted via the Lidarr API'
+        + (blocklist ? ', the bad release is blocklisted,' : '')
+        + ' and BeatsCheck waits for each album to finish searching before moving to the next.');
+      lines.push('<strong>Delete Album</strong> — removes the entire album folder (same Lidarr flow for tracked files).');
+      lines.push('Monitored albums are automatically re-searched by Lidarr.'
+        + (searchUnmon ? ' Unmonitored albums will also be searched.' : ' Unmonitored albums will <em>not</em> be re-downloaded.'));
+      lines.push('Successful re-downloads are logged to <code>beats_check.log</code> on the next scan cycle.');
+      lines.push('Blocklist: ' + blTag
+        + (blocklist ? ' — bad releases will be blocklisted to prevent re-grabbing the same corrupt version.' : ' — Lidarr may re-grab the same release. Enable in Settings to prevent this.'));
+      infoBanner.innerHTML = '<div class="info-banner-header" onclick="toggleInfoBanner()">'
+        + '<strong>Lidarr Delete Info</strong>'
+        + '<button class="info-banner-toggle" aria-label="Toggle info">' + (collapsed ? '&#9654;' : '&#9660;') + '</button>'
+        + '</div>'
+        + '<div class="info-banner-body' + (collapsed ? ' collapsed' : '') + '">' + lines.join('<br>') + '</div>';
+      infoBanner.style.display = '';
+    } else {
+      infoBanner.style.display = 'none';
+    }
+  }
+}
+
+function toggleInfoBanner() {
+  const body = document.querySelector('.info-banner-body');
+  const toggle = document.querySelector('.info-banner-toggle');
+  if (!body || !toggle) return;
+  const collapsed = !body.classList.contains('collapsed');
+  body.classList.toggle('collapsed', collapsed);
+  toggle.innerHTML = collapsed ? '&#9654;' : '&#9660;';
+  localStorage.setItem('beatscheck-info-collapsed', collapsed ? '1' : '0');
+}
+
+function toggleCorruptView() {
+  corruptView = corruptView === 'files' ? 'albums' : 'files';
+  localStorage.setItem('beatscheck-corrupt-view', corruptView);
+  const btn = document.getElementById('view-toggle-btn');
+  if (btn) btn.textContent = corruptView === 'files' ? 'Group by album' : 'Flat view';
+  applyCorruptFilters();
+  updateAlbumHelperVisibility();
+}
+
+function applyCorruptFilters() {
+  const q = (document.getElementById('corrupt-search').value || '').toLowerCase();
+  let filtered = corruptFiles;
+  if (q) {
+    filtered = filtered.filter(f =>
+      f.path.toLowerCase().includes(q) || (f.reason || '').toLowerCase().includes(q)
+    );
+  }
+  if (corruptView === 'albums') {
+    renderCorruptAlbums(filtered);
+  } else {
+    if (sortColumn) {
+      filtered = [...filtered].sort((a, b) => {
+        let va, vb;
+        if (sortColumn === 'path') { va = a.path; vb = b.path; }
+        else if (sortColumn === 'reason') { va = a.reason || ''; vb = b.reason || ''; }
+        else if (sortColumn === 'size') { va = a.size || 0; vb = b.size || 0; }
+        else return 0;
+        if (typeof va === 'string') {
+          const cmp = va.localeCompare(vb);
+          return sortDirection === 'asc' ? cmp : -cmp;
+        }
+        return sortDirection === 'asc' ? va - vb : vb - va;
+      });
+    }
+    renderCorruptTable(filtered);
+    updateSortIndicators();
+  }
+}
+
+function renderCorruptAlbums(files) {
+  const tbody = document.getElementById('corrupt-tbody');
+  if (files.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No corrupt files — library is clean.</td></tr>';
+    return;
+  }
+  // Group by parent folder
+  const albums = {};
+  files.forEach(f => {
+    const dir = f.path.split('/').slice(0, -1).join('/');
+    if (!albums[dir]) albums[dir] = [];
+    albums[dir].push(f);
+  });
+  const sorted = Object.entries(albums).sort((a, b) => a[0].localeCompare(b[0]));
+  let html = '';
+  sorted.forEach(([dir, tracks]) => {
+    const albumName = dir.split('/').slice(-2).join(' / ');
+    const totalSize = tracks.reduce((s, f) => s + (f.size || 0), 0);
+    const allMissing = tracks.every(f => f.missing);
+    const albumTotal = tracks[0]?.album_total || tracks.length;
+    const allCorrupt = tracks.length >= albumTotal;
+    const safeDir = escHtml(dir);
+    const countLabel = allCorrupt
+      ? `All ${tracks.length} files corrupt`
+      : `${tracks.length} of ${albumTotal} files corrupt`;
+    html += `<tr class="album-header ${allCorrupt ? 'all-corrupt' : ''}" onclick="toggleAlbumExpand(this)">
+      <td class="col-check"><input type="checkbox" class="album-check" data-dir="${safeDir}" data-total="${albumTotal}" onchange="toggleAlbumSelect(this)" onclick="event.stopPropagation()" aria-label="Select album"></td>
+      <td><strong>${escHtml(albumName)}</strong><br><span class="album-count">${countLabel}</span></td>
+      <td class="col-size">${formatSize(totalSize)}</td>
+      <td class="col-actions album-actions">
+        <button class="btn btn-danger btn-sm" data-dir="${safeDir}" onclick="event.stopPropagation();deleteAlbum(this.dataset.dir)" ${allMissing ? 'disabled' : ''} title="Delete corrupt files only">Delete</button>
+        <button class="btn btn-danger btn-sm" data-dir="${safeDir}" data-total="${albumTotal}" onclick="event.stopPropagation();deleteAlbumWhole(this.dataset.dir, +this.dataset.total)" title="Delete the entire album folder">Delete Album</button>
+        <button class="btn btn-outline btn-sm" data-dir="${safeDir}" onclick="event.stopPropagation();ignoreAlbum(this.dataset.dir)" title="Hide until next scan">Ignore</button>
+      </td>
+    </tr>`;
+    tracks.forEach(f => {
+      const name = f.path.split('/').pop();
+      const safePath = escHtml(f.path);
+      const cls = f.missing ? 'file-missing' : '';
+      html += `<tr class="album-file ${cls}" data-album="${safeDir}" style="display:none">
+        <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
+        <td><span style="padding-left:1.5rem;color:var(--text-dim);font-size:.82rem">${escHtml(name)}</span>
+          <span style="font-size:.78rem;color:var(--text-muted);margin-left:.5rem">${escHtml(f.reason || '')}</span></td>
+        <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
+        <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
+      </tr>`;
+    });
+  });
+  tbody.innerHTML = html;
+  updateAlbumHelperVisibility();
+}
+
+function toggleAlbumExpand(row) {
+  const dir = row.querySelector('.album-check')?.dataset.dir;
+  if (!dir) return;
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"]`);
+  const visible = files[0]?.style.display !== 'none';
+  files.forEach(f => f.style.display = visible ? 'none' : '');
+  row.classList.toggle('expanded', !visible);
+}
+
+function toggleAlbumSelect(checkbox) {
+  const dir = checkbox.dataset.dir;
+  const checked = checkbox.checked;
+  document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`).forEach(c => c.checked = checked);
+  updateDeleteBtn();
+}
+
+function updateAlbumHelperVisibility() {
+  const helper = document.getElementById('album-select-helper');
+  const bulkBtn = document.getElementById('delete-albums-btn');
+  if (!helper || !bulkBtn) return;
+  const isAlbums = corruptView === 'albums';
+  helper.style.display = isAlbums ? '' : 'none';
+  bulkBtn.style.display = isAlbums ? '' : 'none';
+}
+
+function selectNAlbums() {
+  const input = document.getElementById('select-n-input');
+  let n = parseInt(input.value, 10);
+  if (isNaN(n) || n < 1) n = 1;
+  if (n > 50) n = 50;
+  input.value = n;
+  const boxes = document.querySelectorAll('tr.album-header:not([style*="display: none"]) .album-check');
+  let selected = 0;
+  boxes.forEach(b => {
+    if (selected < n) {
+      if (!b.checked) {
+        b.checked = true;
+        toggleAlbumSelect(b);
+      }
+      selected++;
+    }
+  });
+  if (selected < n) {
+    showToast(`Selected ${selected} album(s) (fewer than requested — only ${selected} visible)`, 'info');
+  } else {
+    showToast(`Selected ${selected} album(s)`, 'success');
+  }
+}
+
+async function deleteAlbumWhole(dir, totalFiles) {
+  const msg = `Delete the entire album folder?\n\n${dir}\n\nThis will delete ALL ${totalFiles || '?'} file(s) in the folder, not just the corrupt ones.`;
+  if (!confirm(msg)) return;
+  const res = await startDeleteJob([dir], 'whole');
+  if (res) openDeleteProgress(res.job_id, res.total, 'whole');
+}
+
+async function deleteSelectedAlbums() {
+  const boxes = document.querySelectorAll('.album-check:checked');
+  const dirs = Array.from(boxes).map(b => b.dataset.dir).filter(Boolean);
+  if (dirs.length === 0) return;
+  if (dirs.length > 50) {
+    showToast('Maximum 50 albums per bulk delete', 'error');
+    return;
+  }
+  const estMin = Math.ceil((dirs.length * 35) / 60);
+  const msg = `Delete ${dirs.length} whole album folder(s)?\n\n`
+    + `Albums are processed one at a time with a 30s delay between each to avoid flooding Lidarr and indexers.\n\n`
+    + `Estimated time: ~${estMin} minute(s).\n\nThis cannot be undone.`;
+  if (!confirm(msg)) return;
+  const res = await startDeleteJob(dirs, 'whole');
+  if (res) openDeleteProgress(res.job_id, res.total, 'whole');
+}
+
+async function startDeleteJob(dirs, mode) {
+  try {
+    const r = await fetch('/api/delete-albums', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folders: dirs, mode }),
+    });
+    if (r.status === 202) {
+      return await r.json();
+    }
+    const err = await r.json().catch(() => ({}));
+    showToast('Delete failed: ' + (err.error || ('HTTP ' + r.status)), 'error');
+    return null;
+  } catch (e) {
+    showToast('Delete request failed: ' + e.message, 'error');
+    return null;
+  }
+}
+
+let deleteProgressInterval = null;
+let currentDeleteJobId = null;
+
+function openDeleteProgress(jobId, total, mode) {
+  currentDeleteJobId = jobId;
+  const modal = document.getElementById('delete-progress-modal');
+  const title = document.getElementById('delete-progress-title');
+  if (title) title.textContent = mode === 'whole' ? 'Deleting Albums' : 'Deleting Files';
+  document.getElementById('delete-progress-text').textContent = `0 / ${total}`;
+  document.getElementById('delete-progress-phase').textContent = 'Starting...';
+  document.getElementById('delete-progress-current').textContent = '';
+  document.getElementById('delete-progress-errors').style.display = 'none';
+  document.getElementById('delete-progress-cancel').style.display = '';
+  document.getElementById('delete-progress-cancel').disabled = false;
+  document.getElementById('delete-progress-close').style.display = 'none';
+  document.getElementById('delete-progress-fill').style.width = '0%';
+  modal.style.display = 'flex';
+  if (deleteProgressInterval) clearInterval(deleteProgressInterval);
+  deleteProgressInterval = setInterval(() => pollDeleteJob(jobId), 2000);
+  pollDeleteJob(jobId);
+}
+
+async function pollDeleteJob(jobId) {
+  const r = await fetch('/api/delete-job-status?id=' + encodeURIComponent(jobId));
+  if (!r.ok) return;
+  const job = await r.json();
+  const total = job.total || 1;
+  const done = job.done || 0;
+  const pct = Math.min(100, Math.round((done / total) * 100));
+  document.getElementById('delete-progress-fill').style.width = pct + '%';
+  document.getElementById('delete-progress-text').textContent = `${done} / ${total}`;
+  let phaseLabel = job.phase;
+  if (job.phase === 'running') phaseLabel = 'Running';
+  else if (job.phase === 'waiting') phaseLabel = 'Waiting 30s before next album...';
+  else if (job.phase === 'deleting') phaseLabel = 'Deleting current album...';
+  else if (job.phase === 'done') phaseLabel = 'Complete';
+  else if (job.phase === 'cancelled') phaseLabel = 'Cancelled';
+  else if (job.phase === 'error') phaseLabel = 'Error';
+  document.getElementById('delete-progress-phase').textContent = phaseLabel;
+  document.getElementById('delete-progress-current').textContent = job.current ? job.current : '';
+  if (job.errors && job.errors.length) {
+    const errBox = document.getElementById('delete-progress-errors');
+    errBox.style.display = '';
+    errBox.innerHTML = job.errors.slice(0, 10)
+      .map(e => `${escHtml(e.folder || e.path || '')} — ${escHtml(e.error || '')}`)
+      .join('<br>');
+  }
+  if (job.finished) {
+    clearInterval(deleteProgressInterval);
+    deleteProgressInterval = null;
+    document.getElementById('delete-progress-cancel').style.display = 'none';
+    document.getElementById('delete-progress-close').style.display = '';
+    const verb = job.cancelled ? 'Cancelled' : 'Done';
+    showToast(`${verb} — ${job.deleted || 0} file(s) deleted`, job.cancelled ? 'info' : 'success');
+    loadCorrupt();
+    refreshDashboard();
+  }
+}
+
+async function cancelDeleteJob() {
+  if (!currentDeleteJobId) return;
+  const btn = document.getElementById('delete-progress-cancel');
+  btn.disabled = true;
+  btn.textContent = 'Cancelling...';
+  try {
+    await fetch('/api/delete-job-cancel?id=' + encodeURIComponent(currentDeleteJobId), { method: 'POST' });
+  } catch (e) {
+    showToast('Cancel request failed', 'error');
+  }
+}
+
+function closeDeleteProgress() {
+  const modal = document.getElementById('delete-progress-modal');
+  modal.style.display = 'none';
+  currentDeleteJobId = null;
+  if (deleteProgressInterval) {
+    clearInterval(deleteProgressInterval);
+    deleteProgressInterval = null;
+  }
+  const btn = document.getElementById('delete-progress-cancel');
+  if (btn) btn.textContent = 'Cancel';
+}
+
+async function deleteAlbum(dir) {
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
+  if (!paths.length || !confirm('Permanently delete ' + paths.length + ' corrupt file(s) from this album?')) return;
+  const btns = document.querySelectorAll(`tr.album-header .btn`);
+  btns.forEach(b => b.disabled = true);
+  const res = await startDeleteFilesJob(paths);
+  btns.forEach(b => b.disabled = false);
+  if (res) openDeleteProgress(res.job_id, res.total, 'files');
+}
+
+async function startDeleteFilesJob(paths) {
+  try {
+    const r = await fetch('/api/delete-files', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({files: paths})
+    });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      showToast('Delete failed: ' + (err.error || ('HTTP ' + r.status)), 'error');
+      return null;
+    }
+    return await r.json();
+  } catch (e) {
+    showToast('Delete request failed: ' + e.message, 'error');
+    return null;
+  }
+}
+
+async function clearCorruptList() {
+  const paths = corruptFiles.map(f => f.path).filter(Boolean);
+  if (!paths.length) {
+    showToast('No corrupt files to clear', 'info');
+    return;
+  }
+  if (!confirm('Clear all ' + paths.length + ' file(s) from the corrupt list?\n\nThey will reappear if found corrupt on the next scan.')) return;
+  const res = await apiPost('ignore', { files: paths });
+  if (res && res.ok) {
+    showToast('Corrupt list cleared', 'success');
+    loadCorrupt();
+  } else {
+    showToast('Clear failed', 'error');
+  }
+}
+
+async function ignoreAlbum(dir) {
+  // Remove all files in this album from corrupt.txt (hide until next scan)
+  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
+  if (!paths.length) return;
+  const res = await apiPost('ignore', { files: paths });
+  if (res && res.ok) {
+    showToast('Album ignored — will reappear if found corrupt on next scan', 'info');
+    loadCorrupt();
+  } else {
+    showToast('Ignore failed', 'error');
+  }
+}
+
+function sortTable(col) {
+  if (sortColumn === col) {
+    sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+  } else {
+    sortColumn = col;
+    sortDirection = 'asc';
+  }
+  localStorage.setItem('beatscheck-sort-col', sortColumn);
+  localStorage.setItem('beatscheck-sort-dir', sortDirection);
+  applyCorruptFilters();
+}
+
+function updateSortIndicators() {
+  document.querySelectorAll('thead th.sortable').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.sort === sortColumn) {
+      th.classList.add('sort-' + sortDirection);
+      th.setAttribute('aria-sort', sortDirection === 'asc' ? 'ascending' : 'descending');
+    } else {
+      th.setAttribute('aria-sort', 'none');
+    }
+  });
+}
+
+function renderCorruptTable(files) {
+  const tbody = document.getElementById('corrupt-tbody');
+  if (files.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No corrupt files — library is clean.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = files.map(f => {
+    const cls = f.missing ? 'file-missing' : '';
+    const name = f.path.split('/').pop();
+    const dir = f.path.split('/').slice(0, -1).join('/');
+    const safePath = escHtml(f.path);
+    const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--dg)">${escHtml(f.reason)}</span>` : '';
+    return `<tr class="${cls}">
+      <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
+      <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong>${reason}<br><span style="color:var(--txd);font-size:.75rem">${escHtml(dir)}</span></div></td>
+      <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
+      <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''} aria-label="Delete ${escHtml(name)}">Delete</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function escHtml(s) {
+  // Escapes for BOTH text and double-quoted attribute contexts. The
+  // textContent trick escaped &<> but not " or ', letting a file/folder
+  // name break out of data-*/title/aria-label attributes (XSS) or a
+  // single-quoted inline handler.
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// Search filter
+document.addEventListener('DOMContentLoaded', () => {
+  const search = document.getElementById('corrupt-search');
+  if (search) {
+    let debounceTimer;
+    search.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(applyCorruptFilters, 150);
+    });
+  }
+});
+
+function toggleSelectAll(el) {
+  document.querySelectorAll('.file-check').forEach(c => c.checked = el.checked);
+  document.querySelectorAll('.album-check').forEach(c => c.checked = el.checked);
+  updateDeleteBtn();
+}
+
+function updateDeleteBtn() {
+  const checked = document.querySelectorAll('.file-check:checked');
+  const any = checked.length > 0;
+  document.getElementById('delete-selected-btn').disabled = !any;
+  const albumsBtn = document.getElementById('delete-albums-btn');
+  if (albumsBtn) {
+    const checkedAlbums = document.querySelectorAll('.album-check:checked').length;
+    albumsBtn.disabled = checkedAlbums === 0 || checkedAlbums > 50;
+    albumsBtn.textContent = checkedAlbums > 0
+      ? `Delete ${checkedAlbums} Album${checkedAlbums === 1 ? '' : 's'} (Whole)`
+      : 'Delete Albums (Whole)';
+  }
+}
+
+async function deleteSingle(el) {
+  const path = el.dataset.path;
+  if (!path || !confirm('Delete ' + path + '?')) return;
+  el.disabled = true;
+  const res = await startDeleteFilesJob([path]);
+  el.disabled = false;
+  if (res) openDeleteProgress(res.job_id, res.total, 'files');
+}
+
+async function deleteSelected() {
+  const checks = document.querySelectorAll('.file-check:checked');
+  const paths = Array.from(checks).map(c => c.dataset.path).filter(Boolean);
+  if (paths.length === 0) return;
+  if (!confirm('Delete ' + paths.length + ' file(s)?')) return;
+  const btn = document.getElementById('delete-selected-btn');
+  btn.disabled = true;
+  const res = await startDeleteFilesJob(paths);
+  btn.disabled = false;
+  if (res) {
+    document.getElementById('select-all').checked = false;
+    openDeleteProgress(res.job_id, res.total, 'files');
+  }
+}
+
+
+// --- Folder Picker ---
+function createFolderPicker(inputId, currentVal) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'folder-picker';
+
+  // Display current value + browse button
+  const display = document.createElement('input');
+  display.type = 'text';
+  display.className = 'input folder-picker-value';
+  display.id = inputId;
+  display.name = inputId.replace('cfg-', '');
+  display.value = currentVal || '/data';
+  display.addEventListener('input', updateUnsavedIndicator);
+
+  const browseBtn = document.createElement('button');
+  browseBtn.type = 'button';
+  browseBtn.className = 'btn btn-outline btn-sm';
+  browseBtn.textContent = 'Browse';
+  browseBtn.onclick = () => toggleFolderBrowser(wrapper, display);
+
+  const row = document.createElement('div');
+  row.className = 'folder-picker-row';
+  row.appendChild(display);
+  row.appendChild(browseBtn);
+  wrapper.appendChild(row);
+
+  // Browser panel (hidden by default)
+  const browser = document.createElement('div');
+  browser.className = 'folder-browser';
+  browser.style.display = 'none';
+  wrapper.appendChild(browser);
+
+  return wrapper;
+}
+
+async function toggleFolderBrowser(wrapper, display) {
+  const browser = wrapper.querySelector('.folder-browser');
+  if (browser.style.display !== 'none') {
+    browser.style.display = 'none';
+    return;
+  }
+  browser.style.display = '';
+  await loadFolderLevel(browser, '/data', display);
+}
+
+async function loadFolderLevel(browser, dir, display) {
+  browser.innerHTML = '<div style="padding:.5rem;color:var(--text-muted)">Loading...</div>';
+  const data = await api('paths?dir=' + encodeURIComponent(dir));
+  if (!data) {
+    browser.innerHTML = '<div style="padding:.5rem;color:var(--danger)">Failed to load</div>';
+    return;
+  }
+
+  let html = '';
+  // Back button (if not at root)
+  if (dir !== '/data') {
+    const parent = dir.split('/').slice(0, -1).join('/') || '/data';
+    html += `<div class="folder-item folder-back" data-path="${escHtml(parent)}">.. (back)</div>`;
+  }
+  // Current dir — select button
+  html += `<div class="folder-item folder-current" data-path="${escHtml(dir)}">
+    <strong>${escHtml(dir)}</strong>
+    <button class="btn btn-primary btn-sm folder-select-btn" type="button">Select</button>
+  </div>`;
+  // Children
+  if (data.children && data.children.length > 0) {
+    data.children.forEach(c => {
+      const name = c.split('/').pop();
+      html += `<div class="folder-item folder-child" data-path="${escHtml(c)}">
+        <span class="folder-icon">&#128193;</span> ${escHtml(name)}
+      </div>`;
+    });
+  } else {
+    html += '<div style="padding:.3rem .5rem;color:var(--text-dim);font-size:.82rem">No subfolders</div>';
+  }
+  browser.innerHTML = html;
+
+  // Wire up clicks
+  browser.querySelectorAll('.folder-child').forEach(el => {
+    el.onclick = () => loadFolderLevel(browser, el.dataset.path, display);
+  });
+  browser.querySelectorAll('.folder-back').forEach(el => {
+    el.onclick = () => loadFolderLevel(browser, el.dataset.path, display);
+  });
+  browser.querySelectorAll('.folder-select-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      display.value = btn.closest('.folder-current').dataset.path;
+      browser.style.display = 'none';
+      updateUnsavedIndicator();
+    };
+  });
+}
+
+// --- Configuration ---
+function buildConfigSnapshot() {
+  const form = document.getElementById('config-form');
+  if (!form) return null;
+  const fd = new FormData(form);
+  const obj = {};
+  for (const [k, v] of fd.entries()) obj[k] = String(v);
+  return JSON.stringify(obj);
+}
+
+async function loadConfig() {
+  const data = await api('config');
+  if (!data) {
+    document.getElementById('config-fields').innerHTML =
+      '<div class="empty-state">Failed to load configuration</div>';
+    return;
+  }
+  const values = {};
+  (data.config || []).forEach(e => { values[e.key] = e.value; });
+  renderConfigForm(values);
+  configSnapshot = buildConfigSnapshot();
+  updateUnsavedIndicator();
+}
+
+function isBooleanField(item) {
+  return item.type === 'select' && Array.isArray(item.options)
+    && item.options.length === 2
+    && item.options.includes('true') && item.options.includes('false');
+}
+
+// Custom toggle switch backed by a hidden input so FormData (save +
+// unsaved-change detection) keeps working unchanged.
+function createConfigSwitch(key, on) {
+  const wrap = document.createElement('div');
+  const hidden = document.createElement('input');
+  hidden.type = 'hidden';
+  hidden.id = 'cfg-' + key;
+  hidden.name = key;
+  hidden.value = on ? 'true' : 'false';
+
+  const sw = document.createElement('button');
+  sw.type = 'button';
+  sw.className = 'switch' + (on ? ' on' : '');
+  sw.setAttribute('role', 'switch');
+  sw.setAttribute('aria-checked', on ? 'true' : 'false');
+  sw.innerHTML = '<span class="switch-knob"></span>';
+  sw.addEventListener('click', () => {
+    const next = hidden.value !== 'true';
+    hidden.value = next ? 'true' : 'false';
+    sw.classList.toggle('on', next);
+    sw.setAttribute('aria-checked', next ? 'true' : 'false');
+    updateUnsavedIndicator();
+  });
+
+  wrap.appendChild(hidden);
+  wrap.appendChild(sw);
+  return wrap;
+}
+
+function renderConfigForm(values) {
+  const container = document.getElementById('config-fields');
+  container.innerHTML = '';
+  let card = null;  // current section's field card
+
+  CONFIG_SCHEMA.forEach(item => {
+    if (item.section) {
+      const title = document.createElement('div');
+      title.className = 'config-section-title';
+      title.textContent = item.section;
+      container.appendChild(title);
+      if (item.help) {
+        const help = document.createElement('p');
+        help.className = 'config-section-help';
+        help.textContent = item.help;
+        container.appendChild(help);
+      }
+      card = document.createElement('div');
+      card.className = 'config-card';
+      container.appendChild(card);
+      return;
+    }
+    if (!card) { card = document.createElement('div'); card.className = 'config-card'; container.appendChild(card); }
+
+    const group = document.createElement('div');
+    group.className = 'config-group';
+
+    const keyCol = document.createElement('div');
+    keyCol.style.minWidth = '0';
+    const keyEl = document.createElement('div');
+    keyEl.className = 'config-key';
+    keyEl.textContent = item.label || item.key;
+    keyEl.title = item.key;
+    keyCol.appendChild(keyEl);
+    const keyName = document.createElement('span');
+    keyName.className = 'config-keyname';
+    keyName.textContent = item.key;
+    keyCol.appendChild(keyName);
+    if (item.desc) {
+      const desc = document.createElement('span');
+      desc.className = 'config-desc';
+      desc.textContent = item.desc;
+      keyCol.appendChild(desc);
+    }
+    group.appendChild(keyCol);
+
+    const control = document.createElement('div');
+    control.className = 'config-control';
+    const curVal = item.key in values ? values[item.key] : (item.default || '');
+
+    if (item.type === 'path') {
+      control.appendChild(createFolderPicker('cfg-' + item.key, curVal));
+    } else if (isBooleanField(item)) {
+      control.appendChild(createConfigSwitch(item.key, String(curVal) === 'true'));
+    } else if (item.type === 'select') {
+      const sel = document.createElement('select');
+      (item.options || []).forEach(opt => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        sel.appendChild(o);
+      });
+      sel.id = 'cfg-' + item.key;
+      sel.name = item.key;
+      sel.value = curVal;
+      sel.addEventListener('change', updateUnsavedIndicator);
+      control.appendChild(sel);
+    } else {
+      const input = document.createElement('input');
+      input.type = item.type || 'text';
+      if (item.type === 'number') { input.step = 'any'; input.min = '0'; }
+      input.id = 'cfg-' + item.key;
+      input.name = item.key;
+      input.value = curVal;
+      input.addEventListener('input', updateUnsavedIndicator);
+      input.addEventListener('change', updateUnsavedIndicator);
+      control.appendChild(input);
+    }
+    group.appendChild(control);
+    card.appendChild(group);
+  });
+}
+
+function hasUnsavedConfig() {
+  if (!configSnapshot) return false;
+  return buildConfigSnapshot() !== configSnapshot;
+}
+
+function updateUnsavedIndicator() {
+  const navLink = document.querySelector('[data-page="config"]');
+  if (!navLink) return;
+  let dot = navLink.querySelector('.unsaved-dot');
+  if (hasUnsavedConfig()) {
+    if (!dot) {
+      dot = document.createElement('span');
+      dot.className = 'unsaved-dot';
+      dot.title = 'Unsaved changes';
+      navLink.appendChild(dot);
+    }
+  } else {
+    if (dot) dot.remove();
+  }
+}
+
+async function saveConfig(e) {
+  e.preventDefault();
+  const form = document.getElementById('config-form');
+  const formData = new FormData(form);
+  const config = {};
+  for (const [key, val] of formData.entries()) {
+    config[key] = val;
+  }
+  const status = document.getElementById('config-status');
+  const submitBtn = form.querySelector('[type="submit"]');
+  submitBtn.disabled = true;
+  const res = await apiPost('config', { config });
+  submitBtn.disabled = false;
+  if (res && res.ok) {
+    status.textContent = 'Saved!';
+    status.className = 'form-status';
+    showToast('Configuration saved', 'success');
+    configSnapshot = buildConfigSnapshot();
+    updateUnsavedIndicator();
+  } else {
+    status.textContent = 'Save failed';
+    status.className = 'form-status error';
+    showToast('Save failed' + (res && res.error ? ': ' + res.error : ''), 'error');
+  }
+  setTimeout(() => { status.textContent = ''; }, 3000);
+}
+
+// --- Logs ---
+const LOG_PATTERNS = [
+  { regex: /\b(CORRUPT:)/g,  cls: 'log-corrupt' },
+  { regex: /\b(CRITICAL)\b/g,  cls: 'log-level-critical' },
+  { regex: /\b(ERROR)\b/g,     cls: 'log-level-error' },
+  { regex: /\b(WARNING)\b/g,   cls: 'log-level-warning' },
+  { regex: /\b(INFO)\b/g,      cls: 'log-level-info' },
+  { regex: /\b(DEBUG)\b/g,     cls: 'log-level-debug' },
+  { regex: /(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}(?:[.,]\d+)?)/g, cls: 'log-timestamp' },
+  { regex: /(https?:\/\/\S+)/g, cls: 'log-url' },
+  { regex: /(\/data\/[^\n]+?\.\w{2,5})(?=\s|$)/g, cls: 'log-path' },
+  { regex: /(\/config\/[\w./-]+)/g, cls: 'log-path' },
+  { regex: /\b(\d+(?:\.\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
+];
+
+// Message-only highlight patterns (level + timestamp are rendered as their
+// own columns in the terminal layout, so they're excluded here).
+const LOG_MSG_PATTERNS = [
+  { regex: /\b(CORRUPT)\b/g, cls: 'log-corrupt' },
+  { regex: /(https?:\/\/\S+)/g, cls: 'log-url' },
+  { regex: /(\/data\/[^\n]+?\.\w{2,5})(?=\s|$)/g, cls: 'log-path' },
+  { regex: /(\/config\/[\w./-]+)/g, cls: 'log-path' },
+  { regex: /\b(\d+(?:[.,]\d+)?)\s*(?:files?|MB|GB|KB|TB|bytes?|%|ms|seconds?|minutes?|hours?)\b/g, cls: 'log-number' },
+];
+
+function highlightLogMessage(msg) {
+  let html = escHtml(msg);
+  LOG_MSG_PATTERNS.forEach(p => {
+    html = html.replace(p.regex, '<span class="' + p.cls + '">$1</span>');
+  });
+  return html;
+}
+
+function highlightLogLine(line, isSearchMatch) {
+  let html = escHtml(line);
+  LOG_PATTERNS.forEach(p => {
+    html = html.replace(p.regex, '<span class="' + p.cls + '">$1</span>');
+  });
+  if (isSearchMatch) {
+    html = '<span class="log-highlight-line">' + html + '</span>';
+  }
+  return html;
+}
+
+// Backend log format: "YYYY-MM-DD HH:MM:SS | LEVEL     | message"
+const LOG_LINE_RE = /^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*(\w+)\s*\|\s*([\s\S]*)$/;
+const LOG_LEVELS = ['CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG'];
+
+function renderLogLine(line, isSearchMatch) {
+  const m = LOG_LINE_RE.exec(line);
+  if (m && LOG_LEVELS.includes(m[2])) {
+    const ts = m[1];
+    const lv = m[2];
+    const msgHtml = highlightLogMessage(m[3]);
+    const hl = isSearchMatch ? ' log-highlight-line' : '';
+    return '<div class="log-line">'
+      + '<span class="log-ts">' + escHtml(ts) + '</span>'
+      + '<span class="log-chip ' + lv + '">' + lv + '</span>'
+      + '<span class="log-msg ' + lv + hl + '">' + msgHtml + '</span>'
+      + '</div>';
+  }
+  // Non-standard line (banners, multi-line output) — full highlight fallback
+  return '<div class="log-line"><span class="log-line-plain'
+    + (isSearchMatch ? ' log-highlight-line' : '')
+    + '">' + highlightLogLine(line, false) + '</span></div>';
+}
+
+let logLastMtime = 0;
+
+async function refreshLogs() {
+  const lines = document.getElementById('log-lines').value || '500';
+  const query = 'log?lines=' + encodeURIComponent(lines) + '&since=' + logLastMtime;
+  const data = await api(query);
+  if (!data) {
+    document.getElementById('log-output').innerHTML = '<span class="log-level-error">(failed to load logs)</span>';
+    return;
+  }
+  if (data.unchanged) return;
+  logLastMtime = data.mtime || 0;
+  logRawLines = (data.log || '').split('\n');
+  renderLogOutput();
+}
+
+function renderLogOutput() {
+  const viewer = document.getElementById('log-output');
+  const levelFilter = document.getElementById('log-level-filter').value;
+  const searchTerm = document.getElementById('log-search').value.trim();
+
+  let lines = logRawLines;
+
+  if (levelFilter) {
+    lines = lines.filter(line => line.includes(levelFilter));
+  }
+
+  const hasSearch = searchTerm.length > 0;
+  const searchLower = searchTerm.toLowerCase();
+  if (hasSearch) {
+    lines = lines.filter(line => line.toLowerCase().includes(searchLower));
+  }
+
+  viewer.innerHTML = lines.map(line => renderLogLine(line, hasSearch)).join('');
+
+  if (document.getElementById('log-autoscroll').checked) {
+    viewer.scrollTop = viewer.scrollHeight;
+  }
+}
+
+function startLogPoll() {
+  stopLogPoll();
+  logTimer = setInterval(refreshLogs, 5000);
+}
+
+function stopLogPoll() {
+  if (logTimer) { clearInterval(logTimer); logTimer = null; }
+}
+
+function copyLogs() {
+  const text = logRawLines.join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => showToast('Logs copied to clipboard', 'success'),
+    () => showToast('Failed to copy logs', 'error')
+  );
+}
+
+function downloadLogs() {
+  const text = logRawLines.join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'beatscheck-' + new Date().toISOString().slice(0, 10) + '.log';
+  a.click();
+  URL.revokeObjectURL(url);
+  showToast('Log file downloaded', 'info');
+}
+
+// --- Rescan ---
+async function triggerRescan(mode) {
+  const fresh = document.getElementById('fresh-scan-check').checked;
+  // Warn early if output_dir looks unconfigured — the backend is
+  // authoritative and will fall back to report mode if invalid.
+  if (mode === 'move') {
+    const cfg = await api('config');
+    if (cfg) {
+      const outputDir = (cfg.config || []).find(e => e.key === 'output_dir');
+      if (!outputDir || !outputDir.value) {
+        showToast('Move mode requires an Output Directory. Configure it in Settings first.', 'warning');
+        return;
+      }
+    }
+  }
+  const btns = document.querySelectorAll('.action-bar .btn');
+  btns.forEach(b => b.disabled = true);
+  const res = await apiPost('rescan', { mode, fresh });
+  btns.forEach(b => b.disabled = false);
+  if (res && res.ok) {
+    showToast('Scan triggered (' + mode + (fresh ? ', fresh' : '') + ')', 'success');
+    setTimeout(refreshDashboard, 1000);
+  } else {
+    showToast('Scan failed', 'error');
+  }
+}
+
+async function cancelScan() {
+  const btn = document.getElementById('cancel-scan-btn');
+  btn.disabled = true;
+  const res = await apiPost('cancel', {});
+  btn.disabled = false;
+  if (res && res.ok) {
+    showToast('Scan cancel requested — finishing current files...', 'warning');
+  } else {
+    showToast('Cancel failed', 'error');
+  }
+}
+
+// --- Toast notifications ---
+const TOAST_DURATIONS = { success: 4000, error: 6000, warning: 5000, info: 4000 };
+
+function showToast(message, type) {
+  const container = document.getElementById('toast-container');
+  const duration = TOAST_DURATIONS[type] || 4000;
+
+  const t = document.createElement('div');
+  t.className = 'toast ' + (type || '');
+  t.setAttribute('aria-atomic', 'true');
+
+  const span = document.createElement('span');
+  span.textContent = message;
+  t.appendChild(span);
+
+  const close = document.createElement('button');
+  close.className = 'toast-close';
+  close.innerHTML = '&times;';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.onclick = () => { if (t.parentNode) t.remove(); };
+  t.appendChild(close);
+
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const prog = document.createElement('div');
+  prog.className = 'toast-progress';
+  prog.style.width = '100%';
+  t.appendChild(prog);
+
+  container.appendChild(t);
+
+  requestAnimationFrame(() => {
+    prog.style.transitionDuration = prefersReduced ? '0ms' : duration + 'ms';
+    prog.style.width = '0%';
+  });
+
+  const timer = setTimeout(() => { if (t.parentNode) t.remove(); }, duration);
+
+  t.addEventListener('mouseenter', () => {
+    clearTimeout(timer);
+    prog.style.transitionDuration = '0ms';
+  });
+  t.addEventListener('mouseleave', () => {
+    const remaining = (parseFloat(getComputedStyle(prog).width) / t.offsetWidth) * duration;
+    prog.style.transitionDuration = remaining + 'ms';
+    prog.style.width = '0%';
+    setTimeout(() => { if (t.parentNode) t.remove(); }, remaining);
+  });
+
+  while (container.children.length > 5) {
+    container.removeChild(container.firstChild);
+  }
+}
+
+// --- Polling ---
+function startStatusPoll() {
+  stopStatusPoll();
+  refreshDashboard();
+  pollTimer = setInterval(refreshDashboard, 5000);
+}
+
+function stopStatusPoll() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// --- Init ---
+document.addEventListener('DOMContentLoaded', () => {
+  initTheme();
+  initSidebar();
+
+  document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+  // Auth forms
+  const setupForm = document.getElementById('setup-form');
+  if (setupForm) setupForm.addEventListener('submit', doSetup);
+  const loginForm = document.getElementById('login-form');
+  if (loginForm) loginForm.addEventListener('submit', doLogin);
+  const logoutBtn = document.getElementById('logout-btn');
+  if (logoutBtn) logoutBtn.addEventListener('click', doLogout);
+
+  // Log controls
+  const logLines = document.getElementById('log-lines');
+  const logLevel = document.getElementById('log-level-filter');
+  const logSearch = document.getElementById('log-search');
+  if (logLines) logLines.addEventListener('change', () => {
+    logLastMtime = 0;
+    if (currentPage === 'logs') refreshLogs();
+  });
+  if (logLevel) logLevel.addEventListener('change', renderLogOutput);
+  if (logSearch) {
+    let debounce;
+    logSearch.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(renderLogOutput, 200);
+    });
+  }
+
+  // Start auth check
+  checkAuth();
+});

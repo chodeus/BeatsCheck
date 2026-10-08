@@ -1,0 +1,16 @@
+name: Stale issues & PRs
+
+on:
+  schedule:
+    - cron: '0 5 * * *'  # daily
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+  # actions/stale replaces its saved-progress cache via the caches API.
+  actions: write
+
+jobs:
+  stale:
+    uses: chodeus/chodeus-ops/.github/workflows/stale-issues.yml@3dd606d5193ceb36366beed1f1ec90bc3d2084ee # main
