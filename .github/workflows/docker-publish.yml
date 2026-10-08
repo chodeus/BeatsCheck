@@ -82,7 +82,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
-    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@3dd606d5193ceb36366beed1f1ec90bc3d2084ee # main
+    uses: chodeus/chodeus-ops/.github/workflows/docker-build.yml@6e15484f5348c9862408046b962fa7083ceeffeb # main
     with:
       push: ${{ github.event_name != 'pull_request' }}
       # Start the image on each platform and wait for its HEALTHCHECK before pushing.
@@ -99,7 +99,7 @@ jobs:
     # notify-discord.yml declares permissions: {} — it needs no scopes.
     permissions: {}
     if: failure() && github.event_name != 'pull_request'
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@3dd606d5193ceb36366beed1f1ec90bc3d2084ee # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@6e15484f5348c9862408046b962fa7083ceeffeb # main
     with:
       event_type: build
       status: failure
