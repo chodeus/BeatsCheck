@@ -9,7 +9,16 @@ if [ ! -w "$MUSIC_DIR" ]; then
     exit 1
 fi
 
-exec su-exec "${PUID:-99}:${PGID:-100}" env \
+# Mirrors entrypoint.sh: su-exec cannot switch identity under `--user uid:gid`.
+# RUN_AS is empty when we are already the target uid, so leave it unquoted.
+RUN_AS=""
+[ "$(id -u)" = "0" ] && RUN_AS="su-exec ${PUID:-99}:${PGID:-100}"
+
+umask "${UMASK:-002}"
+
+exec ${RUN_AS} env \
     MODE=delete \
+    HOME=/config \
     PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
     python3 /app/main.py
