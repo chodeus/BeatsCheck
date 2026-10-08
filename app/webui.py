@@ -1,8 +1,10 @@
 """BeatsCheck WebUI — optional web interface served via Python stdlib."""
 
+import functools
 import hashlib
 import hmac
 import http.cookies
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -82,6 +84,7 @@ _sessions_lock = threading.Lock()
 _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_LOCKOUT_SECONDS = 300
 _LOGIN_ATTEMPT_WINDOW = 900
+_LOGIN_MAX_TRACKED = 10000
 _login_attempts = {}
 _login_attempts_lock = threading.Lock()
 
@@ -190,28 +193,27 @@ def _cleanup_sessions():
             del _sessions[t]
 
 
-def _login_lockout_remaining(key):
-    """Return remaining lockout seconds (>0) for *key*, else 0.
-    Expired attempt windows are pruned as a side effect."""
+def _prune_login_attempts(now):
+    """Drop records whose window and lockout are both over. Caller holds the lock."""
+    stale = [k for k, r in _login_attempts.items()
+             if r["locked_until"] <= now
+             and now - r["first"] > _LOGIN_ATTEMPT_WINDOW]
+    for k in stale:
+        del _login_attempts[k]
+
+
+def _login_begin_attempt(key):
+    """Count a login attempt for *key* before the password is checked, so a
+    parallel burst can't all pass the lockout check. Returns the remaining
+    lockout seconds (>0) when the attempt must be refused, else 0."""
     now = time.time()
     with _login_attempts_lock:
         rec = _login_attempts.get(key)
-        if not rec:
-            return 0
-        if rec["locked_until"] > now:
+        if rec and rec["locked_until"] > now:
             return int(rec["locked_until"] - now) + 1
-        if now - rec["first"] > _LOGIN_ATTEMPT_WINDOW:
-            _login_attempts.pop(key, None)
-        return 0
-
-
-def _login_record_failure(key):
-    """Record a failed login for *key*; lock it once the attempt cap is
-    exceeded within the sliding window."""
-    now = time.time()
-    with _login_attempts_lock:
-        rec = _login_attempts.get(key)
         if not rec or now - rec["first"] > _LOGIN_ATTEMPT_WINDOW:
+            if len(_login_attempts) >= _LOGIN_MAX_TRACKED:
+                _prune_login_attempts(now)
             rec = {"count": 0, "first": now, "locked_until": 0}
             _login_attempts[key] = rec
         rec["count"] += 1
@@ -219,6 +221,54 @@ def _login_record_failure(key):
             rec["locked_until"] = now + _LOGIN_LOCKOUT_SECONDS
             rec["count"] = 0
             rec["first"] = now
+        return 0
+
+
+@functools.lru_cache(maxsize=8)
+def _trusted_proxy_networks(raw):
+    """Parse WEBUI_TRUSTED_PROXIES (comma-separated IPs/CIDRs). A bad entry is
+    skipped, which only trusts less."""
+    networks = []
+    for part in raw.split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(part, strict=False))
+        except ValueError:
+            logger.warning("Ignoring invalid WEBUI_TRUSTED_PROXIES entry: %s",
+                           part)
+    return tuple(networks)
+
+
+def _parse_ip(value):
+    """IP address from a socket peer or X-Forwarded-For hop, or None."""
+    try:
+        addr = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if addr.version == 6 and addr.ipv4_mapped:
+        return addr.ipv4_mapped
+    return addr
+
+
+def _resolve_client_ip(peer, forwarded_for, trusted_raw):
+    """The client IP to rate-limit. X-Forwarded-For counts only when the socket
+    peer is a trusted proxy, and then only the right-most hop that isn't one:
+    the left end is whatever the client sent, so it can be forged."""
+    networks = _trusted_proxy_networks(trusted_raw)
+    peer_ip = _parse_ip(peer)
+    if (not networks or peer_ip is None
+            or not any(peer_ip in n for n in networks)):
+        return peer
+    hops = [h for h in forwarded_for.split(',') if h.strip()]
+    for hop in reversed(hops):
+        ip = _parse_ip(hop)
+        if ip is None:
+            return peer
+        if not any(ip in n for n in networks):
+            return str(ip)
+    return peer
 
 
 def _login_record_success(key):
@@ -726,13 +776,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         return False
 
     def _client_ip(self):
-        """Best-effort client IP for rate-limiting. Trusts the first
-        X-Forwarded-For hop when present (the README's remote-access
-        deployment sits behind a reverse proxy), else the socket peer."""
-        xff = self.headers.get('X-Forwarded-For', '')
-        if xff:
-            return xff.split(',')[0].strip()
-        return self.client_address[0]
+        """Client IP for rate-limiting; see _resolve_client_ip."""
+        return _resolve_client_ip(
+            self.client_address[0],
+            self.headers.get('X-Forwarded-For', ''),
+            os.environ.get('WEBUI_TRUSTED_PROXIES', ''))
 
     def _session_cookie(self, token, max_age=_SESSION_MAX_AGE):
         """Build a Set-Cookie header value. The Secure attribute is added
@@ -890,7 +938,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
     def _handle_login(self, config_dir):
         """Handle POST /api/login — credential validation."""
         key = self._client_ip()
-        locked = _login_lockout_remaining(key)
+        locked = _login_begin_attempt(key)
         if locked:
             self._json_response(
                 {"error": f"too many failed attempts — try again in "
@@ -919,7 +967,6 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 {"ok": True},
                 cookies=[self._session_cookie(token)])
         else:
-            _login_record_failure(key)
             self._json_response(
                 {"error": "invalid credentials"}, 401)
 

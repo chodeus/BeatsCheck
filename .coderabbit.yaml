@@ -57,9 +57,11 @@ reviews:
         - Never place the session token (secrets.token_hex) in a URL, redirect,
           <img>/EventSource src, or log line — it is a 24h bearer credential.
           Keep it in the HttpOnly cookie path only.
-        - Failed-login throttle (_login_lockout_remaining / _login_record_failure)
-          must count and lock BEFORE password verification, and must not be
-          bypassable by a malformed body reaching an early return.
+        - Failed-login throttle (_login_begin_attempt) must count and lock
+          BEFORE password verification, and must not be bypassable by a
+          malformed body reaching an early return. Its key comes from
+          _client_ip, which may read X-Forwarded-For only when the socket peer
+          is in WEBUI_TRUSTED_PROXIES; a forged header must never mint a new key.
     - path: "app/main.py"
       instructions: |
         Scan engine, ID3 detector, and irreversible bulk-delete of user music.
