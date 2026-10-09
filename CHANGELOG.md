@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.4.1](https://github.com/chodeus/BeatsCheck/compare/v1.4.0...v1.4.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* check pending re-downloads under the scan lock ([c2a9958](https://github.com/chodeus/BeatsCheck/commit/c2a99585cf18f41d3d5377db29130bc74158228c))
+* **delete:** check the music dir delete mode will actually use ([2fa8c71](https://github.com/chodeus/BeatsCheck/commit/2fa8c71b707069d62fc69ecc728378f63450a855))
+* start nothing under the scan lock once shutdown begins ([1b45c05](https://github.com/chodeus/BeatsCheck/commit/1b45c053afb003602bf98adffb89fafea28f9dee))
+
 ## [1.4.0](https://github.com/chodeus/BeatsCheck/compare/v1.3.5...v1.4.0) (2026-10-09)
 
 
