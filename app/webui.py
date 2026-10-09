@@ -371,8 +371,9 @@ _API_KEY_MASK = "********"
 # The canonical config-key map lives in main.py; import it so the WebUI's
 # allowed-keys list and parser stay in sync without duplication.
 from main import (  # noqa: E402
-    _CONFIG_KEY_MAP, _load_corrupt_details, _parse_config_lines,
-    write_json_atomic, write_text_atomic,
+    _CONFIG_KEY_MAP, _acquire_scan_lock, _load_corrupt_details,
+    _parse_config_lines, _release_scan_lock, write_json_atomic,
+    write_text_atomic,
 )
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
 
@@ -673,12 +674,10 @@ def _prune_delete_jobs(max_age=3600):
 
 
 def _run_delete_job(job_id, folders, config_dir, music_dir, mode):
-    """Background worker that runs delete_album_folders under the scan
-    lock with progress + cancel wired to the in-memory job store."""
+    """Background worker that runs delete_album_folders with progress +
+    cancel wired to the in-memory job store. Run via _run_holding_scan_lock."""
     try:
-        from main import (
-            _acquire_scan_lock, delete_album_folders,
-        )
+        from main import delete_album_folders
     except ImportError:
         _update_delete_job(
             job_id, finished=True, phase="error",
@@ -693,16 +692,6 @@ def _run_delete_job(job_id, folders, config_dir, music_dir, mode):
     def cancel_cb():
         job = _get_delete_job(job_id)
         return bool(job and job.get("cancel_requested"))
-
-    lock_fd = None
-    try:
-        lock_fd = _acquire_scan_lock(config_dir)
-    except OSError:
-        _update_delete_job(
-            job_id, finished=True, phase="error",
-            errors=[{"folder": "",
-                     "error": "could not acquire scan lock"}])
-        return
 
     try:
         _update_delete_job(job_id, phase="running")
@@ -722,28 +711,15 @@ def _run_delete_job(job_id, folders, config_dir, music_dir, mode):
         _update_delete_job(
             job_id, finished=True, phase="error",
             errors=[{"folder": "", "error": str(e)}])
-    finally:
-        try:
-            import fcntl as _fcntl
-            if lock_fd is not None:
-                _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
-                lock_fd.close()
-                try:
-                    os.remove(os.path.join(config_dir, ".scanning"))
-                except OSError:
-                    pass
-        except ImportError:
-            pass
-        _prune_delete_jobs()
 
 
 def _run_delete_files_job(job_id, files, config_dir, music_dir):
-    """Background worker that runs delete_corrupt_files under the scan
-    lock with progress + cancel wired to the in-memory job store. Used
-    by /api/delete-files so multi-album file deletes don't block the
-    browser for the full 30s-per-album Lidarr search window."""
+    """Background worker that runs delete_corrupt_files with progress +
+    cancel wired to the in-memory job store. Used by /api/delete-files
+    so multi-album file deletes don't block the browser for the full
+    30s-per-album Lidarr search window. Run via _run_holding_scan_lock."""
     try:
-        from main import _acquire_scan_lock, delete_corrupt_files
+        from main import delete_corrupt_files
     except ImportError:
         _update_delete_job(
             job_id, finished=True, phase="error",
@@ -758,16 +734,6 @@ def _run_delete_files_job(job_id, files, config_dir, music_dir):
     def cancel_cb():
         job = _get_delete_job(job_id)
         return bool(job and job.get("cancel_requested"))
-
-    lock_fd = None
-    try:
-        lock_fd = _acquire_scan_lock(config_dir)
-    except OSError:
-        _update_delete_job(
-            job_id, finished=True, phase="error",
-            errors=[{"path": "",
-                     "error": "could not acquire scan lock"}])
-        return
 
     try:
         _update_delete_job(job_id, phase="running")
@@ -790,19 +756,18 @@ def _run_delete_files_job(job_id, files, config_dir, music_dir):
         _update_delete_job(
             job_id, finished=True, phase="error",
             errors=[{"path": "", "error": str(e)}])
-    finally:
+
+
+def _run_holding_scan_lock(lock, target, *args):
+    """Run *target* in a daemon thread that releases *lock*, a held scan lock,
+    when it ends."""
+    def run():
         try:
-            import fcntl as _fcntl
-            if lock_fd is not None:
-                _fcntl.flock(lock_fd.fileno(), _fcntl.LOCK_UN)
-                lock_fd.close()
-                try:
-                    os.remove(os.path.join(config_dir, ".scanning"))
-                except OSError:
-                    pass
-        except ImportError:
-            pass
-        _prune_delete_jobs()
+            target(*args)
+        finally:
+            _release_scan_lock(lock)
+            _prune_delete_jobs()
+    threading.Thread(target=run, daemon=True).start()
 
 
 def _trigger_rescan(config_dir, mode="report", fresh=False):
@@ -907,6 +872,21 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 {"error": f"too many failed attempts — try again in "
                  f"{locked}s"}, 429)
         return bool(locked)
+
+    def _take_scan_lock(self, config_dir):
+        """The scan lock, held; or None after sending 409 while a scan or
+        delete holds it, or 500 when it can't be opened."""
+        try:
+            lock = _acquire_scan_lock(config_dir)
+        except OSError:
+            self._json_response(
+                {"error": "could not open the scan lock"}, 500)
+            return None
+        if lock is None:
+            self._json_response(
+                {"error": "a scan or delete is running — try again when it "
+                 "finishes"}, 409)
+        return lock
 
     def _client_ip(self):
         """Client IP for rate-limiting; see _resolve_client_ip."""
@@ -1173,7 +1153,15 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response(
                 {"error": "files must be a non-empty list of paths"}, 400)
             return
-        _ignore_corrupt_files(config_dir, files)
+        # A scan appends to corrupt.txt through an open handle; replacing the
+        # file mid-scan would drop everything it finds afterwards.
+        lock = self._take_scan_lock(config_dir)
+        if lock is None:
+            return
+        try:
+            _ignore_corrupt_files(config_dir, files)
+        finally:
+            _release_scan_lock(lock)
         self._json_response({"ok": True})
 
     def _handle_rescan(self, config_dir):
@@ -1255,27 +1243,6 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 self._json_response(
                     {"error": "cancel not available"}, 500)
 
-        elif self.path == '/api/delete':
-            body = self._read_body()
-            if body is None:
-                return
-            files = _str_list(body, 'files')
-            if files is None:
-                self._json_response(
-                    {"error": "files must be a non-empty list of paths"},
-                    400)
-                return
-            try:
-                from main import delete_corrupt_files
-            except ImportError:
-                self._json_response(
-                    {"error": "delete not available"}, 500)
-                return
-            music_dir = os.environ.get("MUSIC_DIR", "/data")
-            result = delete_corrupt_files(
-                files, config_dir, music_dir=music_dir)
-            self._json_response(result)
-
         elif self._dispatch_bulk_delete(config_dir):
             return
 
@@ -1347,20 +1314,14 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 {"error": f"too many folders "
                  f"(max {_MAX_DELETE_ALBUMS})"}, 400)
             return
-        # Refuse to start if a scan is running
-        lock_path = os.path.join(config_dir, ".scanning")
-        if os.path.exists(lock_path):
-            self._json_response(
-                {"error": "scan in progress — cannot delete"}, 409)
+        lock = self._take_scan_lock(config_dir)
+        if lock is None:
             return
         music_dir = os.environ.get("MUSIC_DIR", "/data")
         job_id = _new_delete_job(len(folders), mode)
-        thread = threading.Thread(
-            target=_run_delete_job,
-            args=(job_id, folders, config_dir, music_dir, mode),
-            daemon=True,
-        )
-        thread.start()
+        _run_holding_scan_lock(
+            lock, _run_delete_job, job_id, folders, config_dir, music_dir,
+            mode)
         self._json_response(
             {"job_id": job_id, "total": len(folders)}, 202)
 
@@ -1380,21 +1341,15 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response(
                 {"error": "too many files (max 5000)"}, 400)
             return
-        lock_path = os.path.join(config_dir, ".scanning")
-        if os.path.exists(lock_path):
-            self._json_response(
-                {"error": "scan in progress — cannot delete"}, 409)
+        lock = self._take_scan_lock(config_dir)
+        if lock is None:
             return
         music_dir = os.environ.get("MUSIC_DIR", "/data")
         # Progress is measured per-album; Lidarr lookup happens inside
         # the worker. Report total as file count for the initial display.
         job_id = _new_delete_job(len(files), "files")
-        thread = threading.Thread(
-            target=_run_delete_files_job,
-            args=(job_id, files, config_dir, music_dir),
-            daemon=True,
-        )
-        thread.start()
+        _run_holding_scan_lock(
+            lock, _run_delete_files_job, job_id, files, config_dir, music_dir)
         self._json_response(
             {"job_id": job_id, "total": len(files)}, 202)
 

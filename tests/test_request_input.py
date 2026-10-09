@@ -55,8 +55,8 @@ def _post(session, path, body, raw=None):
     ("/api/ignore", {"files": "/data/a.flac"}),
     ("/api/ignore", {"files": [1, 2]}),
     ("/api/ignore", {"files": []}),
-    ("/api/delete", {"files": "/data/a.flac"}),
-    ("/api/delete", {"files": [None]}),
+    ("/api/delete-files", {"files": "/data/a.flac"}),
+    ("/api/delete-files", {"files": [None]}),
     ("/api/delete-files", {"files": [{"path": "/data/a.flac"}]}),
     ("/api/delete-albums", {"folders": [["/data/Album"]]}),
     ("/api/config", {"config": ["lidarr_url"]}),
@@ -65,8 +65,8 @@ def _post(session, path, body, raw=None):
     ("/api/config", {"config": {"lidarr_url": ["http://x"]}}),
     ("/api/config", {"config": {"lidarr_url": None}}),
     ("/api/rescan", {"mode": "report", "fresh": "false"}),
-], ids=["ignore-string", "ignore-ints", "ignore-empty", "delete-string",
-        "delete-null-item", "delete-files-object-item",
+], ids=["ignore-string", "ignore-ints", "ignore-empty", "delete-files-string",
+        "delete-files-null-item", "delete-files-object-item",
         "delete-albums-list-item", "config-list", "config-string",
         "config-empty", "config-list-value", "config-null-value",
         "rescan-fresh-string"])
@@ -76,8 +76,8 @@ def test_a_field_of_the_wrong_type_gets_400(session, path, body):
 
 
 @pytest.mark.parametrize("path, key", [
-    ("/api/ignore", "files"), ("/api/delete", "files"),
-    ("/api/delete-files", "files"), ("/api/delete-albums", "folders")])
+    ("/api/ignore", "files"), ("/api/delete-files", "files"),
+    ("/api/delete-albums", "folders")])
 @pytest.mark.parametrize("paths", [
     [""], ["   "], ["/data/a\x00b.flac"], ["/data/a.flac", ""],
 ], ids=["empty", "blank", "nul", "one-blank-of-two"])
@@ -87,8 +87,8 @@ def test_a_blank_or_nul_path_gets_400(session, path, key, paths):
 
 
 @pytest.mark.parametrize("path", [
-    "/api/login", "/api/ignore", "/api/delete", "/api/delete-files",
-    "/api/delete-albums", "/api/config", "/api/rescan"])
+    "/api/login", "/api/ignore", "/api/delete-files", "/api/delete-albums",
+    "/api/config", "/api/rescan"])
 @pytest.mark.parametrize("body", [None, [], ["files"], "text", 1],
                          ids=["null", "empty-list", "list", "string", "number"])
 def test_a_body_that_is_not_an_object_gets_400(session, path, body):

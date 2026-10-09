@@ -944,31 +944,68 @@ def _idle_wait(log_dir, timeout_seconds, lidarr_url=None, lidarr_api_key=None):
 
 
 # --- Scan lock ---
+# Never delete .scanning: a waiter holding the old inode and a newcomer locking
+# a new one would both think they hold the lock.
+
+_SCAN_LOCK_POLL_SECONDS = 2
+
 
 def _acquire_scan_lock(log_dir):
-    """Acquire an exclusive file lock for scanning. Returns the lock fd."""
-    lock_path = os.path.join(log_dir, ".scanning")
-    lf = open(lock_path, 'w')
+    """Lock .scanning exclusively without waiting. Returns the open file, or
+    None while someone else holds it."""
+    lf = open(os.path.join(log_dir, ".scanning"), 'a')
     try:
-        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lf.close()
+        return None
     except OSError:
         lf.close()
         raise
+    lf.truncate(0)
     lf.write(str(os.getpid()))
     lf.flush()
     return lf
 
 
-def _wait_for_scan_lock(log_dir):
-    """Block until the scan lock is available, then release immediately."""
-    lock_path = os.path.join(log_dir, ".scanning")
-    if not os.path.exists(lock_path):
-        return
+def _release_scan_lock(lf):
+    """Unlock and close a file from _acquire_scan_lock."""
     try:
-        with open(lock_path, 'r') as lf:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
-    except OSError:
-        pass
+        fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    finally:
+        lf.close()
+
+
+def _wait_for_scan_lock(log_dir, waiting_msg, heartbeat_path=None):
+    """Poll until the scan lock is free and return it, logging *waiting_msg*
+    once if it is held. None on shutdown. *heartbeat_path* is kept fresh."""
+    lf = _acquire_scan_lock(log_dir)
+    if lf is not None:
+        return lf
+    logger.info(waiting_msg)
+    while not shutdown_requested:
+        if heartbeat_path:
+            _write_heartbeat(heartbeat_path)
+        time.sleep(_SCAN_LOCK_POLL_SECONDS)
+        lf = _acquire_scan_lock(log_dir)
+        if lf is not None:
+            return lf
+    return None
+
+
+def _run_locked(log_dir, waiting_msg, fn, *args, heartbeat=False):
+    """fn(*args) holding the scan lock, waited for as _wait_for_scan_lock
+    does; None, without running fn, on shutdown. heartbeat=True keeps
+    .heartbeat fresh while waiting (main process only)."""
+    lock = _wait_for_scan_lock(
+        log_dir, waiting_msg,
+        os.path.join(log_dir, ".heartbeat") if heartbeat else None)
+    if lock is None:
+        return None
+    try:
+        return fn(*args)
+    finally:
+        _release_scan_lock(lock)
 
 
 # --- Scanning ---
@@ -1487,18 +1524,11 @@ def run_scan(input_folder, output_folder, log_file, log_dir, mode, workers,
     """Scan mode: decode-test all audio files with parallel workers."""
     corrupt_list_path = os.path.join(log_dir, "corrupt.txt")
 
-    lock_fd = _acquire_scan_lock(log_dir)
-    try:
-        return _run_scan_inner(input_folder, output_folder, log_file, log_dir,
-                               mode, workers, corrupt_list_path,
-                               min_age_minutes, lidarr_url, lidarr_api_key)
-    finally:
-        try:
-            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
-            lock_fd.close()
-            os.remove(os.path.join(log_dir, ".scanning"))
-        except OSError:
-            pass
+    return _run_locked(
+        log_dir, "A delete is running; the scan starts when it finishes.",
+        _run_scan_inner, input_folder, output_folder, log_file, log_dir,
+        mode, workers, corrupt_list_path, min_age_minutes, lidarr_url,
+        lidarr_api_key, heartbeat=True)
 
 
 # --- Delete mode ---
@@ -2003,15 +2033,17 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
 def run_delete_mode(corrupt_list_path, log_file, log_dir,
                     input_folder=None, lidarr_url=None,
                     lidarr_api_key=None, lidarr_blocklist=False):
-    """Interactive delete mode. Groups corrupt files by album folder and prompts."""
-    lock_path = os.path.join(log_dir, ".scanning")
-    if os.path.exists(lock_path):
-        logger.info("A scan is currently running. Waiting for it to finish...")
-        _wait_for_scan_lock(log_dir)
-        if shutdown_requested:
-            return
-        logger.info("Scan finished. Starting delete mode.")
+    """Interactive delete mode, holding the scan lock until it exits."""
+    _run_locked(
+        log_dir, "A scan or delete is running. Waiting for it to finish...",
+        _run_delete_mode_locked, corrupt_list_path, log_file, log_dir,
+        input_folder, lidarr_url, lidarr_api_key, lidarr_blocklist)
 
+
+def _run_delete_mode_locked(corrupt_list_path, log_file, log_dir,
+                            input_folder, lidarr_url, lidarr_api_key,
+                            lidarr_blocklist):
+    """Groups corrupt files by album folder and prompts."""
     if not os.path.exists(corrupt_list_path):
         logger.error("No corrupt file list found at %s", corrupt_list_path)
         logger.info("Run a scan first with MODE=report")
@@ -2243,6 +2275,18 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
     with open(corrupt_list_path, 'w', encoding='utf-8') as f:
         for path in tracking:
             f.write(path + "\n")
+
+
+def _auto_delete_after_scan(cfg):
+    """run_auto_delete under the scan lock; a failure is logged, not raised."""
+    try:
+        _run_locked(
+            cfg.log_dir, "A delete is running; auto-delete waits for it.",
+            run_auto_delete, cfg.log_dir, cfg.log_file, cfg.delete_after,
+            cfg.max_auto_delete, cfg.lidarr_url, cfg.lidarr_api_key,
+            cfg.lidarr_search, cfg.lidarr_blocklist, heartbeat=True)
+    except Exception:
+        logger.exception("Auto-delete failed unexpectedly")
 
 
 # --- Lidarr ---
@@ -3265,17 +3309,16 @@ def _reload_config(cfg):
         "LIDARR_BLOCKLIST", cfg.lidarr_blocklist)
 
 
-def _run_setup_idle(log_dir, lidarr_url=None, lidarr_api_key=None):
+def _run_setup_idle(cfg):
     """Setup mode — sit idle until rescan with a mode is triggered.
-    Bare 'rescan' (no mode) defaults to report.
-    Drains the Lidarr search queue during idle if configured."""
+    Bare 'rescan' (no mode) defaults to report; a fresh: trigger sets
+    cfg.fresh_rescan. Drains the Lidarr search queue during idle if configured."""
     logger.info("Setup mode — container is idle. "
                 "Start scanning with: rescan report")
-    trigger = _idle_wait(log_dir, None, lidarr_url, lidarr_api_key)
+    trigger = _idle_wait(cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
     if trigger is None:
         return None
-    stripped = trigger[len("fresh:"):] if trigger.startswith("fresh:") else trigger
-    return stripped if stripped in ("report", "move") else "report"
+    return cfg.mode if _apply_rescan_trigger(trigger, cfg) else "report"
 
 
 class _NullAppState:
@@ -3435,8 +3478,7 @@ def main():
 
     if cfg.mode == "setup":
         _webui_app_state.update(status="setup", mode="setup")
-        new_mode = _run_setup_idle(cfg.log_dir, cfg.lidarr_url,
-                                   cfg.lidarr_api_key)
+        new_mode = _run_setup_idle(cfg)
         if new_mode:
             cfg.mode = new_mode
             logger.info("Mode changed to: %s", cfg.mode)
@@ -3499,13 +3541,7 @@ def main():
         _webui_app_state.update(status="idle", scan_progress=None)
 
         if not scan_failed and cfg.delete_after > 0:
-            try:
-                run_auto_delete(
-                    cfg.log_dir, cfg.log_file, cfg.delete_after,
-                    cfg.max_auto_delete, cfg.lidarr_url, cfg.lidarr_api_key,
-                    cfg.lidarr_search, cfg.lidarr_blocklist)
-            except Exception:
-                logger.exception("Auto-delete failed unexpectedly")
+            _auto_delete_after_scan(cfg)
 
         if shutdown_requested:
             break
