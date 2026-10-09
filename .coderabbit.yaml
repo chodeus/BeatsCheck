@@ -115,6 +115,13 @@ reviews:
         - Confirm state cleanup (corrupt.txt / corrupt_details.json /
           corrupt_tracking.json rewrite) is atomic (tmp + os.rename) and cannot
           leave a deleted file still listed as corrupt or a surviving file dropped.
+        - SCAN LOCK: .scanning is never deleted (a waiter on the old inode and a
+          newcomer on a new one would both hold "the" lock). A scan, every
+          delete (WebUI job, interactive, auto-delete) and an ignore hold it:
+          main.py through _run_locked, the WebUI through _acquire_scan_lock
+          (non-blocking), freed with _release_scan_lock. WebUI handlers take
+          it before replying, answer 409 while it is held, and hand it to the
+          job thread to release.
     - path: "app/**/*.py"
       instructions: |
         - Python truthiness / 0-is-falsy: for durations, file sizes, counts,
@@ -155,6 +162,9 @@ reviews:
         - Preserve correct PUID/PGID drop (default 99:100) and UMASK; do not run
           the delete/scan Python as root.
         - No secrets echoed or baked into the script or its logs.
+        - rescan.sh accepts only report/move modes and writes .rescan as PUID
+          via mkstemp + os.replace, so a symlink there is replaced, never
+          written through; its content matches the WebUI trigger format.
     - path: "**/Dockerfile"
       instructions: |
         - Base image must stay pinned by digest (alpine@sha256:...) on every

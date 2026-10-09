@@ -11,28 +11,42 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --fresh) FRESH=true; shift ;;
         --mode)
-            if [ -n "$2" ]; then
-                MODE_OVERRIDE="$2"
-                shift 2
-            else
-                echo "Error: --mode requires a value (report or move)"
-                exit 1
-            fi
+            case "$2" in
+                report|move) MODE_OVERRIDE="$2"; shift 2 ;;
+                *) echo "Error: --mode requires report or move"; exit 1 ;;
+            esac
             ;;
         report|move) MODE_OVERRIDE="$1"; shift ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
-if [ "$FRESH" = true ]; then
-    rm -f "$CONFIG_DIR/processed.txt"
-    echo "Cleared resume cache. Full rescan will run."
+# Same format the WebUI writes: an optional "fresh:", then an optional mode.
+TRIGGER="$MODE_OVERRIDE"
+[ "$FRESH" = true ] && TRIGGER="fresh:$MODE_OVERRIDE"
+
+# Mirrors delete.sh: su-exec cannot switch identity under `--user uid:gid`.
+# RUN_AS is empty when we are already the target uid, so leave it unquoted.
+RUN_AS=""
+[ "$(id -u)" = "0" ] && RUN_AS="su-exec ${PUID:-99}:${PGID:-100}"
+
+# os.replace swaps the directory entry, so a symlink at .rescan is replaced,
+# never written through.
+if ! ${RUN_AS} python3 -c '
+import os, sys, tempfile
+config_dir, trigger = sys.argv[1], sys.argv[2]
+fd, tmp = tempfile.mkstemp(prefix=".rescan.", dir=config_dir)
+with os.fdopen(fd, "w") as f:
+    f.write(trigger)
+os.replace(tmp, os.path.join(config_dir, ".rescan"))
+' "$CONFIG_DIR" "$TRIGGER"; then
+    echo "Error: could not write $CONFIG_DIR/.rescan"
+    exit 1
 fi
 
+[ "$FRESH" = true ] && echo "The resume cache is cleared when the scan starts."
 if [ -n "$MODE_OVERRIDE" ]; then
-    echo "$MODE_OVERRIDE" > "$CONFIG_DIR/.rescan"
     echo "Rescan triggered (mode: $MODE_OVERRIDE). Check container logs."
 else
-    touch "$CONFIG_DIR/.rescan"
     echo "Rescan triggered. Check container logs for progress."
 fi

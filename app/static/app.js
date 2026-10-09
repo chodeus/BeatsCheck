@@ -1078,7 +1078,7 @@ async function clearCorruptList() {
     showToast('Corrupt list cleared', 'success');
     loadCorrupt();
   } else {
-    showToast('Clear failed', 'error');
+    showToast('Clear failed — a scan or delete may be running', 'error');
   }
 }
 
@@ -1092,7 +1092,7 @@ async function ignoreAlbum(dir) {
     showToast('Album ignored — will reappear if found corrupt on next scan', 'info');
     loadCorrupt();
   } else {
-    showToast('Ignore failed', 'error');
+    showToast('Ignore failed — a scan or delete may be running', 'error');
   }
 }
 

@@ -108,7 +108,7 @@ rescan
 rescan report
 rescan move
 
-# Full rescan (clear resume cache)
+# Full rescan (the resume cache is cleared when the scan starts)
 rescan --fresh report
 
 # From the host
@@ -388,7 +388,7 @@ The third argument is the log file path. All state files (`processed.txt`, `corr
 | `summary.json` | Machine-readable scan results for notification scripts |
 | `search_queue.json` | Pending Lidarr album search queue — drained during idle (5/hour) |
 | `webui_auth.json` | WebUI login credentials (username + PBKDF2-hashed password), or `{"login": "off"}` when the login is turned off |
-| `.scanning` | Lock file (exists only during active scans, uses `flock`) |
+| `.scanning` | Lock file: a scan, a delete or an ignore holds a `flock` on it while it runs; the file itself stays |
 | `.heartbeat` | Timestamp updated during scans and idle — used by Docker healthcheck |
 
 ### Log Rotation
