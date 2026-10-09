@@ -11,7 +11,7 @@ services:
       - /mnt/user/data:/data:ro
       ## Persistent config: logs, corrupt.txt, tracking data
       - /path/to/config:/config
-      ## Host timezone. A TZ variable below overrides it, so keep one or the other.
+      ## Host timezone. While this is mounted it wins; TZ below applies only without it.
       - /etc/localtime:/etc/localtime:ro
     environment:
       ## Container user/group IDs and timezone

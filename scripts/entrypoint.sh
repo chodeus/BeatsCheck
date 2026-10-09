@@ -9,7 +9,8 @@ TZ=${TZ:-UTC}
 # Timezone: if /etc/localtime is bind-mounted from host, use it as-is.
 # Otherwise set it from the TZ env var.
 if [ -f "/etc/localtime" ] && [ ! -L "/etc/localtime" ]; then
-    : # bind-mounted regular file from host
+    # libc reads TZ (the image defaults it to UTC) ahead of /etc/localtime.
+    unset TZ
 elif [ -n "$TZ" ] && [ -f "/usr/share/zoneinfo/$TZ" ]; then
     # Rootless cannot write /etc/localtime; TZ in the environment still applies.
     ln -sf "/usr/share/zoneinfo/$TZ" /etc/localtime 2>/dev/null || true

@@ -171,6 +171,8 @@ reviews:
           spaces.
         - Preserve correct PUID/PGID drop (default 99:100) and UMASK; do not run
           the delete/scan Python as root.
+        - entrypoint.sh unsets TZ when /etc/localtime is a mounted file: libc
+          reads TZ (the image sets UTC) first, so keeping it ignores the mount.
         - No secrets echoed or baked into the script or its logs.
         - rescan.sh accepts only report/move modes and writes .rescan as PUID
           via mkstemp + os.replace, so a symlink there is replaced, never
