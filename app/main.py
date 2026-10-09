@@ -372,11 +372,16 @@ def _record_pending_redownloads(config_dir, album_ids,
 
 
 def _poll_pending_redownloads(cfg):
-    """Check Lidarr history for pending album re-downloads.
-    Logs grabs to beats_check.log and removes resolved/stale entries.
-    Called at the top of each scan cycle."""
+    """Check Lidarr for pending re-downloads, under the scan lock deletes take too."""
     if not (cfg.lidarr_url and cfg.lidarr_api_key):
         return
+    _run_locked(
+        cfg.log_dir, "A delete is running; the re-download check waits for it.",
+        _poll_pending_redownloads_locked, cfg, heartbeat=True)
+
+
+def _poll_pending_redownloads_locked(cfg):
+    """Logs grabs to beats_check.log and removes resolved/stale entries."""
     path = _pending_redownloads_path(cfg.log_dir)
     pending = _load_json(path, default={})
     if not isinstance(pending, dict) or not pending:

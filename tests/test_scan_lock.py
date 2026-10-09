@@ -124,6 +124,23 @@ def test_auto_delete_holds_the_lock(tmp_path, monkeypatch):
     assert free
 
 
+def test_the_redownload_check_holds_the_lock(tmp_path, monkeypatch):
+    (tmp_path / "pending_redownloads.json").write_text(json.dumps(
+        {"7": {"deletedAtTs": time.time(), "albumName": "Artist — Album"}}))
+    seen = []
+    monkeypatch.setattr(main, "_lidarr_get_album_history",
+                        lambda *a: seen.append(_lock_is_free(tmp_path)) or [])
+    cfg = types.SimpleNamespace(
+        log_dir=str(tmp_path), log_file=str(tmp_path / "log"),
+        lidarr_url="http://lidarr.invalid", lidarr_api_key="not-a-key")
+
+    main._poll_pending_redownloads(cfg)
+
+    free = _lock_is_free(tmp_path)
+    assert seen == [False]
+    assert free
+
+
 @pytest.mark.parametrize("trigger, mode, fresh", [
     ("fresh:report", "report", True),
     ("fresh:", "report", True),
