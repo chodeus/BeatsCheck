@@ -37,10 +37,11 @@ def session(webui_server, tmp_path):
         webui._login_attempts.clear()
 
 
-def _post(session, path, body):
+def _post(session, path, body, raw=None):
     base, cookie = session
+    data = raw if raw is not None else json.dumps(body).encode()
     req = urllib.request.Request(
-        base + path, data=json.dumps(body).encode(),
+        base + path, data=data,
         headers={"Content-Type": "application/json", "Cookie": cookie},
         method="POST")
     try:
@@ -87,6 +88,18 @@ def test_a_body_that_is_not_an_object_gets_400(session, path, body):
 def test_a_config_value_with_a_line_break_is_refused(session, tmp_path):
     status = _post(session, "/api/config", {"config": {
         "lidarr_url": "http://lidarr\nlidarr_api_key = \"planted\""}})
+
+    assert status == 400
+    assert (tmp_path / "beatscheck.conf").read_text() == CONF
+
+
+@pytest.mark.parametrize("raw", [
+    b'{"config": {"workers": 1e999}}',
+    b'{"config": {"workers": NaN}}',
+    b'{"config": {"workers": -Infinity}}',
+], ids=["overflow", "nan", "minus-infinity"])
+def test_a_config_number_that_is_not_finite_is_refused(session, tmp_path, raw):
+    status = _post(session, "/api/config", None, raw=raw)
 
     assert status == 400
     assert (tmp_path / "beatscheck.conf").read_text() == CONF

@@ -7,6 +7,7 @@ import http.cookies
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -320,7 +321,7 @@ def _str_list(body, name):
 
 
 def _config_updates(body):
-    """body["config"] if it is a non-empty map of numbers, booleans or
+    """body["config"] if it is a non-empty map of finite numbers, booleans or
     single-line strings (a line break would add config lines), else None."""
     updates = body.get('config')
     if not isinstance(updates, dict) or not updates:
@@ -329,6 +330,8 @@ def _config_updates(body):
         if not isinstance(val, (str, int, float)):
             return None
         if isinstance(val, str) and not val.isprintable():
+            return None
+        if isinstance(val, float) and not math.isfinite(val):
             return None
     return updates
 
