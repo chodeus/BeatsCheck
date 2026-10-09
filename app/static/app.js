@@ -981,6 +981,7 @@ function openDeleteProgress(jobId, total, mode) {
 function endDeleteProgress() {
   clearInterval(deleteProgressInterval);
   deleteProgressInterval = null;
+  currentDeleteJobId = null;  // so an overlapping reply for this job is dropped
   document.getElementById('delete-progress-cancel').style.display = 'none';
   document.getElementById('delete-progress-close').style.display = '';
 }
@@ -995,7 +996,7 @@ async function pollDeleteJob(jobId) {
   } catch (e) {
     console.error('Delete job status:', e);
   }
-  // A poll still in flight from a closed job must not touch the current one.
+  // A reply for a job that was closed or already ended must not touch the modal.
   if (jobId !== currentDeleteJobId) return;
   if (!job) {
     if (status === 401) {
