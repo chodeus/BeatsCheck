@@ -331,7 +331,7 @@ docker exec -it BeatsCheck delete
 
 **Option 3: From the WebUI**
 
-On **Corrupt Files**, select files or albums and click **Delete**. Each path is checked against `corrupt.txt` and the music directory before anything is removed. Don't feed `corrupt.txt` to `rm` on the host: it lists paths as the container sees them (`/data/...`), not host paths.
+On **Corrupt Files**, select files or albums and click **Delete**. Each file is checked against `corrupt.txt` and the music directory. For an album, at least one flagged file must be in that album's folder before the whole folder is removed. Files Lidarr tracks are deleted through Lidarr; BeatsCheck removes the rest itself, so mount the music folder `rw` as in Option 2. Don't feed `corrupt.txt` to `rm` on the host: it lists paths as the container sees them (`/data/...`), not host paths.
 
 ### Unraid Notifications (Optional)
 

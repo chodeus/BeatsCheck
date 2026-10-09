@@ -25,7 +25,7 @@ services:
       ## All other settings (mode, workers, Lidarr, etc.) are configured in
       ## /config/beatscheck.conf — auto-created on first run.
     ## WebUI: uncomment, and set webui = true in /config/beatscheck.conf.
-    ## Never expose the port to the internet; use an HTTPS reverse proxy for remote access.
+    ## Never expose the port to the internet; for remote access, use an HTTPS reverse proxy with authentication.
     # ports:
     #   - "8484:8484"
     ## Optional: limit CPU usage to avoid impacting other services
@@ -43,5 +43,5 @@ services:
     # security_opt:
     #   - no-new-privileges:true
     ## Fully rootless: replace PUID/PGID with `user:` and pre-chown the config dir
-    ## (sudo chown -R 99:100 ./config); the entrypoint then skips chown and su-exec.
+    ## (sudo chown -R 99:100 /path/to/config); the entrypoint then skips chown and su-exec.
     # user: "99:100"
