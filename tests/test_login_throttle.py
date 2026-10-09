@@ -159,19 +159,22 @@ def _login(base, password, xff=None):
 def test_forged_forwarded_for_cannot_dodge_the_lockout(server, monkeypatch):
     monkeypatch.delenv("WEBUI_TRUSTED_PROXIES", raising=False)
     codes = [_login(server, "wrong", xff=f"198.51.100.{i}") for i in range(7)]
+    right = _login(server, "right-password")
 
     assert codes[:5] == [401] * 5
     assert codes[5:] == [429, 429]
-    assert _login(server, "right-password") == 429
+    assert right == 429
 
 
 def test_trusted_proxy_gives_each_client_its_own_lockout(server, monkeypatch):
     monkeypatch.setenv("WEBUI_TRUSTED_PROXIES", "127.0.0.1/32")
     for _ in range(5):
         _login(server, "wrong", xff="198.51.100.1")
+    locked = _login(server, "wrong", xff="198.51.100.1")
+    other = _login(server, "right-password", xff="198.51.100.2")
 
-    assert _login(server, "wrong", xff="198.51.100.1") == 429
-    assert _login(server, "right-password", xff="198.51.100.2") == 200
+    assert locked == 429
+    assert other == 200
 
 
 def test_parallel_wrong_logins_lock_after_max_attempts(server, monkeypatch):

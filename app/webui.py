@@ -267,8 +267,9 @@ def _parse_ip(value):
 
 def _resolve_client_ip(peer, forwarded_for, trusted_raw):
     """The client IP to rate-limit. X-Forwarded-For counts only when the socket
-    peer is a trusted proxy, and then only the right-most hop that isn't one:
-    the left end is whatever the client sent, so it can be forged."""
+    peer is a trusted proxy, and then only the right-most hop that isn't one,
+    within the last _MAX_FORWARDED_HOPS: the left end is whatever the client
+    sent, so it can be forged."""
     networks = _trusted_proxy_networks(trusted_raw)
     peer_ip = _parse_ip(peer)
     if (not networks or peer_ip is None
