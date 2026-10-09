@@ -12,7 +12,7 @@
 If you discover a security vulnerability, please report it responsibly:
 
 1. **GitHub Security Advisory** (preferred): [Create a private advisory](https://github.com/chodeus/BeatsCheck/security/advisories/new)
-2. **Email**: Open a GitHub issue marked `[SECURITY]` if it is not sensitive
+2. **Public issue**: for a problem that can't be exploited, open a GitHub issue marked `[SECURITY]`
 
 Please do **not** open a public issue for security vulnerabilities that could be exploited.
 

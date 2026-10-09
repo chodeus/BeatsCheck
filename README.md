@@ -141,7 +141,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | `output_dir` | `/corrupted` | Quarantine destination for move mode. Must match a mounted volume |
 | `mode` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
 | `workers` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
-| `run_interval` | `0` | Hours between scans. `0` = run once and exit. `168` = weekly. `24` = daily |
+| `run_interval` | `0` | Hours between scans. `0` = scan once, then stay idle until `rescan`. `168` = weekly. `24` = daily |
 | `delete_after` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
 | `max_auto_delete` | `50` | Safety threshold — abort auto-delete if more than this many files would be removed. `0` = no limit |
 | `min_file_age` | `30` | Skip files modified within this many minutes. Prevents flagging active downloads |
@@ -219,7 +219,7 @@ On the Configuration page, **Access → Turn off login** asks for your current p
 
 ### WebUI Security
 
-- **Authentication required** — all API endpoints require a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies), unless you chose **No login** or turned the login off. A damaged `webui_auth.json` keeps the WebUI locked, never open
+- **Authentication required** — every API endpoint except setup, login, logout and the login status needs a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies), unless you chose **No login** or turned the login off. A damaged `webui_auth.json` keeps the WebUI locked, never open
 - **Login lockout** — 5 attempts per client within 15 minutes, then a 5-minute lockout. Behind a reverse proxy, set `WEBUI_TRUSTED_PROXIES` so each client gets its own lockout
 - **Setup wizard** — on first access, create credentials (stored hashed in `/config/webui_auth.json`) or choose **No login**
 - **Cross-site POSTs refused** — the API accepts only JSON POSTs, which a browser sends from another site only after a CORS check the WebUI never passes. This holds with the login off too
@@ -228,7 +228,7 @@ On the Configuration page, **Access → Turn off login** asks for your current p
 - **Delete validation** — files must be in `corrupt.txt` and inside the music directory; symlinks rejected
 - **Path traversal protection** — static file serving validates all paths against the static directory
 - **API key masking** — Lidarr API key shown as `********` in the UI
-- **No external dependencies** — built on Python stdlib only (no supply chain risk)
+- **No third-party Python packages** — the WebUI uses only the standard library
 
 **Important:** The WebUI is designed for trusted LAN / Docker bridge networks. For remote access, use a reverse proxy with HTTPS and authentication (Nginx, Caddy, Traefik). Do not expose the WebUI port directly to the internet.
 
@@ -329,12 +329,9 @@ Change the music mount to `rw`, then from the Unraid **terminal**:
 docker exec -it BeatsCheck delete
 ```
 
-**Option 3: Manual delete from corrupt.txt**
+**Option 3: From the WebUI**
 
-```bash
-cat /mnt/user/appdata/beatscheck/corrupt.txt
-while IFS= read -r f; do rm -v "$f"; done < /mnt/user/appdata/beatscheck/corrupt.txt
-```
+On **Corrupt Files**, select files or albums and click **Delete**. Each path is checked against `corrupt.txt` and the music directory before anything is removed. Don't feed `corrupt.txt` to `rm` on the host: it lists paths as the container sees them (`/data/...`), not host paths.
 
 ### Unraid Notifications (Optional)
 
