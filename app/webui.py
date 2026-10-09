@@ -796,10 +796,14 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 {"error": "body too large or empty"}, 400)
             return None
         try:
-            return json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(length))
         except ValueError:
             self._json_response({"error": "invalid JSON"}, 400)
             return None
+        if not isinstance(body, dict):
+            self._json_response({"error": "body must be a JSON object"}, 400)
+            return None
+        return body
 
     def _get_session_token(self):
         """Extract session token from cookies."""

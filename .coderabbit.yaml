@@ -53,8 +53,9 @@ reviews:
           skip this.
         - Validate and bound every request input (query params, JSON body,
           Content-Length, headers) before use; malformed/oversized/absent input
-          must return 4xx, not raise or default-through. Body path lists go
-          through _str_list and /api/config through _config_updates;
+          must return 4xx, not raise or default-through. _read_body returns
+          only a JSON object; body path lists go through _str_list and
+          /api/config through _config_updates;
           WebUIHandler.timeout keeps a stalled client from holding a thread.
         - Never place the session token (secrets.token_hex) in a URL, redirect,
           <img>/EventSource src, or log line — it is a 24h bearer credential.

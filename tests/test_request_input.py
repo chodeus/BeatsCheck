@@ -74,6 +74,16 @@ def test_a_field_of_the_wrong_type_gets_400(session, path, body):
     assert status == 400
 
 
+@pytest.mark.parametrize("path", [
+    "/api/login", "/api/ignore", "/api/delete", "/api/delete-files",
+    "/api/delete-albums", "/api/config", "/api/rescan"])
+@pytest.mark.parametrize("body", [None, [], ["files"], "text", 1],
+                         ids=["null", "empty-list", "list", "string", "number"])
+def test_a_body_that_is_not_an_object_gets_400(session, path, body):
+    status = _post(session, path, body)
+    assert status == 400
+
+
 def test_a_config_value_with_a_line_break_is_refused(session, tmp_path):
     status = _post(session, "/api/config", {"config": {
         "lidarr_url": "http://lidarr\nlidarr_api_key = \"planted\""}})
