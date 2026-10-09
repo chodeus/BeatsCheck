@@ -26,6 +26,9 @@ services:
       - PGID=1000
       - TZ=America/New_York
       - UMASK=002
+      ## Behind a reverse proxy: its own fixed IP, so each client gets its own login
+      ## lockout. A shared subnet would trust every container on it.
+      # - WEBUI_TRUSTED_PROXIES=172.18.0.10
       ## All other settings (mode, workers, Lidarr, etc.) are configured in
       ## /config/beatscheck.conf — auto-created on first run.
     ## WebUI: uncomment to enable the web interface.

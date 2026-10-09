@@ -166,6 +166,7 @@ These Docker-level settings are configured as environment variables:
 | `PGID` | `100` | Group ID for file ownership |
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
+| `WEBUI_TRUSTED_PROXIES` | *(empty)* | Your reverse proxy's IP, e.g. `172.18.0.10` (give the proxy a fixed IP); several IPs or CIDRs are comma-separated. The login lockout honors `X-Forwarded-For` only from these addresses, to tell clients apart, so any host listed can pick its own lockout key: don't list a subnet that other containers share. The proxy must write the client's address into the header itself (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`); a proxy that passes the client's own header through lets clients dodge the lockout. Empty = every client behind the proxy shares one lockout. |
 
 Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/corrupted`, `/config` and are set via Docker volume mounts.
 
@@ -215,6 +216,7 @@ This removes the credential file. The next visit to the WebUI will show the setu
 ### WebUI Security
 
 - **Authentication required** — all API endpoints require a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies)
+- **Login lockout** — 5 attempts per client within 15 minutes, then a 5-minute lockout. Behind a reverse proxy, set `WEBUI_TRUSTED_PROXIES` so each client gets its own lockout
 - **Setup wizard** — credentials created on first access, stored hashed in `/config/webui_auth.json`
 - **Config allowlist** — only known configuration keys are accepted (arbitrary key injection blocked)
 - **Thread-safe config writes** — concurrent requests cannot corrupt the config file
