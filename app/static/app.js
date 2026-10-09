@@ -995,6 +995,8 @@ async function pollDeleteJob(jobId) {
   } catch (e) {
     console.error('Delete job status:', e);
   }
+  // A poll still in flight from a closed job must not touch the current one.
+  if (jobId !== currentDeleteJobId) return;
   if (!job) {
     if (status === 401) {
       closeDeleteProgress();
