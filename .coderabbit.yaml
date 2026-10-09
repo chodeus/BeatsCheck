@@ -1,7 +1,7 @@
 # .coderabbit.yaml — BeatsCheck (audio integrity / ID3 analysis; raw-Python HTTP server + Docker)
 language: "en-US"
 reviews:
-  # assertive, not chill: chill misses Major findings here. The "**" rule keeps style nits out.
+  # Keep assertive: chill misses Major findings in this repo. The "**" rule filters style nits.
   profile: "assertive"
   request_changes_workflow: false
   pre_merge_checks:
