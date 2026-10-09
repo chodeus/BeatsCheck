@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.4.0](https://github.com/chodeus/BeatsCheck/compare/v1.3.5...v1.4.0) (2026-10-09)
+
+
+### Features
+
+* **webui:** make the login optional ([3c2ee76](https://github.com/chodeus/BeatsCheck/commit/3c2ee76710eabb4ad904bdc5436df45c962fd7c3))
+
+
+### Bug Fixes
+
+* hold one scan lock across scans, deletes and ignores ([d2570c4](https://github.com/chodeus/BeatsCheck/commit/d2570c475ae3235d922526043d826517be36806b))
+* **webui:** drop a delete-job status reply for a job that is no longer open ([809e09e](https://github.com/chodeus/BeatsCheck/commit/809e09e533c21d7b2da456c33b2da1dd4238942d))
+* **webui:** drop an overlapping status reply once delete polling has ended ([7a433f8](https://github.com/chodeus/BeatsCheck/commit/7a433f80bc98786347499e18165a31b3269a7a65))
+* **webui:** escape selector values and end a lost delete job's polling ([8542ee3](https://github.com/chodeus/BeatsCheck/commit/8542ee30a2dddff16c387b9ea0ae0321d38bd242))
+
 ## [1.3.5](https://github.com/chodeus/BeatsCheck/compare/v1.3.4...v1.3.5) (2026-10-09)
 
 
