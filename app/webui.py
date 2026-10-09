@@ -312,10 +312,12 @@ _config_write_lock = threading.Lock()
 
 
 def _str_list(body, name):
-    """body[name] when it is a non-empty list of strings, else None."""
+    """body[name] when it is a non-empty list of non-blank strings with no
+    NUL byte, else None."""
     value = body.get(name)
     if (isinstance(value, list) and value
-            and all(isinstance(v, str) for v in value)):
+            and all(isinstance(v, str) and v.strip() and '\x00' not in v
+                    for v in value)):
         return value
     return None
 

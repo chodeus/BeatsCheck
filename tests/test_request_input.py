@@ -75,6 +75,17 @@ def test_a_field_of_the_wrong_type_gets_400(session, path, body):
     assert status == 400
 
 
+@pytest.mark.parametrize("path, key", [
+    ("/api/ignore", "files"), ("/api/delete", "files"),
+    ("/api/delete-files", "files"), ("/api/delete-albums", "folders")])
+@pytest.mark.parametrize("paths", [
+    [""], ["   "], ["/data/a\x00b.flac"], ["/data/a.flac", ""],
+], ids=["empty", "blank", "nul", "one-blank-of-two"])
+def test_a_blank_or_nul_path_gets_400(session, path, key, paths):
+    status = _post(session, path, {key: paths})
+    assert status == 400
+
+
 @pytest.mark.parametrize("path", [
     "/api/login", "/api/ignore", "/api/delete", "/api/delete-files",
     "/api/delete-albums", "/api/config", "/api/rescan"])
