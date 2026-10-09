@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.2](https://github.com/chodeus/BeatsCheck/compare/v1.4.1...v1.4.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* let a mounted /etc/localtime set the timezone, and correct docs and workflow secrets ([#299](https://github.com/chodeus/BeatsCheck/issues/299)) ([10897e2](https://github.com/chodeus/BeatsCheck/commit/10897e2cddabcdc5559e365e895c694da772d91c))
+
 ## [1.4.1](https://github.com/chodeus/BeatsCheck/compare/v1.4.0...v1.4.1) (2026-10-09)
 
 
