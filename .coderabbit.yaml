@@ -1,7 +1,7 @@
 # .coderabbit.yaml — BeatsCheck (audio integrity / ID3 analysis; raw-Python HTTP server + Docker)
 language: "en-US"
 reviews:
-  # assertive: chill passed a diff clean that assertive flagged with two Major findings (2026-09-03); the "**" rule keeps style nits out
+  # Keep assertive: chill misses Major findings in this repo. The "**" rule filters style nits.
   profile: "assertive"
   request_changes_workflow: false
   pre_merge_checks:
@@ -39,7 +39,7 @@ reviews:
           treat the sentinel as DENY, never as "no account / allow setup").
           _check_auth() and _validate_session() must return False on any missing/
           expired/malformed token or lookup failure — never fall through to the
-          authorated path. The ONLY session-free pass is _AUTH_OFF, which
+          authorized path. The ONLY session-free pass is _AUTH_OFF, which
           _load_auth() returns solely for the exact {"login": "off"} content;
           any other unexpected content must stay _AUTH_UNREADABLE. Turning the
           login off (/api/auth/disable) needs a session, the current password,
@@ -171,6 +171,8 @@ reviews:
           spaces.
         - Preserve correct PUID/PGID drop (default 99:100) and UMASK; do not run
           the delete/scan Python as root.
+        - entrypoint.sh unsets TZ when /etc/localtime is a mounted file: libc
+          reads TZ (the image sets UTC) first, so keeping it ignores the mount.
         - No secrets echoed or baked into the script or its logs.
         - rescan.sh accepts only report/move modes and writes .rescan as PUID
           via mkstemp + os.replace, so a symlink there is replaced, never
@@ -217,6 +219,8 @@ reviews:
         - Enumerate allowed states positively (== 'success' || == 'skipped'), never
           by negation — a third state slips through `!= 'failure'`.
         - Pin third-party actions by commit SHA, not a mutable tag.
+        - Pass a called workflow only the secrets it declares, by name; never
+          `secrets: inherit`. Checkouts set persist-credentials: false.
         - Never echo a token, and never interpolate untrusted input (PR title,
           branch name, issue body) straight into a `run:` block — pass it via env.
         - A paths filter added or renamed must stay in step with what the job

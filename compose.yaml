@@ -1,12 +1,5 @@
-### BeatsCheck compose.yaml Example
-### https://github.com/chodeus/BeatsCheck
-###
-### Usage:
-###   docker compose up -d          # Start in background
-###   docker compose logs -f        # Follow logs
-###   docker exec -it beatscheck delete           # Interactive delete
-###   docker exec beatscheck rescan               # Trigger rescan
-###
+### BeatsCheck compose.yaml example: https://github.com/chodeus/BeatsCheck
+### docker compose up -d, then `docker exec beatscheck rescan` or `docker exec -it beatscheck delete`.
 services:
   beatscheck:
     image: ghcr.io/chodeus/beatscheck:latest
@@ -18,7 +11,7 @@ services:
       - /mnt/user/data:/data:ro
       ## Persistent config: logs, corrupt.txt, tracking data
       - /path/to/config:/config
-      ## Auto-detect host timezone (no TZ env var needed if mounted)
+      ## Host timezone. While this is mounted it wins; TZ below applies only without it.
       - /etc/localtime:/etc/localtime:ro
     environment:
       ## Container user/group IDs and timezone
@@ -31,20 +24,14 @@ services:
       # - WEBUI_TRUSTED_PROXIES=172.18.0.10
       ## All other settings (mode, workers, Lidarr, etc.) are configured in
       ## /config/beatscheck.conf — auto-created on first run.
-    ## WebUI: uncomment to enable the web interface.
-    ## Also set webui = true in /config/beatscheck.conf
-    ## On first access you'll create login credentials via a setup wizard.
-    ## To reset credentials: docker exec beatscheck reset-webui-password
-    ## WARNING: Do not expose the WebUI port directly to the internet.
-    ## Use a reverse proxy with HTTPS (Nginx, Caddy, Traefik) for remote access.
+    ## WebUI: uncomment, and set webui = true in /config/beatscheck.conf.
+    ## Never expose the port to the internet; for remote access, use an HTTPS reverse proxy with authentication.
     # ports:
     #   - "8484:8484"
     ## Optional: limit CPU usage to avoid impacting other services
     # cpus: 2
-    ## Optional hardening: drop every capability, add back only the five
-    ## the entrypoint actually needs (PUID/PGID remap + chown + su-exec),
-    ## and block setuid escalation. Even during the brief root window at
-    ## startup, the container has no NET_RAW, SYS_ADMIN, or mount powers.
+    ## Optional hardening: only the five capabilities the entrypoint needs
+    ## (PUID/PGID remap, chown, su-exec), and no setuid escalation.
     # cap_drop:
     #   - ALL
     # cap_add:
@@ -55,7 +42,6 @@ services:
     #   - DAC_OVERRIDE
     # security_opt:
     #   - no-new-privileges:true
-    ## Fully rootless alternative: replace PUID/PGID env with `user:` and
-    ## pre-chown the host config dir (sudo chown -R 99:100 ./config).
-    ## The entrypoint detects non-root invocation and skips the chown/su-exec.
+    ## Fully rootless: replace PUID/PGID with `user:` and pre-chown the config dir
+    ## (sudo chown -R 99:100 /path/to/config); the entrypoint then skips chown and su-exec.
     # user: "99:100"

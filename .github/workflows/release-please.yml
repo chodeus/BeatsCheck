@@ -23,12 +23,8 @@ jobs:
     secrets:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
-  # docker-publish.yml's tags:['v*'] trigger never fires: release-please pushes
-  # its tag with GITHUB_TOKEN, and GitHub runs no workflow for events raised by
-  # that token — so no release has ever produced a version-tagged image. Build it
-  # here instead, where release_created and the version are already known. The
-  # push-triggered build cannot do it: it starts in the same second as this
-  # workflow, before the tag exists.
+  # The version-tagged image is built here: a tag pushed with GITHUB_TOKEN starts
+  # no workflow, so docker-publish.yml's tag trigger never fires for a release.
   version-tag-meta:
     needs: release
     if: needs.release.outputs.release_created == 'true'
@@ -39,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - id: m
         run: |
@@ -63,4 +60,5 @@ jobs:
         VCS_REF=${{ github.sha }}
         VERSION=${{ needs.release.outputs.tag_name }}
         BUILD_NUMBER=${{ needs.version-tag-meta.outputs.build_number }}
-    secrets: inherit
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
