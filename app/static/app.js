@@ -350,7 +350,7 @@ function navigate(page) {
   document.querySelectorAll('.nav-link').forEach(n => n.classList.remove('active'));
   const el = document.getElementById('page-' + page);
   if (el) el.classList.add('active');
-  const nav = document.querySelector(`[data-page="${page}"]`);
+  const nav = document.querySelector(`[data-page="${CSS.escape(page)}"]`);
   if (nav) nav.classList.add('active');
 
   const title = document.getElementById('screen-title');
@@ -858,10 +858,15 @@ function renderCorruptAlbums(files) {
   updateAlbumHelperVisibility();
 }
 
+// CSS.escape: a folder name can hold " or \, which break a raw selector.
+function albumRowsSelector(dir) {
+  return `tr.album-file[data-album="${CSS.escape(dir)}"]`;
+}
+
 function toggleAlbumExpand(row) {
   const dir = row.querySelector('.album-check')?.dataset.dir;
   if (!dir) return;
-  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"]`);
+  const files = document.querySelectorAll(albumRowsSelector(dir));
   const visible = files[0]?.style.display !== 'none';
   files.forEach(f => f.style.display = visible ? 'none' : '');
   row.classList.toggle('expanded', !visible);
@@ -870,7 +875,7 @@ function toggleAlbumExpand(row) {
 function toggleAlbumSelect(checkbox) {
   const dir = checkbox.dataset.dir;
   const checked = checkbox.checked;
-  document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`).forEach(c => c.checked = checked);
+  document.querySelectorAll(albumRowsSelector(dir) + ' .file-check').forEach(c => c.checked = checked);
   updateDeleteBtn();
 }
 
@@ -972,10 +977,40 @@ function openDeleteProgress(jobId, total, mode) {
   pollDeleteJob(jobId);
 }
 
+// Stops polling and offers Close; the job itself may still be running.
+function endDeleteProgress() {
+  clearInterval(deleteProgressInterval);
+  deleteProgressInterval = null;
+  currentDeleteJobId = null;  // so an overlapping reply for this job is dropped
+  document.getElementById('delete-progress-cancel').style.display = 'none';
+  document.getElementById('delete-progress-close').style.display = '';
+}
+
 async function pollDeleteJob(jobId) {
-  const r = await fetch('/api/delete-job-status?id=' + encodeURIComponent(jobId));
-  if (!r.ok) return;
-  const job = await r.json();
+  let status = 0;  // stays 0 when the server can't be reached
+  let job = null;
+  try {
+    const r = await fetch('/api/delete-job-status?id=' + encodeURIComponent(jobId));
+    status = r.status;
+    if (r.ok) job = await r.json();
+  } catch (e) {
+    console.error('Delete job status:', e);
+  }
+  // A reply for a job that was closed or already ended must not touch the modal.
+  if (jobId !== currentDeleteJobId) return;
+  if (!job) {
+    if (status === 401) {
+      closeDeleteProgress();
+      isAuthenticated = false;
+      showAuthPage();
+    } else if (status === 0 || status === 404) {
+      // 404: a restart emptied the in-memory job list. Other errors may pass.
+      endDeleteProgress();
+      document.getElementById('delete-progress-phase').textContent =
+        'Lost track of this job. Check the corrupt list for what was deleted.';
+    }
+    return;
+  }
   const total = job.total || 1;
   const done = job.done || 0;
   const pct = Math.min(100, Math.round((done / total) * 100));
@@ -998,10 +1033,7 @@ async function pollDeleteJob(jobId) {
       .join('<br>');
   }
   if (job.finished) {
-    clearInterval(deleteProgressInterval);
-    deleteProgressInterval = null;
-    document.getElementById('delete-progress-cancel').style.display = 'none';
-    document.getElementById('delete-progress-close').style.display = '';
+    endDeleteProgress();
     const verb = job.cancelled ? 'Cancelled' : 'Done';
     showToast(`${verb} — ${job.deleted || 0} file(s) deleted`, job.cancelled ? 'info' : 'success');
     loadCorrupt();
@@ -1037,7 +1069,7 @@ function closeDeleteProgress() {
 }
 
 async function deleteAlbum(dir) {
-  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const files = document.querySelectorAll(albumRowsSelector(dir) + ' .file-check');
   const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
   if (!paths.length || !confirm('Permanently delete ' + paths.length + ' corrupt file(s) from this album?')) return;
   const btns = document.querySelectorAll(`tr.album-header .btn`);
@@ -1084,7 +1116,7 @@ async function clearCorruptList() {
 
 async function ignoreAlbum(dir) {
   // Remove all files in this album from corrupt.txt (hide until next scan)
-  const files = document.querySelectorAll(`tr.album-file[data-album="${dir}"] .file-check`);
+  const files = document.querySelectorAll(albumRowsSelector(dir) + ' .file-check');
   const paths = Array.from(files).map(c => c.dataset.path).filter(Boolean);
   if (!paths.length) return;
   const res = await apiPost('ignore', { files: paths });

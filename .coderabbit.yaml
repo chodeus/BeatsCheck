@@ -146,6 +146,12 @@ reviews:
         - Never put the session/auth token in a URL, fetch query string, EventSource
           src, or <img> src — auth rides the HttpOnly cookie. Flag any polling/
           streaming endpoint that appends a credential to the URL.
+        - A selector built from data (folder names, the URL hash) wraps the value
+          in CSS.escape (album rows go through albumRowsSelector); a quote or
+          backslash otherwise makes querySelector throw.
+        - A poll that keeps a modal open (pollDeleteJob) must stop on 401, 404
+          and an unreachable server and show a way out of the modal, and must
+          drop a reply for a job that is no longer the current one.
     - path: "scripts/**"
       instructions: |
         Container helper wrappers (delete/rescan/reset-password/entrypoint) that
