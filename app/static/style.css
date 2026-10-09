@@ -1153,6 +1153,40 @@ th.sort-desc .sort-indicator::after { content: ' ▼'; font-size: 9px; }
   line-height: 1.6;
 }
 .auth-help code { background: none; padding: 0; color: var(--txd); }
+.auth-choice { display: grid; gap: 8px; margin-bottom: 16px; }
+.auth-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  background: var(--bg2);
+  cursor: pointer;
+}
+.auth-option:has(input:checked) { border-color: var(--ac); }
+.auth-option input { margin-top: 3px; accent-color: var(--ac); }
+.auth-option strong { display: block; font-size: 13px; color: var(--tx); }
+.auth-option small { display: block; font-size: 11.5px; color: var(--txm); margin-top: 2px; }
+.auth-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.auth-warn { color: var(--wn); font-size: 12.5px; line-height: 1.5; margin: 0 0 10px; }
+
+.login-off-pill {
+  padding: 6px 13px;
+  border-radius: 999px;
+  border: 1px solid var(--wn);
+  color: var(--wn);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+}
+.login-off-pill:hover { background: var(--bgh); }
+
+.access-card { margin-bottom: 18px; }
+.access-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+.access-status { margin: 0; font-size: 13px; color: var(--txm); }
+.access-form { margin-top: 14px; max-width: 360px; }
+.access-actions { display: flex; gap: 10px; }
 
 /* ============================================================
    Toasts

@@ -65,6 +65,7 @@
           <span id="status-text">Connecting…</span>
         </div>
         <button id="logout-btn" class="icon-btn" style="display:none" aria-label="Log out">Logout</button>
+        <a id="login-off-pill" class="login-off-pill" href="#config" style="display:none" title="Turn the login on under Configuration">Login off</a>
         <button id="theme-toggle" class="icon-btn" aria-label="Toggle dark/light theme">Light</button>
       </div>
     </header>
@@ -77,24 +78,37 @@
           <div class="auth-card">
             <div class="auth-head">
               <div class="auth-logo" aria-hidden="true"><div class="logo-bar"></div><div class="logo-dot"></div></div>
-              <div class="auth-title">Create your credentials</div>
-              <p class="subtitle">First-run setup. These are stored hashed in the container.</p>
+              <div class="auth-title">Set up access</div>
+              <p class="subtitle">First-run setup. A password is stored hashed in the container.</p>
             </div>
             <form id="setup-form" class="auth-form">
-              <div class="auth-field">
-                <label for="setup-username">Username</label>
-                <input type="text" id="setup-username" required autocomplete="username" class="input">
+              <div class="auth-choice" role="radiogroup" aria-label="Access">
+                <label class="auth-option">
+                  <input type="radio" name="setup-login" value="on" checked>
+                  <span><strong>Require a login</strong><small>Recommended</small></span>
+                </label>
+                <label class="auth-option">
+                  <input type="radio" name="setup-login" value="off">
+                  <span><strong>No login</strong><small>Open to anyone who can reach BeatsCheck</small></span>
+                </label>
               </div>
-              <div class="auth-field">
-                <label for="setup-password">Password</label>
-                <input type="password" id="setup-password" required minlength="8" autocomplete="new-password" class="input">
-              </div>
-              <div class="auth-field">
-                <label for="setup-confirm">Confirm password</label>
-                <input type="password" id="setup-confirm" required minlength="8" autocomplete="new-password" class="input">
-              </div>
+              <fieldset id="setup-fields" class="auth-fields">
+                <div class="auth-field">
+                  <label for="setup-username">Username</label>
+                  <input type="text" id="setup-username" required autocomplete="username" class="input">
+                </div>
+                <div class="auth-field">
+                  <label for="setup-password">Password</label>
+                  <input type="password" id="setup-password" required minlength="8" autocomplete="new-password" class="input">
+                </div>
+                <div class="auth-field">
+                  <label for="setup-confirm">Confirm password</label>
+                  <input type="password" id="setup-confirm" required minlength="8" autocomplete="new-password" class="input">
+                </div>
+              </fieldset>
+              <p id="setup-off-warning" class="auth-warn" style="display:none">Anyone who can reach this page can scan your library and delete files. You can turn the login on later under Configuration.</p>
               <div id="setup-error" class="auth-error"></div>
-              <button type="submit" class="btn btn-primary auth-submit">Create account</button>
+              <button type="submit" id="setup-submit" class="btn btn-primary auth-submit">Create account</button>
             </form>
             <p class="auth-help">Credentials are stored securely in the container. To reset, run:<br><code>docker exec beatscheck reset-webui-password</code></p>
           </div>
@@ -257,6 +271,42 @@
       <section id="page-config" class="page">
         <h2>Configuration</h2>
         <div class="page-config-wrap">
+          <div id="access-card" class="card access-card" style="display:none">
+            <div class="card-label">Access</div>
+            <div class="access-row">
+              <p id="access-status" class="access-status"></p>
+              <button type="button" id="access-toggle" class="btn btn-secondary btn-sm"></button>
+            </div>
+            <form id="access-off-form" class="access-form" style="display:none">
+              <div class="auth-field">
+                <label for="access-password">Current password</label>
+                <input type="password" id="access-password" required autocomplete="current-password" class="input">
+              </div>
+              <div class="access-actions">
+                <button type="submit" class="btn btn-danger btn-sm">Turn off login</button>
+                <button type="button" class="btn btn-outline btn-sm access-cancel">Cancel</button>
+              </div>
+            </form>
+            <form id="access-on-form" class="access-form" style="display:none">
+              <div class="auth-field">
+                <label for="access-username">Username</label>
+                <input type="text" id="access-username" required autocomplete="username" class="input">
+              </div>
+              <div class="auth-field">
+                <label for="access-new-password">Password</label>
+                <input type="password" id="access-new-password" required minlength="8" autocomplete="new-password" class="input">
+              </div>
+              <div class="auth-field">
+                <label for="access-confirm">Confirm password</label>
+                <input type="password" id="access-confirm" required minlength="8" autocomplete="new-password" class="input">
+              </div>
+              <div class="access-actions">
+                <button type="submit" class="btn btn-primary btn-sm">Turn on login</button>
+                <button type="button" class="btn btn-outline btn-sm access-cancel">Cancel</button>
+              </div>
+            </form>
+            <div id="access-error" class="auth-error"></div>
+          </div>
           <p class="subtitle">Changes save to <code>beatscheck.conf</code> and apply on the next scan.</p>
           <form id="config-form" onsubmit="saveConfig(event)">
             <div class="form-actions form-actions-top">

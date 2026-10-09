@@ -39,7 +39,17 @@ reviews:
           treat the sentinel as DENY, never as "no account / allow setup").
           _check_auth() and _validate_session() must return False on any missing/
           expired/malformed token or lookup failure — never fall through to the
-          authorated path. Flag any `if config and not allowed(): deny` shape
+          authorated path. The ONLY session-free pass is _AUTH_OFF, which
+          _load_auth() returns solely for the exact {"login": "off"} content;
+          any other unexpected content must stay _AUTH_UNREADABLE. Turning the
+          login off (/api/auth/disable) needs a session, the current password,
+          and _login_begin_attempt before verification, and must end every
+          session. A session is accepted only while the password_hash it was
+          issued under still matches webui_auth.json, so it is refused after a
+          reset, new credentials or while the file is unreadable. Setup and
+          disable hold _auth_lock across load, check and write. Every POST must
+          be Content-Type application/json (415 otherwise): it is the only
+          cross-site guard while login is off. Flag any `if config and not allowed(): deny` shape
           (that skips the check when config is falsy) and any except-clause that
           calls the handler / serves content on error instead of sending 401/503.
         - PATH TRAVERSAL: any filesystem path derived from self.path (static
@@ -54,7 +64,8 @@ reviews:
         - Validate and bound every request input (query params, JSON body,
           Content-Length, headers) before use; malformed/oversized/absent input
           must return 4xx, not raise or default-through. _read_body returns
-          only a JSON object; body path lists go through _str_list and
+          only a JSON object whose text encodes as UTF-8 (no lone surrogate);
+          body path lists go through _str_list and
           /api/config through _config_updates;
           WebUIHandler.timeout keeps a stalled client from holding a thread.
         - Never place the session token (secrets.token_hex) in a URL, redirect,

@@ -15,6 +15,8 @@ let scanStartTime = null;
 let scanStartCount = 0;
 let logRawLines = [];  // unfiltered log lines for client-side filtering
 let isAuthenticated = false;
+let loginRequired = true;  // false = the user turned the login off
+let accessChanges = 0;  // bumped by each login change made in this tab
 let corruptView = localStorage.getItem('beatscheck-corrupt-view') || 'files'; // 'files' or 'albums'
 let corruptLoadId = 0;  // monotonic ID to discard stale loadCorrupt() responses
 
@@ -100,8 +102,11 @@ async function checkAuth() {
   try {
     const res = await fetch('/api/auth-status');
     const data = await res.json();
+    loginRequired = data.login_required !== false;
     if (data.setup_required) {
       showPage('setup');
+      // A restored form fires no change event.
+      updateSetupChoice();
       return;
     }
     if (!data.authenticated) {
@@ -123,26 +128,37 @@ function showPage(page) {
   if (title) title.textContent = SCREEN_TITLES[page] || 'BeatsCheck';
   // Hide/show app chrome for auth pages
   const sidebar = document.getElementById('sidebar');
-  const logoutBtn = document.getElementById('logout-btn');
   if (page === 'login' || page === 'setup') {
     stopStatusPoll();
     sidebar.style.display = 'none';
-    if (logoutBtn) logoutBtn.style.display = 'none';
+    showSessionControls(false);
     document.body.classList.add('auth-view');
   } else {
     sidebar.style.display = '';
-    if (logoutBtn) logoutBtn.style.display = '';
+    showSessionControls(true);
     document.body.classList.remove('auth-view');
   }
+}
+
+// Logout while a login is required; the "Login off" pill while it is not.
+function showSessionControls(inApp) {
+  const logoutBtn = document.getElementById('logout-btn');
+  const pill = document.getElementById('login-off-pill');
+  if (logoutBtn) logoutBtn.style.display = inApp && loginRequired ? '' : 'none';
+  if (pill) pill.style.display = inApp && !loginRequired ? '' : 'none';
 }
 
 function showApp() {
   document.body.classList.remove('auth-view');
   const sidebar = document.getElementById('sidebar');
   sidebar.style.display = '';
-  const logoutBtn = document.getElementById('logout-btn');
-  if (logoutBtn) logoutBtn.style.display = '';
+  showSessionControls(true);
   initRouter();
+}
+
+function enterApp() {
+  isAuthenticated = true;
+  showApp();
 }
 
 function showAuthPage() {
@@ -151,7 +167,7 @@ function showAuthPage() {
   checkAuth();
 }
 
-async function submitAuth(e, endpoint, body, errorEl, failLabel) {
+async function submitAuth(e, endpoint, body, errorEl, failLabel, onDone = enterApp) {
   e.preventDefault();
   errorEl.textContent = '';
   const btn = e.target.querySelector('[type="submit"]');
@@ -164,8 +180,11 @@ async function submitAuth(e, endpoint, body, errorEl, failLabel) {
     });
     const data = await res.json();
     if (res.ok && data.ok) {
-      isAuthenticated = true;
-      showApp();
+      onDone();
+    } else if (res.status === 409) {
+      // Another tab or browser changed the login; show where things stand now.
+      showToast(data.error || failLabel, 'error');
+      checkAuth();
     } else {
       errorEl.textContent = data.error || failLabel;
     }
@@ -175,14 +194,43 @@ async function submitAuth(e, endpoint, body, errorEl, failLabel) {
   btn.disabled = false;
 }
 
+function newLoginError(username, password, confirm) {
+  if (!username) return 'Username is required';
+  if (password.length < 8) return 'Password must be at least 8 characters';
+  if (password !== confirm) return 'Passwords do not match';
+  return null;
+}
+
+function setupChoosesNoLogin() {
+  const picked = document.querySelector('input[name="setup-login"]:checked');
+  return picked !== null && picked.value === 'off';
+}
+
+// Disabling the fieldset also skips its `required` inputs in form validation.
+function updateSetupChoice() {
+  const off = setupChoosesNoLogin();
+  const fields = document.getElementById('setup-fields');
+  fields.disabled = off;
+  fields.style.display = off ? 'none' : '';
+  document.getElementById('setup-off-warning').style.display = off ? '' : 'none';
+  document.getElementById('setup-submit').textContent =
+    off ? 'Continue without a login' : 'Create account';
+  document.getElementById('setup-error').textContent = '';
+}
+
 function doSetup(e) {
+  const error = document.getElementById('setup-error');
+  if (setupChoosesNoLogin()) {
+    return submitAuth(e, 'setup', { login: false }, error, 'Setup failed', () => {
+      loginRequired = false;
+      enterApp();
+    });
+  }
   const username = document.getElementById('setup-username').value.trim();
   const password = document.getElementById('setup-password').value;
   const confirm = document.getElementById('setup-confirm').value;
-  const error = document.getElementById('setup-error');
-  if (!username) { e.preventDefault(); error.textContent = 'Username is required'; return; }
-  if (password.length < 8) { e.preventDefault(); error.textContent = 'Password must be at least 8 characters'; return; }
-  if (password !== confirm) { e.preventDefault(); error.textContent = 'Passwords do not match'; return; }
+  const problem = newLoginError(username, password, confirm);
+  if (problem) { e.preventDefault(); error.textContent = problem; return; }
   return submitAuth(e, 'setup', { username, password }, error, 'Setup failed');
 }
 
@@ -207,6 +255,62 @@ async function doLogout() {
   // Clear form fields
   const fields = ['login-username', 'login-password'];
   fields.forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+}
+
+// --- Access card (Configuration) ---
+function renderAccessCard() {
+  const card = document.getElementById('access-card');
+  card.style.display = '';
+  document.getElementById('access-status').textContent = loginRequired
+    ? 'Login is on. BeatsCheck asks for a username and password.'
+    : 'Login is off. Anyone who can reach BeatsCheck can use it, including deleting files.';
+  const toggle = document.getElementById('access-toggle');
+  toggle.textContent = loginRequired ? 'Turn off login' : 'Turn on login';
+  toggle.style.display = '';
+  document.getElementById('access-off-form').style.display = 'none';
+  document.getElementById('access-on-form').style.display = 'none';
+  document.getElementById('access-error').textContent = '';
+  card.querySelectorAll('input').forEach(input => { input.value = ''; });
+}
+
+function openAccessForm() {
+  document.getElementById('access-toggle').style.display = 'none';
+  const form = document.getElementById(loginRequired ? 'access-off-form' : 'access-on-form');
+  form.style.display = '';
+  form.querySelector('input').focus();
+}
+
+// The status poll reports it, so a change made in another browser shows here.
+function syncLoginRequired(required) {
+  if (typeof required !== 'boolean' || required === loginRequired) return;
+  loginRequired = required;
+  showSessionControls(true);
+  if (currentPage === 'config') renderAccessCard();
+}
+
+function afterAccessChange(nowRequired, message) {
+  accessChanges++;
+  loginRequired = nowRequired;
+  showSessionControls(true);
+  renderAccessCard();
+  showToast(message, 'success');
+}
+
+function turnLoginOff(e) {
+  const password = document.getElementById('access-password').value;
+  return submitAuth(e, 'auth/disable', { password }, document.getElementById('access-error'),
+    'Could not turn off login', () => afterAccessChange(false, 'Login turned off'));
+}
+
+function turnLoginOn(e) {
+  const username = document.getElementById('access-username').value.trim();
+  const password = document.getElementById('access-new-password').value;
+  const confirm = document.getElementById('access-confirm').value;
+  const error = document.getElementById('access-error');
+  const problem = newLoginError(username, password, confirm);
+  if (problem) { e.preventDefault(); error.textContent = problem; return; }
+  return submitAuth(e, 'setup', { username, password }, error,
+    'Could not turn on login', () => afterAccessChange(true, 'Login turned on'));
 }
 
 // --- Theme ---
@@ -265,13 +369,9 @@ function navigate(page) {
   else stopLogPoll();
 }
 
+// The hashchange listener is added once in init: this runs after every login.
 function initRouter() {
-  window.addEventListener('hashchange', () => {
-    const page = location.hash.slice(1) || 'dashboard';
-    navigate(page);
-  });
-  const initial = location.hash.slice(1) || 'dashboard';
-  navigate(initial);
+  navigate(location.hash.slice(1) || 'dashboard');
 }
 
 // --- Mobile sidebar ---
@@ -346,8 +446,11 @@ function formatNumber(n) {
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
 
 async function refreshDashboard() {
+  const changesBefore = accessChanges;
   const data = await api('status');
   if (!data) return;
+  // A poll sent before this tab changed the login carries the old value.
+  if (changesBefore === accessChanges) syncLoginRequired(data.login_required);
 
   const version = 'v' + (data.version || '?');
   document.getElementById('version-badge').textContent = version;
@@ -912,7 +1015,10 @@ async function cancelDeleteJob() {
   btn.disabled = true;
   btn.textContent = 'Cancelling...';
   try {
-    await fetch('/api/delete-job-cancel?id=' + encodeURIComponent(currentDeleteJobId), { method: 'POST' });
+    await fetch('/api/delete-job-cancel?id=' + encodeURIComponent(currentDeleteJobId), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (e) {
     showToast('Cancel request failed', 'error');
   }
@@ -1210,6 +1316,7 @@ function buildConfigSnapshot() {
 }
 
 async function loadConfig() {
+  renderAccessCard();
   const data = await api('config');
   if (!data) {
     document.getElementById('config-fields').innerHTML =
@@ -1633,6 +1740,9 @@ document.addEventListener('DOMContentLoaded', () => {
   initSidebar();
 
   document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+  window.addEventListener('hashchange', () => {
+    if (isAuthenticated) navigate(location.hash.slice(1) || 'dashboard');
+  });
 
   // Auth forms
   const setupForm = document.getElementById('setup-form');
@@ -1641,6 +1751,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (loginForm) loginForm.addEventListener('submit', doLogin);
   const logoutBtn = document.getElementById('logout-btn');
   if (logoutBtn) logoutBtn.addEventListener('click', doLogout);
+  document.querySelectorAll('input[name="setup-login"]').forEach(radio =>
+    radio.addEventListener('change', updateSetupChoice));
+  document.getElementById('access-toggle').addEventListener('click', openAccessForm);
+  document.getElementById('access-off-form').addEventListener('submit', turnLoginOff);
+  document.getElementById('access-on-form').addEventListener('submit', turnLoginOn);
+  document.querySelectorAll('.access-cancel').forEach(btn =>
+    btn.addEventListener('click', renderAccessCard));
 
   // Log controls
   const logLines = document.getElementById('log-lines');
