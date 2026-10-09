@@ -2031,8 +2031,7 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
 
 
 def _delete_target_problem(music_dir):
-    """Why delete mode can't work in *music_dir*, or None when it is a
-    directory this process can read and write."""
+    """Why delete mode can't use *music_dir*, or None if this process can read and write it."""
     if not music_dir or not os.path.isdir(music_dir):
         return f"Music directory ({music_dir}) does not exist."
     if not os.access(music_dir, os.R_OK | os.W_OK | os.X_OK):
