@@ -62,6 +62,8 @@ reviews:
           malformed body reaching an early return. Its key comes from
           _client_ip, which may read X-Forwarded-For only when the socket peer
           is in WEBUI_TRUSTED_PROXIES; a forged header must never mint a new key.
+          The table is capped at _LOGIN_MAX_TRACKED: once it is full of live
+          records, new keys share _LOGIN_OVERFLOW_KEY; never evict a live record.
     - path: "app/main.py"
       instructions: |
         Scan engine, ID3 detector, and irreversible bulk-delete of user music.

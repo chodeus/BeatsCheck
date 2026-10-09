@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -43,6 +44,11 @@ def fresh_attempts():
     ("::ffff:172.18.0.2", "203.0.113.9", PROXY_NET, "203.0.113.9"),
     # A bad entry is skipped; the good one still applies.
     ("172.18.0.2", "203.0.113.9", "bogus, 172.18.0.2", "203.0.113.9"),
+    # Only the last _MAX_FORWARDED_HOPS hops are read.
+    ("172.18.0.2", ", ".join(["203.0.113.9"] + ["172.18.0.7"] * (
+        webui._MAX_FORWARDED_HOPS - 1)), PROXY_NET, "203.0.113.9"),
+    ("172.18.0.2", ", ".join(["203.0.113.9"] + ["172.18.0.7"] * (
+        webui._MAX_FORWARDED_HOPS)), PROXY_NET, "172.18.0.2"),
 ])
 def test_resolve_client_ip(peer, xff, trusted, expected):
     assert webui._resolve_client_ip(peer, xff, trusted) == expected
@@ -94,6 +100,28 @@ def test_tracked_clients_are_pruned_at_the_cap(monkeypatch):
     webui._login_begin_attempt("new")
 
     assert set(webui._login_attempts) == {"new"}
+
+
+def test_a_full_table_sends_new_clients_to_one_shared_bucket(monkeypatch):
+    monkeypatch.setattr(webui, "_LOGIN_MAX_TRACKED", 3)
+    now = time.time()
+    with webui._login_attempts_lock:
+        webui._login_attempts["locked"] = {
+            "count": 0, "first": now, "locked_until": now + 300}
+        for i in range(2):
+            webui._login_attempts[f"live{i}"] = {
+                "count": 1, "first": now, "locked_until": 0}
+
+    still_locked = webui._login_begin_attempt("locked")
+    allowed = [webui._login_begin_attempt(f"new{i}")
+               for i in range(webui._LOGIN_MAX_ATTEMPTS)]
+    refused = webui._login_begin_attempt("another-new")
+
+    assert still_locked > 0
+    assert allowed == [0] * webui._LOGIN_MAX_ATTEMPTS
+    assert refused > 0
+    assert set(webui._login_attempts) == {
+        "locked", "live0", "live1", webui._LOGIN_OVERFLOW_KEY}
 
 
 class _TestServer(webui.ThreadedHTTPServer):

@@ -85,6 +85,8 @@ _LOGIN_MAX_ATTEMPTS = 5
 _LOGIN_LOCKOUT_SECONDS = 300
 _LOGIN_ATTEMPT_WINDOW = 900
 _LOGIN_MAX_TRACKED = 10000
+_LOGIN_OVERFLOW_KEY = "overflow"  # not an IP, so no client can own it
+_MAX_FORWARDED_HOPS = 16
 _login_attempts = {}
 _login_attempts_lock = threading.Lock()
 
@@ -202,18 +204,28 @@ def _prune_login_attempts(now):
         del _login_attempts[k]
 
 
+def _login_bucket(key, now):
+    """*key*, or the shared overflow bucket while the table is full of live
+    records, so no existing lockout is evicted. Caller holds the lock."""
+    if key in _login_attempts or len(_login_attempts) < _LOGIN_MAX_TRACKED:
+        return key
+    _prune_login_attempts(now)
+    if len(_login_attempts) < _LOGIN_MAX_TRACKED:
+        return key
+    return _LOGIN_OVERFLOW_KEY
+
+
 def _login_begin_attempt(key):
     """Count a login attempt for *key* before the password is checked, so a
     parallel burst can't all pass the lockout check. Returns the remaining
     lockout seconds (>0) when the attempt must be refused, else 0."""
     now = time.time()
     with _login_attempts_lock:
+        key = _login_bucket(key, now)
         rec = _login_attempts.get(key)
         if rec and rec["locked_until"] > now:
             return int(rec["locked_until"] - now) + 1
         if not rec or now - rec["first"] > _LOGIN_ATTEMPT_WINDOW:
-            if len(_login_attempts) >= _LOGIN_MAX_TRACKED:
-                _prune_login_attempts(now)
             rec = {"count": 0, "first": now, "locked_until": 0}
             _login_attempts[key] = rec
         rec["count"] += 1
@@ -262,7 +274,9 @@ def _resolve_client_ip(peer, forwarded_for, trusted_raw):
     if (not networks or peer_ip is None
             or not any(peer_ip in n for n in networks)):
         return peer
-    hops = [h for h in forwarded_for.split(',') if h.strip()]
+    # Only the right-most hops can matter; rsplit keeps a long header cheap.
+    tail = forwarded_for.rsplit(',', _MAX_FORWARDED_HOPS)[-_MAX_FORWARDED_HOPS:]
+    hops = [h for h in tail if h.strip()]
     for hop in reversed(hops):
         ip = _parse_ip(hop)
         if ip is None:

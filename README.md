@@ -166,7 +166,7 @@ These Docker-level settings are configured as environment variables:
 | `PGID` | `100` | Group ID for file ownership |
 | `TZ` | `UTC` | Timezone for log timestamps. Auto-detected if `/etc/localtime` is bind-mounted |
 | `UMASK` | `002` | File creation mask |
-| `WEBUI_TRUSTED_PROXIES` | *(empty)* | Comma-separated IPs or CIDRs of your reverse proxy, e.g. `172.18.0.0/16`. Only requests from these addresses may set `X-Forwarded-For`, which the login lockout uses to tell clients apart. Empty = every client behind the proxy shares one lockout. |
+| `WEBUI_TRUSTED_PROXIES` | *(empty)* | Your reverse proxy's IP, e.g. `172.18.0.10` (give the proxy a fixed IP); several IPs or CIDRs are comma-separated. The login lockout honors `X-Forwarded-For` only from these addresses, to tell clients apart, so any host listed can pick its own lockout key: don't list a subnet that other containers share. The proxy must write the client's address into the header itself (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`); a proxy that passes the client's own header through lets clients dodge the lockout. Empty = every client behind the proxy shares one lockout. |
 
 Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/corrupted`, `/config` and are set via Docker volume mounts.
 
