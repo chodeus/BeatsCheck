@@ -29,6 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - id: count
         run: |
@@ -37,15 +38,16 @@ jobs:
             echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           } >> "$GITHUB_OUTPUT"
 
-  # Gate the image build/publish on lint + smoke tests so a broken push to
-  # main can't publish :latest. (CodeQL runs in its own workflow; enforce it
-  # as a required status check via branch protection.)
+  # Lint and tests gate the build, so a broken push to main can't publish :latest.
+  # CodeQL runs in codeql.yml; branch protection is what makes it required.
   lint:
     permissions:
       contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -63,6 +65,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
@@ -92,7 +96,8 @@ jobs:
         VCS_REF=${{ github.sha }}
         VERSION=${{ github.ref_name }}
         BUILD_NUMBER=${{ needs.build-number.outputs.number }}
-    secrets: inherit
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
   notify-failure:
     needs: build
@@ -105,4 +110,5 @@ jobs:
       status: failure
       title: "❌ Docker build failed: ${{ github.ref_name }}"
       commit_sha: ${{ github.sha }}
-    secrets: inherit
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
