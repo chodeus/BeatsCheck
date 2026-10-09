@@ -101,7 +101,7 @@ def test_interactive_delete_holds_the_lock_throughout(tmp_path, monkeypatch):
                         lambda *a: seen.append(_lock_is_free(tmp_path)))
 
     main.run_delete_mode(str(tmp_path / "corrupt.txt"), str(tmp_path / "log"),
-                         str(tmp_path))
+                         str(tmp_path), input_folder=str(tmp_path))
 
     assert seen == [False]
     free = _lock_is_free(tmp_path)
