@@ -236,8 +236,9 @@ def _trusted_proxy_networks(raw):
         try:
             networks.append(ipaddress.ip_network(part, strict=False))
         except ValueError:
-            logger.warning("Ignoring invalid WEBUI_TRUSTED_PROXIES entry: %s",
-                           part)
+            # No entry text: CodeQL reads TRUSTED in the name as a secret.
+            logger.warning("Ignoring a WEBUI_TRUSTED_PROXIES entry that is "
+                           "not an IP or CIDR")
     return tuple(networks)
 
 
