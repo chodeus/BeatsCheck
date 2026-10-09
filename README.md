@@ -190,11 +190,11 @@ BeatsCheck includes an optional web interface for monitoring and control. Disabl
    ```
 
 3. Access at `http://your-server:8484`
-4. On first visit, create your login credentials via the setup wizard
+4. On first visit, the setup wizard asks whether to require a login. Pick **Require a login** and create your credentials, or **No login** for an open WebUI. You can change this later in the **Access** card on the Configuration page
 
 ### Features
 
-- **Authentication** — first-run setup wizard, session-based login with PBKDF2-hashed passwords
+- **Authentication** — first-run setup wizard, session-based login with PBKDF2-hashed passwords; the login can be turned off and on from Configuration
 - **Dashboard** — live scan status, progress bar with ETA, library stats
 - **Corrupt Files** — sortable/searchable table with individual and bulk delete
 - **Configuration** — edit all settings from the browser (config key allowlist enforced)
@@ -211,13 +211,18 @@ If you forget your WebUI password:
 docker exec beatscheck reset-webui-password
 ```
 
-This removes the credential file. The next visit to the WebUI will show the setup wizard to create new credentials.
+This removes the credential file, and existing sessions stop working. The next visit to the WebUI will show the setup wizard to create new credentials.
+
+### Turning the Login Off
+
+On the Configuration page, **Access → Turn off login** asks for your current password, then removes the stored credentials and ends every session. While the login is off, a **Login off** pill shows in the header and anyone who can reach the WebUI can use it, including deleting files. **Turn on login** in the same card creates new credentials.
 
 ### WebUI Security
 
-- **Authentication required** — all API endpoints require a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies)
+- **Authentication required** — all API endpoints require a valid session (PBKDF2-SHA256 hashed passwords, HttpOnly session cookies), unless you chose **No login** or turned the login off. A damaged `webui_auth.json` keeps the WebUI locked, never open
 - **Login lockout** — 5 attempts per client within 15 minutes, then a 5-minute lockout. Behind a reverse proxy, set `WEBUI_TRUSTED_PROXIES` so each client gets its own lockout
-- **Setup wizard** — credentials created on first access, stored hashed in `/config/webui_auth.json`
+- **Setup wizard** — on first access, create credentials (stored hashed in `/config/webui_auth.json`) or choose **No login**
+- **Cross-site POSTs refused** — the API accepts only JSON POSTs, which a browser sends from another site only after a CORS check the WebUI never passes. This holds with the login off too
 - **Config allowlist** — only known configuration keys are accepted (arbitrary key injection blocked)
 - **Thread-safe config writes** — concurrent requests cannot corrupt the config file
 - **Delete validation** — files must be in `corrupt.txt` and inside the music directory; symlinks rejected
@@ -382,7 +387,7 @@ The third argument is the log file path. All state files (`processed.txt`, `corr
 | `corrupt_tracking.json` | Path-to-first-seen timestamps — used by `DELETE_AFTER` auto-delete |
 | `summary.json` | Machine-readable scan results for notification scripts |
 | `search_queue.json` | Pending Lidarr album search queue — drained during idle (5/hour) |
-| `webui_auth.json` | WebUI login credentials (username + PBKDF2-hashed password) |
+| `webui_auth.json` | WebUI login credentials (username + PBKDF2-hashed password), or `{"login": "off"}` when the login is turned off |
 | `.scanning` | Lock file (exists only during active scans, uses `flock`) |
 | `.heartbeat` | Timestamp updated during scans and idle — used by Docker healthcheck |
 

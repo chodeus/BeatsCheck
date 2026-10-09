@@ -71,12 +71,21 @@ _AUTH_FILE = "webui_auth.json"
 _PBKDF2_ITERATIONS = 100_000
 _SESSION_MAX_AGE = 86400  # 24 hours
 _MIN_PASSWORD_LENGTH = 8
+_MAX_USERNAME_LENGTH = 64
+_MAX_PASSWORD_LENGTH = 1024
+# Held across every load-check-write of webui_auth.json.
+_auth_lock = threading.Lock()
 
 # Sentinel returned by _load_auth() when the auth file EXISTS but cannot be
 # read/parsed (corruption or PUID/PGID permission drift). Callers must fail
 # closed on this — never treat it as "no credentials configured", which
 # would re-open the first-run setup wizard to an attacker.
 _AUTH_UNREADABLE = object()
+
+# The user chose no login. Only this exact file content means "off"; anything
+# else unexpected is _AUTH_UNREADABLE, so a damaged file never opens the API.
+_AUTH_OFF_MARKER = {"login": "off"}
+_AUTH_OFF = object()
 
 _sessions = {}
 _sessions_lock = threading.Lock()
@@ -117,11 +126,11 @@ def _load_auth(config_dir):
     """Load auth credentials from webui_auth.json.
 
     Returns None when the file is ABSENT (first-run setup allowed), the
-    credentials dict when present and valid, or the _AUTH_UNREADABLE
-    sentinel when the file exists but cannot be parsed / is missing
-    required fields. Callers must fail closed on the sentinel: mapping a
-    read error to None would let anyone re-run /api/setup and seize the
-    account (auth fail-open)."""
+    credentials dict when present and valid, _AUTH_OFF when the user turned
+    the login off, or the _AUTH_UNREADABLE sentinel when the file exists but
+    cannot be parsed / is missing required fields. Callers must fail closed
+    on the sentinel: mapping a read error to None would let anyone re-run
+    /api/setup and seize the account (auth fail-open)."""
     path = os.path.join(config_dir, _AUTH_FILE)
     if not os.path.isfile(path):
         return None
@@ -133,7 +142,10 @@ def _load_auth(config_dir):
             "WebUI auth file %s exists but is unreadable/corrupt; "
             "refusing setup and login (fail closed)", path)
         return _AUTH_UNREADABLE
-    if data.get('username') and data.get('password_hash'):
+    if data == _AUTH_OFF_MARKER:
+        return _AUTH_OFF
+    if (isinstance(data, dict) and data.get('username')
+            and data.get('password_hash')):
         return data
     logger.error(
         "WebUI auth file %s is present but missing username/"
@@ -141,34 +153,84 @@ def _load_auth(config_dir):
     return _AUTH_UNREADABLE
 
 
-def _save_auth(config_dir, username, password):
-    """Hash password and save auth credentials atomically."""
+def _write_auth_file(config_dir, data):
+    """Replace webui_auth.json atomically."""
     path = os.path.join(config_dir, _AUTH_FILE)
     tmp = path + ".tmp"
-    data = {
-        "username": username,
-        "password_hash": _hash_password(password),
-    }
     with open(tmp, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=2)
     os.rename(tmp, path)
+
+
+def _save_auth(config_dir, username, password):
+    """Hash password and save auth credentials atomically. Returns the
+    stored record."""
+    record = {
+        "username": username,
+        "password_hash": _hash_password(password),
+    }
+    _write_auth_file(config_dir, record)
     logger.info("WebUI credentials created for user '%s'", username)
+    return record
 
 
-def _create_session(username):
-    """Create a new session token with 24h expiry."""
+def _save_auth_off(config_dir):
+    """Turn the login off: the stored credentials are replaced, not kept."""
+    _write_auth_file(config_dir, _AUTH_OFF_MARKER)
+    logger.warning("WebUI login turned off; anyone who can reach the "
+                   "WebUI can use it")
+
+
+def _text_field(body, name, max_len):
+    """body[name] as a str ('' when absent), or None when it is not a string
+    or is longer than *max_len*."""
+    value = body.get(name)
+    if value is None:
+        return ''
+    if not isinstance(value, str) or len(value) > max_len:
+        return None
+    return value
+
+
+def _new_credentials(body):
+    """(username, password, error) from a setup body; error is None when
+    both are usable."""
+    username = _text_field(body, 'username', _MAX_USERNAME_LENGTH)
+    password = _text_field(body, 'password', _MAX_PASSWORD_LENGTH)
+    if username is None or not username.isprintable():
+        return None, None, (f"username must be at most "
+                            f"{_MAX_USERNAME_LENGTH} printable characters")
+    username = username.strip()
+    if not username:
+        return None, None, "username required"
+    if password is None:
+        return None, None, (f"password must be text of at most "
+                            f"{_MAX_PASSWORD_LENGTH} characters")
+    if len(password) < _MIN_PASSWORD_LENGTH:
+        return None, None, (f"password must be at least "
+                            f"{_MIN_PASSWORD_LENGTH} characters")
+    if not password.strip():
+        return None, None, "password cannot be all spaces"
+    return username, password, None
+
+
+def _create_session(auth):
+    """Create a new session token with 24h expiry for the credentials
+    record *auth*."""
     token = secrets.token_hex(32)
     with _sessions_lock:
         _sessions[token] = {
-            "username": username,
+            "username": auth["username"],
+            "password_hash": auth["password_hash"],
             "expires": time.time() + _SESSION_MAX_AGE,
         }
     return token
 
 
-def _validate_session(token):
-    """Check if session token is valid and not expired."""
-    if not token:
+def _validate_session(token, auth):
+    """Check the token is live and was issued under the credentials in
+    *auth* (a _load_auth result); it is refused while they differ."""
+    if not token or not isinstance(auth, dict):
         return False
     with _sessions_lock:
         session = _sessions.get(token)
@@ -177,13 +239,19 @@ def _validate_session(token):
         if time.time() > session["expires"]:
             del _sessions[token]
             return False
-        return True
+        return session["password_hash"] == auth["password_hash"]
 
 
 def _invalidate_session(token):
     """Remove a session token."""
     with _sessions_lock:
         _sessions.pop(token, None)
+
+
+def _clear_sessions():
+    """End every session."""
+    with _sessions_lock:
+        _sessions.clear()
 
 
 def _cleanup_sessions():
@@ -802,7 +870,9 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             return None
         try:
             body = json.loads(self.rfile.read(length))
-        except ValueError:
+            # json.loads keeps a lone \ud800 escape; this re-encode refuses it.
+            json.dumps(body, ensure_ascii=False).encode('utf-8')
+        except (ValueError, RecursionError):
             self._json_response({"error": "invalid JSON"}, 400)
             return None
         if not isinstance(body, dict):
@@ -818,13 +888,25 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         return morsel.value if morsel else None
 
     def _check_auth(self):
-        """Check if request is authenticated. Returns True or
+        """True when the login is off or the session is valid; otherwise
         sends 401 and returns False."""
         _cleanup_sessions()
-        if _validate_session(self._get_session_token()):
+        auth = _load_auth(self.server.config_dir)
+        if (auth is _AUTH_OFF
+                or _validate_session(self._get_session_token(), auth)):
             return True
         self._json_response({"error": "unauthorized"}, 401)
         return False
+
+    def _throttled(self, key):
+        """Count a password attempt for *key*. Sends 429 and returns True
+        when *key* is locked out."""
+        locked = _login_begin_attempt(key)
+        if locked:
+            self._json_response(
+                {"error": f"too many failed attempts — try again in "
+                 f"{locked}s"}, 429)
+        return bool(locked)
 
     def _client_ip(self):
         """Client IP for rate-limiting; see _resolve_client_ip."""
@@ -857,18 +939,18 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             auth = _load_auth(config_dir)
             token = self._get_session_token()
             if auth is _AUTH_UNREADABLE:
-                # Fail closed: do NOT report setup_required (that would
-                # re-open the setup wizard). Existing valid sessions still
-                # work; a fresh client is sent to the login page.
+                # Fail closed: setup_required would reopen the setup wizard.
                 self._json_response({
                     "setup_required": False,
-                    "authenticated": _validate_session(token),
+                    "authenticated": False,
                     "error": "auth store unreadable",
                 }, 503)
                 return
             self._json_response({
                 "setup_required": auth is None,
-                "authenticated": _validate_session(token),
+                "login_required": auth is not _AUTH_OFF,
+                "authenticated": (auth is _AUTH_OFF
+                                  or _validate_session(token, auth)),
             })
             return
 
@@ -894,6 +976,8 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 if val is not None:
                     summary[key] = val
             state["summary"] = summary
+            # Lets an open page notice the login was turned off elsewhere.
+            state["login_required"] = _load_auth(config_dir) is not _AUTH_OFF
             self._json_response(state)
 
         elif self.path == '/api/config':
@@ -955,33 +1039,41 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             self._json_response({"error": "not found"}, 404)
 
     def _handle_setup(self, config_dir):
-        """Handle POST /api/setup — first-run credential creation."""
-        auth = _load_auth(config_dir)
-        if auth is _AUTH_UNREADABLE:
-            self._json_response(
-                {"error": "auth store unreadable — refusing setup"},
-                503)
-            return
-        if auth is not None:
-            self._json_response(
-                {"error": "already configured"}, 400)
-            return
+        """Handle POST /api/setup — first-run setup, or turning the login
+        back on. {"login": false} chooses no login, on first run only."""
         body = self._read_body()
         if body is None:
             return
-        username = (body.get('username') or '').strip()
-        password = body.get('password') or ''
-        if not username:
+        login = body.get('login', True)
+        if not isinstance(login, bool):
             self._json_response(
-                {"error": "username required"}, 400)
+                {"error": "login must be true or false"}, 400)
             return
-        if len(password) < _MIN_PASSWORD_LENGTH:
-            self._json_response(
-                {"error": f"password must be at least "
-                 f"{_MIN_PASSWORD_LENGTH} characters"}, 400)
-            return
-        _save_auth(config_dir, username, password)
-        token = _create_session(username)
+        with _auth_lock:
+            auth = _load_auth(config_dir)
+            if auth is _AUTH_UNREADABLE:
+                self._json_response(
+                    {"error": "auth store unreadable — refusing setup"},
+                    503)
+                return
+            if auth is not None and auth is not _AUTH_OFF:
+                self._json_response(
+                    {"error": "already configured"}, 409)
+                return
+            if not login:
+                if auth is _AUTH_OFF:
+                    self._json_response(
+                        {"error": "login is already off"}, 409)
+                    return
+                _save_auth_off(config_dir)
+                self._json_response({"ok": True})
+                return
+            username, password, problem = _new_credentials(body)
+            if problem:
+                self._json_response({"error": problem}, 400)
+                return
+            token = _create_session(
+                _save_auth(config_dir, username, password))
         self._json_response(
             {"ok": True},
             cookies=[self._session_cookie(token)])
@@ -989,11 +1081,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
     def _handle_login(self, config_dir):
         """Handle POST /api/login — credential validation."""
         key = self._client_ip()
-        locked = _login_begin_attempt(key)
-        if locked:
-            self._json_response(
-                {"error": f"too many failed attempts — try again in "
-                 f"{locked}s"}, 429)
+        if self._throttled(key):
             return
         body = self._read_body()
         if body is None:
@@ -1005,15 +1093,24 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             return
         if auth is None:
             self._json_response(
-                {"error": "setup required"}, 400)
+                {"error": "setup required"}, 409)
             return
-        username = (body.get('username') or '').strip()
-        password = body.get('password') or ''
-        if (username == auth['username']
+        if auth is _AUTH_OFF:
+            self._json_response({"error": "login is off"}, 409)
+            return
+        username = _text_field(body, 'username', _MAX_USERNAME_LENGTH)
+        password = _text_field(body, 'password', _MAX_PASSWORD_LENGTH)
+        if username is None or password is None:
+            self._json_response(
+                {"error": f"username and password must be text of at most "
+                 f"{_MAX_USERNAME_LENGTH} and {_MAX_PASSWORD_LENGTH} "
+                 f"characters"}, 400)
+            return
+        if (username.strip() == auth['username']
                 and _verify_password(
                     password, auth['password_hash'])):
             _login_record_success(key)
-            token = _create_session(username)
+            token = _create_session(auth)
             self._json_response(
                 {"ok": True},
                 cookies=[self._session_cookie(token)])
@@ -1026,6 +1123,42 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         token = self._get_session_token()
         if token:
             _invalidate_session(token)
+        self._json_response(
+            {"ok": True},
+            cookies=[self._session_cookie("", max_age=0)])
+
+    def _handle_auth_disable(self, config_dir):
+        """Handle POST /api/auth/disable — turn the login off. Needs a
+        session and the current password."""
+        key = self._client_ip()
+        if self._throttled(key):
+            return
+        body = self._read_body()
+        if body is None:
+            return
+        password = _text_field(body, 'password', _MAX_PASSWORD_LENGTH)
+        if password is None:
+            self._json_response(
+                {"error": f"password must be text of at most "
+                 f"{_MAX_PASSWORD_LENGTH} characters"}, 400)
+            return
+        with _auth_lock:
+            auth = _load_auth(config_dir)
+            if auth is _AUTH_UNREADABLE:
+                self._json_response(
+                    {"error": "auth store unreadable"}, 503)
+                return
+            if auth is None or auth is _AUTH_OFF:
+                self._json_response(
+                    {"error": "login is already off"}, 409)
+                return
+            # 403, not 401: app.js treats a 401 as a dead session.
+            if not _verify_password(password, auth['password_hash']):
+                self._json_response({"error": "wrong password"}, 403)
+                return
+            _login_record_success(key)
+            _save_auth_off(config_dir)
+            _clear_sessions()
         self._json_response(
             {"ok": True},
             cookies=[self._session_cookie("", max_age=0)])
@@ -1064,15 +1197,14 @@ class WebUIHandler(SimpleHTTPRequestHandler):
     def do_POST(self):
         config_dir = self.server.config_dir
 
-        # Auth endpoints (no session required)
-        if self.path == '/api/setup':
-            self._handle_setup(config_dir)
+        # A cross-site page can POST text/plain without a CORS preflight, but
+        # not JSON; while login is off, nothing else stops it.
+        if self.headers.get_content_type() != 'application/json':
+            self._json_response(
+                {"error": "Content-Type must be application/json"}, 415)
             return
-        if self.path == '/api/login':
-            self._handle_login(config_dir)
-            return
-        if self.path == '/api/logout':
-            self._handle_logout()
+
+        if self._dispatch_auth(config_dir):
             return
 
         # Protected endpoints
@@ -1152,6 +1284,24 @@ class WebUIHandler(SimpleHTTPRequestHandler):
 
         else:
             self._json_response({"error": "not found"}, 404)
+
+    def _dispatch_auth(self, config_dir):
+        """Handle the login POSTs. Returns True if the path matched
+        (response already sent), False otherwise."""
+        if self.path == '/api/setup':
+            self._handle_setup(config_dir)
+            return True
+        if self.path == '/api/login':
+            self._handle_login(config_dir)
+            return True
+        if self.path == '/api/logout':
+            self._handle_logout()
+            return True
+        if self.path == '/api/auth/disable':
+            if self._check_auth():
+                self._handle_auth_disable(config_dir)
+            return True
+        return False
 
     def _dispatch_bulk_delete(self, config_dir):
         """Handle bulk-delete-related POSTs. Returns True if the path
