@@ -69,6 +69,19 @@ def test_waiting_gives_up_on_shutdown(tmp_path, held, monkeypatch):
     assert got is None
 
 
+def test_nothing_starts_under_the_lock_once_shutdown_begins(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "shutdown_requested", True)
+    ran = []
+
+    got = main._run_locked(str(tmp_path), "waiting", lambda: ran.append(1))
+
+    free = _lock_is_free(tmp_path)
+    assert got is None
+    assert ran == []
+    assert free
+
+
 def test_a_scan_holds_the_lock_and_releases_it(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(main, "_run_scan_inner",
@@ -121,6 +134,23 @@ def test_auto_delete_holds_the_lock(tmp_path, monkeypatch):
 
     assert seen == [False]
     free = _lock_is_free(tmp_path)
+    assert free
+
+
+def test_the_redownload_check_holds_the_lock(tmp_path, monkeypatch):
+    (tmp_path / "pending_redownloads.json").write_text(json.dumps(
+        {"7": {"deletedAtTs": time.time(), "albumName": "Artist — Album"}}))
+    seen = []
+    monkeypatch.setattr(main, "_lidarr_get_album_history",
+                        lambda *a: seen.append(_lock_is_free(tmp_path)) or [])
+    cfg = types.SimpleNamespace(
+        log_dir=str(tmp_path), log_file=str(tmp_path / "log"),
+        lidarr_url="http://lidarr.invalid", lidarr_api_key="not-a-key")
+
+    main._poll_pending_redownloads(cfg)
+
+    free = _lock_is_free(tmp_path)
+    assert seen == [False]
     assert free
 
 
