@@ -161,10 +161,13 @@ reviews:
           descended or chowned through; flag any change that follows symlinks or
           that turns a per-file chown failure into a start failure — the
           entrypoint's write probe is the real gate, by design.
-        - FAIL CLOSED: delete.sh must abort when MUSIC_DIR is not writable / not
-          present (it already checks `-w`); a destructive wrapper must never
-          proceed on an unverified or unreadable target. Quote every path
-          expansion ("$MUSIC_DIR", "${PUID}") to survive spaces.
+        - FAIL CLOSED: delete mode must abort when the effective music dir
+          (env MUSIC_DIR, else beatscheck.conf music_dir, else /data) is not a
+          readable, writable directory. main.py's _delete_target_problem checks
+          it as PUID; delete.sh leaves it to main.py, which alone resolves the
+          config. A destructive wrapper must never proceed on an unverified or
+          unreadable target. Quote every path expansion ("${PUID}") to survive
+          spaces.
         - Preserve correct PUID/PGID drop (default 99:100) and UMASK; do not run
           the delete/scan Python as root.
         - No secrets echoed or baked into the script or its logs.

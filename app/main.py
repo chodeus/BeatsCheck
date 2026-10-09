@@ -2030,10 +2030,25 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
     return None
 
 
+def _delete_target_problem(music_dir):
+    """Why delete mode can't work in *music_dir*, or None when it is a
+    directory this process can read and write."""
+    if not music_dir or not os.path.isdir(music_dir):
+        return f"Music directory ({music_dir}) does not exist."
+    if not os.access(music_dir, os.R_OK | os.W_OK | os.X_OK):
+        return (f"Music directory ({music_dir}) must be readable and writable. "
+                f"Mount it :rw (not :ro) in your container config, then restart.")
+    return None
+
+
 def run_delete_mode(corrupt_list_path, log_file, log_dir,
                     input_folder=None, lidarr_url=None,
                     lidarr_api_key=None, lidarr_blocklist=False):
     """Interactive delete mode, holding the scan lock until it exits."""
+    problem = _delete_target_problem(input_folder)
+    if problem:
+        logger.error(problem)
+        sys.exit(1)
     _run_locked(
         log_dir, "A scan or delete is running. Waiting for it to finish...",
         _run_delete_mode_locked, corrupt_list_path, log_file, log_dir,
