@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.3.5](https://github.com/chodeus/BeatsCheck/compare/v1.3.4...v1.3.5) (2026-10-09)
+
+
+### Bug Fixes
+
+* **delete:** start delete mode in rootless containers ([fcdebe0](https://github.com/chodeus/BeatsCheck/commit/fcdebe0e36da78507917be6e22ab692b8a783976))
+* **webui:** answer a JSON body that is not an object with 400 ([4fc7323](https://github.com/chodeus/BeatsCheck/commit/4fc73231f5c7a4bde31648ad85ed9f9040a9d05c))
+* **webui:** bound the lockout table and X-Forwarded-For parsing, and tighten the trusted-proxy docs ([9bcae22](https://github.com/chodeus/BeatsCheck/commit/9bcae229f0e69f723047b6e4ce8035c2124df009))
+* **webui:** key the login lockout on a client X-Forwarded-For can't forge, and count attempts before the password check ([caa660a](https://github.com/chodeus/BeatsCheck/commit/caa660ab7a6d5db613c817a62341a99333bea80e))
+* **webui:** refuse a config number that is not finite ([adce5b3](https://github.com/chodeus/BeatsCheck/commit/adce5b3b328d2e2555845c0d1a80dada314d308e))
+* **webui:** refuse blank and NUL paths in delete and ignore requests ([9ffa914](https://github.com/chodeus/BeatsCheck/commit/9ffa914adcb7f22f1c6ea2b5b0a7e20a935f9616))
+* **webui:** type-check POST body fields and time out stalled clients ([6d0441a](https://github.com/chodeus/BeatsCheck/commit/6d0441a7d307496401c6934366650d8325c13ac9))
+
+
+### Refactoring
+
+* **webui:** leave the entry text out of the WEBUI_TRUSTED_PROXIES warning ([67b75bc](https://github.com/chodeus/BeatsCheck/commit/67b75bc79f08a45b95a8ec6dd10964e906e6df4e))
+
 ## [1.3.4](https://github.com/chodeus/BeatsCheck/compare/v1.3.3...v1.3.4) (2026-09-24)
 
 
