@@ -69,6 +69,19 @@ def test_waiting_gives_up_on_shutdown(tmp_path, held, monkeypatch):
     assert got is None
 
 
+def test_nothing_starts_under_the_lock_once_shutdown_begins(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(main, "shutdown_requested", True)
+    ran = []
+
+    got = main._run_locked(str(tmp_path), "waiting", lambda: ran.append(1))
+
+    free = _lock_is_free(tmp_path)
+    assert got is None
+    assert ran == []
+    assert free
+
+
 def test_a_scan_holds_the_lock_and_releases_it(tmp_path, monkeypatch):
     seen = []
     monkeypatch.setattr(main, "_run_scan_inner",

@@ -984,17 +984,17 @@ def _release_scan_lock(lf):
 def _wait_for_scan_lock(log_dir, waiting_msg, heartbeat_path=None):
     """Poll until the scan lock is free and return it, logging *waiting_msg*
     once if it is held. None on shutdown. *heartbeat_path* is kept fresh."""
-    lf = _acquire_scan_lock(log_dir)
-    if lf is not None:
-        return lf
-    logger.info(waiting_msg)
+    logged = False
     while not shutdown_requested:
-        if heartbeat_path:
-            _write_heartbeat(heartbeat_path)
-        time.sleep(_SCAN_LOCK_POLL_SECONDS)
         lf = _acquire_scan_lock(log_dir)
         if lf is not None:
             return lf
+        if not logged:
+            logger.info(waiting_msg)
+            logged = True
+        if heartbeat_path:
+            _write_heartbeat(heartbeat_path)
+        time.sleep(_SCAN_LOCK_POLL_SECONDS)
     return None
 
 
