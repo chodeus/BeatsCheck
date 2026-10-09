@@ -7,6 +7,7 @@ import http.cookies
 import ipaddress
 import json
 import logging
+import math
 import mimetypes
 import os
 import re
@@ -308,6 +309,33 @@ from main import (  # noqa: E402
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
 
 _config_write_lock = threading.Lock()
+
+
+def _str_list(body, name):
+    """body[name] when it is a non-empty list of non-blank strings with no
+    NUL byte, else None."""
+    value = body.get(name)
+    if (isinstance(value, list) and value
+            and all(isinstance(v, str) and v.strip() and '\x00' not in v
+                    for v in value)):
+        return value
+    return None
+
+
+def _config_updates(body):
+    """body["config"] if it is a non-empty map of finite numbers, booleans or
+    single-line strings (a line break would add config lines), else None."""
+    updates = body.get('config')
+    if not isinstance(updates, dict) or not updates:
+        return None
+    for val in updates.values():
+        if not isinstance(val, (str, int, float)):
+            return None
+        if isinstance(val, str) and not val.isprintable():
+            return None
+        if isinstance(val, float) and not math.isfinite(val):
+            return None
+    return updates
 
 
 def _read_config_entries(config_dir):
@@ -736,6 +764,9 @@ _SESSION_COOKIE = "beatscheck_session"
 class WebUIHandler(SimpleHTTPRequestHandler):
     """Handles both static files and /api/* JSON endpoints."""
 
+    # Per socket read/write, so a client that stalls mid-request frees its thread.
+    timeout = 30
+
     def log_message(self, format, *args):
         pass
 
@@ -770,10 +801,14 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 {"error": "body too large or empty"}, 400)
             return None
         try:
-            return json.loads(self.rfile.read(length))
+            body = json.loads(self.rfile.read(length))
         except ValueError:
             self._json_response({"error": "invalid JSON"}, 400)
             return None
+        if not isinstance(body, dict):
+            self._json_response({"error": "body must be a JSON object"}, 400)
+            return None
+        return body
 
     def _get_session_token(self):
         """Extract session token from cookies."""
@@ -1000,13 +1035,31 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             return
-        files = body.get('files', [])
-        if not files:
+        files = _str_list(body, 'files')
+        if files is None:
             self._json_response(
-                {"error": "no files specified"}, 400)
+                {"error": "files must be a non-empty list of paths"}, 400)
             return
         _ignore_corrupt_files(config_dir, files)
         self._json_response({"ok": True})
+
+    def _handle_rescan(self, config_dir):
+        """Handle POST /api/rescan — start a scan now."""
+        body = self._read_body()
+        if body is None:
+            return
+        mode = body.get('mode', 'report')
+        fresh = body.get('fresh', False)
+        if mode not in ('report', 'move'):
+            self._json_response(
+                {"error": "mode must be report or move"}, 400)
+            return
+        if not isinstance(fresh, bool):
+            self._json_response(
+                {"error": "fresh must be true or false"}, 400)
+            return
+        ok = _trigger_rescan(config_dir, mode, fresh)
+        self._json_response({"ok": ok})
 
     def do_POST(self):
         config_dir = self.server.config_dir
@@ -1030,10 +1083,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             body = self._read_body()
             if body is None:
                 return
-            updates = body.get('config', {})
-            if not updates:
+            updates = _config_updates(body)
+            if updates is None:
                 self._json_response(
-                    {"error": "no config provided"}, 400)
+                    {"error": "config must be a non-empty object of "
+                     "numbers, booleans or single-line text"}, 400)
                 return
             # Reject unknown config keys
             rejected = set(updates) - _ALLOWED_CONFIG_KEYS
@@ -1058,18 +1112,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                     {"error": "config file not found"}, 500)
 
         elif self.path == '/api/rescan':
-            body = self._read_body()
-            if body is None:
-                return
-            mode = body.get('mode', 'report')
-            fresh = body.get('fresh', False)
-            if mode not in ('report', 'move'):
-                self._json_response(
-                    {"error": "mode must be report or move"},
-                    400)
-                return
-            ok = _trigger_rescan(config_dir, mode, fresh)
-            self._json_response({"ok": ok})
+            self._handle_rescan(config_dir)
 
         elif self.path == '/api/cancel':
             try:
@@ -1084,10 +1127,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             body = self._read_body()
             if body is None:
                 return
-            files = body.get('files', [])
-            if not files:
+            files = _str_list(body, 'files')
+            if files is None:
                 self._json_response(
-                    {"error": "no files specified"}, 400)
+                    {"error": "files must be a non-empty list of paths"},
+                    400)
                 return
             try:
                 from main import delete_corrupt_files
@@ -1134,11 +1178,11 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             return
-        folders = body.get('folders', [])
+        folders = _str_list(body, 'folders')
         mode = body.get('mode', 'whole')
-        if not isinstance(folders, list) or not folders:
+        if folders is None:
             self._json_response(
-                {"error": "no folders specified"}, 400)
+                {"error": "folders must be a non-empty list of paths"}, 400)
             return
         if mode not in ('whole', 'corrupt'):
             self._json_response(
@@ -1177,10 +1221,10 @@ class WebUIHandler(SimpleHTTPRequestHandler):
         body = self._read_body()
         if body is None:
             return
-        files = body.get('files', [])
-        if not isinstance(files, list) or not files:
+        files = _str_list(body, 'files')
+        if files is None:
             self._json_response(
-                {"error": "no files specified"}, 400)
+                {"error": "files must be a non-empty list of paths"}, 400)
             return
         if len(files) > 5000:
             self._json_response(

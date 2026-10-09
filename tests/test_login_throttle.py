@@ -124,21 +124,10 @@ def test_a_full_table_sends_new_clients_to_one_shared_bucket(monkeypatch):
         "locked", "live0", "live1", webui._LOGIN_OVERFLOW_KEY}
 
 
-class _TestServer(webui.ThreadedHTTPServer):
-    # The default listen backlog of 5 resets a 12-connection burst on macOS.
-    request_queue_size = 64
-
-
 @pytest.fixture
-def server(tmp_path):
+def server(tmp_path, webui_server):
     webui._save_auth(str(tmp_path), "admin", "right-password")
-    srv = _TestServer(
-        ("127.0.0.1", 0), webui.WebUIHandler, str(tmp_path), str(tmp_path))
-    thread = threading.Thread(target=srv.serve_forever, daemon=True)
-    thread.start()
-    yield f"http://127.0.0.1:{srv.server_address[1]}"
-    srv.shutdown()
-    srv.server_close()
+    return webui_server
 
 
 def _login(base, password, xff=None):
