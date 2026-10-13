@@ -2722,7 +2722,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
     """Delete corrupt files via Lidarr API, one album at a time.
     Reads IDs from corrupt_details.json (resolved at scan time).
     Re-resolves IDs before each delete to handle stale entries.
-    Falls back to direct filesystem delete when Lidarr API fails.
+    Deletes files with no Lidarr ID directly; an album whose API delete fails is skipped.
     Sequential processing prevents flooding indexers with searches.
     The per-album search wait (capped at *search_wait_seconds*) both
     paces indexer requests and gives Lidarr time to log whether it
