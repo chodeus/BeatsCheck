@@ -177,6 +177,7 @@ class _FakeProc:
     def __init__(self, returncode=0, stderr=""):
         self.returncode = returncode
         self.stderr = stderr
+        self.stdout = ""
 
 
 def test_attached_picture_failure_reverifies_clean(monkeypatch, tmp_path):

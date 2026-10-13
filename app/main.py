@@ -15,6 +15,9 @@ import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import length_check
+import reason_text
+
 
 def _read_version():
     here = os.path.dirname(os.path.abspath(__file__))
@@ -1015,24 +1018,27 @@ def _run_locked(log_dir, waiting_msg, fn, *args, heartbeat=False):
 
 # --- Scanning ---
 
+_FFMPEG_BOILERPLATE = (
+    "Task finished with error code",
+    "Terminating thread with return code",
+    "Last message repeated",
+)
+
+
 def _clean_ffmpeg_errors(stderr):
-    """Strip ffmpeg memory addresses and internal codec references from errors."""
-    if not stderr or not stderr.strip():
-        return "Non-zero exit code"
-    # Strip [codec @ 0x...] prefixes and [aist#N:N/codec @ 0x...] wrappers
-    cleaned = re.sub(r'\[[\w:#/]+ @ 0x[0-9a-f]+\]\s*', '', stderr)
-    # Collapse duplicate whitespace and pipe separators
-    cleaned = re.sub(r'\s*\|\s*', ' | ', cleaned)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    # Deduplicate repeated error messages
-    parts = [p.strip() for p in cleaned.split(' | ') if p.strip()]
+    """One ' | '-joined line per distinct ffmpeg error, minus addresses and boilerplate."""
     seen = set()
     unique = []
-    for p in parts:
-        if p not in seen:
-            seen.add(p)
-            unique.append(p)
-    return ' | '.join(unique) if unique else "Non-zero exit code"
+    for line in (stderr or "").splitlines():
+        # [codec @ 0x...] and [in#0/mov,mp4,... @ 0x...] wrappers
+        line = re.sub(r'\[[\w:#/,.-]+ @ 0x[0-9a-f]+\]\s*', '', line)
+        line = re.sub(r'\s+', ' ', line).strip()
+        if line and line not in seen:
+            seen.add(line)
+            unique.append(line)
+    # Boilerplate stays only when it is all ffmpeg said.
+    kept = [ln for ln in unique if not ln.startswith(_FFMPEG_BOILERPLATE)]
+    return ' | '.join(kept or unique) or "Non-zero exit code"
 
 
 # ID3v2 tag-parse errors ffmpeg logs at *error* level but recovers from by
@@ -1086,7 +1092,8 @@ def _ffmpeg_decode(file_path, explode=True):
     cmd = ["ffmpeg", "-v", "error"]
     if explode:
         cmd += ["-err_detect", "explode"]
-    cmd += ["-xerror", "-nostdin", "-i", file_path,
+    # -progress puts the decoded length on stdout for length_check.
+    cmd += ["-xerror", "-nostdin", "-progress", "pipe:1", "-i", file_path,
             "-map", "0:a", "-f", "null", "-"]
     try:
         return subprocess.run(
@@ -1113,9 +1120,20 @@ def _recheck_past_attached_picture(file_path, file_size):
         return (file_path, True,
                 _clean_ffmpeg_errors(significant or result.stderr), file_size)
 
-    logger.info("Malformed embedded cover art but audio decodes clean, "
-                "keeping: %s", file_path)
-    return (file_path, False, None, file_size)
+    verdict = _verdict_after_clean_decode(file_path, result, file_size)
+    if not verdict[1]:
+        logger.info("Malformed embedded cover art but audio decodes clean, "
+                    "keeping: %s", file_path)
+    return verdict
+
+
+def _verdict_after_clean_decode(file_path, result, file_size):
+    """Clean, unless LENGTH_CHECK is on and length_check finds the file cut short."""
+    if not _parse_env_bool("LENGTH_CHECK", True):
+        return (file_path, False, None, file_size)
+    reason = length_check.cut_short_reason(
+        file_path, length_check.decoded_seconds(result.stdout))
+    return (file_path, reason is not None, reason, file_size)
 
 
 def check_audio_file(file_path):
@@ -1151,7 +1169,7 @@ def check_audio_file(file_path):
         return (file_path, True,
                 _clean_ffmpeg_errors(significant), file_size)
 
-    return (file_path, False, None, file_size)
+    return _verdict_after_clean_decode(file_path, result, file_size)
 
 
 def collect_audio_files(input_folder, min_age_minutes=30):
@@ -1191,6 +1209,7 @@ def _handle_corrupt_file(file_path, reason, mode, input_folder, output_folder,
                          corrupt_log, log, existing_corrupt, corrupt_details,
                          log_dir=None, lidarr_index=None):
     logger.info("CORRUPT: %s", file_path)
+    logger.info("         %s", reason_text.describe(reason))
     logger.debug("         %s", reason)
 
     try:
@@ -1552,10 +1571,11 @@ def _display_folder_files(corrupt_files, corrupt_details):
             size_str = format_size(os.path.getsize(cf))
             print(f"           {name} ({size_str})")
             if reason:
+                print(f"             -> {reason_text.describe(reason)}")
                 if len(reason) > 200:
                     cut = reason[:200].rsplit(' ', 1)[0]
                     reason = cut + "..."
-                print(f"             -> {reason}")
+                print(f"                {reason}")
         except OSError:
             print(f"           {name} (already deleted)")
 
@@ -3037,6 +3057,11 @@ run_interval = 0
 ##   Avoids flagging files being actively downloaded.
 min_file_age = 30
 
+## length_check — flag MP3, MP2, Ogg, Opus and WMA files
+##   whose audio stops partway through (an interrupted
+##   download or copy). true = on, false = off.
+length_check = true
+
 
 ##----- When Corrupt Files Are Found -------------------
 ## By default, corrupt files are only logged — nothing
@@ -3132,6 +3157,7 @@ _CONFIG_KEY_MAP = {
     'delete_after': 'DELETE_AFTER',
     'max_auto_delete': 'MAX_AUTO_DELETE',
     'min_file_age': 'MIN_FILE_AGE',
+    'length_check': 'LENGTH_CHECK',
     'log_level': 'LOG_LEVEL',
     'max_log_mb': 'MAX_LOG_MB',
     'lidarr_url': 'LIDARR_URL',
