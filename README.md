@@ -10,7 +10,7 @@ Supported formats: FLAC, MP3, M4A, OGG, Opus, WAV, WMA, AAC, AIFF, APE, WavPack,
 
 ## Quick start
 
-1. Copy [`compose.yaml`](compose.yaml), set your music and config paths, and run `docker compose up -d`. On Unraid, use the [template](docs/installation.md#unraid).
+1. Copy [`compose.yaml`](compose.yaml) into a folder, set your music and config paths, and run `docker compose up -d` in that folder. On Unraid, use the [template](docs/installation.md#unraid).
 2. Start a scan: `docker exec beatscheck rescan report`
 3. Read the results in `corrupt.txt` in your config folder, or turn on the [WebUI](docs/webui.md).
 

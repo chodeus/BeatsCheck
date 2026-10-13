@@ -5,9 +5,11 @@
 A complete [`compose.yaml`](../compose.yaml) is included in the repository:
 
 ```bash
-# Copy and edit the compose file
-cp compose.yaml /path/to/your/compose.yaml
-# Edit paths and settings, then:
+# Copy the compose file into its own folder
+mkdir -p /path/to/beatscheck
+cp compose.yaml /path/to/beatscheck/
+cd /path/to/beatscheck
+# Edit paths and settings in compose.yaml, then:
 docker compose up -d
 ```
 
@@ -103,8 +105,16 @@ The third argument is the log file path. All state files (`processed.txt`, `corr
 
 ## Updating
 
+Pull the new image, then recreate the container. A plain restart keeps running the old image.
+
 ```bash
+# Docker Compose, from the folder that holds your compose.yaml
+docker compose pull
+docker compose up -d
+
+# docker run: pull, remove the container, then start it again with the same options
 docker pull ghcr.io/chodeus/beatscheck:latest
+docker rm -f beatscheck
 ```
 
-Then restart the container.
+On Unraid, click **Check for Updates** on the Docker tab, then **apply update** on the BeatsCheck container.

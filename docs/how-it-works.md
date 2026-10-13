@@ -8,7 +8,7 @@ Each audio file is decoded end to end with:
 ffmpeg -v error -err_detect explode -xerror -nostdin -progress pipe:1 -i <file> -map 0:a -f null -
 ```
 
-`-err_detect explode` and `-xerror` make ffmpeg stop at the first decode error, and `-map 0:a` ensures only audio streams are tested. This catches audio stream corruption such as `Decoding error: Invalid data` and `Decode error rate exceeds maximum`. Files that fail are flagged as corrupt. A file BeatsCheck cannot read, a decode that times out and an ffmpeg run that is stopped are logged as warnings instead, and checked again on the next scan. A clean `corrupt.txt` list is written for scripting or interactive deletion.
+`-err_detect explode` and `-xerror` make ffmpeg stop at the first decode error, and `-map 0:a` ensures only audio streams are tested. This catches audio stream corruption such as `Decoding error: Invalid data` and `Decode error rate exceeds maximum`. Files that fail are flagged as corrupt. A file BeatsCheck cannot read, a decode that times out, and an ffmpeg run that is killed or exits without an error message are logged as warnings instead, and checked again on the next scan. A clean `corrupt.txt` list is written for scripting or interactive deletion.
 
 The log, the WebUI and the delete review explain each corrupt file in plain English. ffmpeg's own error text is kept in the WebUI, the delete review and `beats_check.log`.
 

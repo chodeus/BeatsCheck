@@ -32,7 +32,7 @@ The WebUI's **Corrupt Files** page shows the same list, with a plain-English exp
 
 ## 3. Delete corrupt files
 
-**Important:** the music mount must be `rw` (not `ro`) for BeatsCheck to delete anything. With Lidarr set up, deletes go through Lidarr; see [Lidarr integration](lidarr.md).
+**Important:** the music mount must be `rw` (not `ro`) for BeatsCheck to delete anything. With Lidarr set up, files matched to a Lidarr track file are deleted through Lidarr; see [Lidarr integration](lidarr.md).
 
 Three options — pick what suits your workflow.
 
@@ -85,7 +85,7 @@ After deletion, `corrupt.txt` is updated to remove handled entries.
 
 ### From the WebUI
 
-On **Corrupt Files**, select files or albums and click **Delete**. Each file is checked against `corrupt.txt` and the music directory. For an album, at least one flagged file must be in that album's folder before the whole folder is removed. Files Lidarr tracks are deleted through Lidarr; BeatsCheck removes the rest itself, so mount the music folder `rw`. Don't feed `corrupt.txt` to `rm` on the host: it lists paths as the container sees them (`/data/...`), not host paths.
+On **Corrupt Files**, select files or albums and click **Delete**. Each file is checked against `corrupt.txt` and the music directory. For an album, at least one flagged file must be in that album's folder before the whole folder is removed. With Lidarr set up, files BeatsCheck has matched to a Lidarr track file are deleted through Lidarr; BeatsCheck removes the rest itself, so mount the music folder `rw`. Don't feed `corrupt.txt` to `rm` on the host: it lists paths as the container sees them (`/data/...`), not host paths.
 
 ## 4. Rescan
 

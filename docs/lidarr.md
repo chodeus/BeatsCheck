@@ -1,6 +1,6 @@
 # Lidarr integration
 
-When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck uses the Lidarr API for all deletion operations. Track file records are removed via the API while albums stay monitored — Lidarr automatically re-downloads monitored albums after deletion.
+When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck deletes the files it has matched to Lidarr track files through the Lidarr API. Track file records are removed via the API while albums stay monitored — Lidarr automatically re-downloads monitored albums after deletion. Files with no Lidarr match are deleted directly (see [Error handling](#error-handling)).
 
 ```conf
 ## /config/beatscheck.conf — API key stays off the command line
@@ -36,7 +36,7 @@ BeatsCheck runs in a container where music is mounted at `/data`, while Lidarr s
 All Lidarr API operations are fail-safe:
 - If blocklist fails → delete is aborted, error shown
 - If bulk delete API fails → delete is aborted, error shown
-- If Lidarr is unreachable at scan time → files are tracked without Lidarr IDs, direct filesystem delete is used as fallback
+- If Lidarr is unreachable when a scan ends → the files it flagged get no Lidarr ID yet, and each later scan tries again; a file that still has no ID when it is deleted is deleted directly
 - Files not tracked by Lidarr (cover art, .nfo, etc.) are deleted directly via `os.remove`
 
 ## Security
