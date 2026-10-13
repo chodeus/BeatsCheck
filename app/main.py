@@ -1018,6 +1018,18 @@ def _run_locked(log_dir, waiting_msg, fn, *args, heartbeat=False):
 
 # --- Scanning ---
 
+class CheckIncomplete(Exception):
+    """The check could not judge the file (unreadable, timed out, ffmpeg stopped); retry next scan."""
+
+
+# ffmpeg's text when it could not read the file, as opposed to finding damage in it.
+_READ_FAILURE_MARKERS = (
+    "Error opening input: Permission denied",
+    "Error opening input: Input/output error",
+    "Error opening input: No such file or directory",
+    "Error during demuxing: Input/output error",
+)
+
 _FFMPEG_BOILERPLATE = (
     "Task finished with error code",
     "Terminating thread with return code",
@@ -1088,7 +1100,7 @@ def _strip_benign_metadata_noise(stderr):
 
 
 def _ffmpeg_decode(file_path, explode=True):
-    """Run the null-decode. Returns the CompletedProcess, or None on timeout."""
+    """Run the null-decode. Raises CheckIncomplete when the run cannot judge the file."""
     cmd = ["ffmpeg", "-v", "error"]
     if explode:
         cmd += ["-err_detect", "explode"]
@@ -1096,7 +1108,7 @@ def _ffmpeg_decode(file_path, explode=True):
     cmd += ["-xerror", "-nostdin", "-progress", "pipe:1", "-i", file_path,
             "-map", "0:a", "-f", "null", "-"]
     try:
-        return subprocess.run(
+        result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -1104,7 +1116,21 @@ def _ffmpeg_decode(file_path, explode=True):
             timeout=600,
         )
     except subprocess.TimeoutExpired:
-        return None
+        raise CheckIncomplete("the decode timed out after 10 minutes") from None
+    _raise_if_incomplete(result)
+    return result
+
+
+def _raise_if_incomplete(result):
+    """CheckIncomplete when ffmpeg was stopped or could not read the file."""
+    stderr = result.stderr or ""
+    if result.returncode < 0:
+        raise CheckIncomplete(f"ffmpeg was stopped by signal {-result.returncode}")
+    if result.returncode != 0 and not stderr.strip():
+        raise CheckIncomplete(f"ffmpeg stopped with exit code {result.returncode} and no message")
+    # Matroska reports its own truncation as an I/O error.
+    if "File ended prematurely" not in stderr and any(m in stderr for m in _READ_FAILURE_MARKERS):
+        raise CheckIncomplete(f"ffmpeg could not read the file: {_clean_ffmpeg_errors(stderr)}")
 
 
 def _recheck_past_attached_picture(file_path, file_size):
@@ -1112,9 +1138,6 @@ def _recheck_past_attached_picture(file_path, file_size):
     picture and the AUDIO is judged on its own. Still fails closed — any
     non-picture error in this pass is corruption."""
     result = _ffmpeg_decode(file_path, explode=False)
-    if result is None:
-        return (file_path, True, "Decode timed out (>10 minutes)", file_size)
-
     significant = _strip_benign_metadata_noise(result.stderr)
     if result.returncode != 0 or significant:
         return (file_path, True,
@@ -1131,25 +1154,28 @@ def _verdict_after_clean_decode(file_path, result, file_size):
     """Clean, unless LENGTH_CHECK is on and length_check finds the file cut short."""
     if not _parse_env_bool("LENGTH_CHECK", True):
         return (file_path, False, None, file_size)
-    reason = length_check.cut_short_reason(
-        file_path, length_check.decoded_seconds(result.stdout))
+    try:
+        reason = length_check.cut_short_reason(
+            file_path, length_check.decoded_seconds(result.stdout))
+    except subprocess.TimeoutExpired:
+        raise CheckIncomplete("the length check timed out") from None
+    except OSError as e:
+        raise CheckIncomplete(f"the length check could not finish: {e}") from e
     return (file_path, reason is not None, reason, file_size)
 
 
 def check_audio_file(file_path):
     """Decode-test a single audio file. Pure function — no shared state.
-    Returns (file_path, is_corrupt, reason, size)."""
+    Returns (file_path, is_corrupt, reason, size); raises CheckIncomplete when it cannot tell."""
     try:
         file_size = os.path.getsize(file_path)
-        if file_size < 1024:
-            return (file_path, True,
-                    f"File too small ({file_size} bytes)", file_size)
     except OSError as e:
-        return (file_path, True, f"File not accessible: {e}", 0)
+        raise CheckIncomplete(f"BeatsCheck could not read the file: {e}") from e
+    if file_size < 1024:
+        return (file_path, True,
+                f"File too small ({file_size} bytes)", file_size)
 
     result = _ffmpeg_decode(file_path)
-    if result is None:
-        return (file_path, True, "Decode timed out (>10 minutes)", file_size)
 
     if result.returncode != 0:
         # A malformed cover-art block aborts input open under explode before
@@ -1396,6 +1422,14 @@ def _run_scan_inner(input_folder, output_folder, log_file, log_dir,
             file_path = pending.pop(future)
             try:
                 file_path, is_corrupt, reason, size = future.result()
+            except CheckIncomplete as exc:
+                # Not written to processed.txt, so the next scan checks it again.
+                logger.warning("Could not check %s: %s. It will be checked "
+                               "again next scan.", file_path, exc)
+                log.write(f"WARN: {file_path} - {exc}\n")
+                log.flush()
+                checked += 1
+                return
             except Exception as exc:
                 logger.exception("Unexpected error checking %s",
                                  file_path)
@@ -2168,6 +2202,9 @@ def _reverify_before_delete(to_delete, tracking, log_dir, log_file):
     for path in to_delete:
         try:
             _, is_corrupt, _, _ = check_audio_file(path)
+        except CheckIncomplete as exc:
+            logger.warning("Could not re-verify %s (%s) — skipping delete", path, exc)
+            continue
         except Exception:
             logger.exception("Re-verify failed for %s — skipping delete", path)
             continue
@@ -3057,9 +3094,9 @@ run_interval = 0
 ##   Avoids flagging files being actively downloaded.
 min_file_age = 30
 
-## length_check — flag MP3, MP2, Ogg, Opus and WMA files
-##   whose audio stops partway through (an interrupted
-##   download or copy). true = on, false = off.
+## length_check — flag MP3, Ogg, Opus and WMA files whose
+##   audio stops partway through (an interrupted download
+##   or copy). true = on, false = off.
 length_check = true
 
 

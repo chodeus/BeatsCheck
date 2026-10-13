@@ -53,7 +53,8 @@ def decoded_seconds(progress):
 def cut_short_reason(path, decoded):
     """Why a cleanly decoded file was cut short, or None."""
     ext = os.path.splitext(path)[1].lower()
-    if ext in (".mp3", ".mp2"):
+    # ffmpeg reads no length header for MP2 (Layer II), so it only estimates one.
+    if ext == ".mp3":
         return None if decoded is None else _mpeg_reason(path, decoded)
     if ext in (".ogg", ".opus"):
         return _ogg_reason(path)

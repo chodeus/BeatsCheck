@@ -12,15 +12,15 @@ FLAC, MP3, M4A, OGG, Opus, WAV, WMA, AAC, AIFF, APE, WavPack, ALAC, M4B, M4P, MP
 
 ## How It Works
 
-Each audio file is decoded end-to-end with `ffmpeg -v error -err_detect explode -xerror -nostdin -progress pipe:1 -i <file> -map 0:a -f null -`. `-err_detect explode` and `-xerror` make ffmpeg stop at the first decode error, and `-map 0:a` ensures only audio streams are tested. Files that fail are flagged as corrupt. The log, the WebUI and the delete review explain each one in plain English, and ffmpeg's own error text is kept in the WebUI, the delete review and `beats_check.log`. A clean `corrupt.txt` list is written for scripting or interactive deletion.
+Each audio file is decoded end-to-end with `ffmpeg -v error -err_detect explode -xerror -nostdin -progress pipe:1 -i <file> -map 0:a -f null -`. `-err_detect explode` and `-xerror` make ffmpeg stop at the first decode error, and `-map 0:a` ensures only audio streams are tested. Files that fail are flagged as corrupt. A file BeatsCheck cannot read, a decode that times out and an ffmpeg run that is stopped are logged as warnings instead, and checked again on the next scan. The log, the WebUI and the delete review explain each one in plain English, and ffmpeg's own error text is kept in the WebUI, the delete review and `beats_check.log`. A clean `corrupt.txt` list is written for scripting or interactive deletion.
 
 Some files decode without an error even though their end is missing. With `length_check` on (the default), BeatsCheck also flags a file as cut short, but only when the file itself shows the cut: it stops partway through an audio frame, page or packet, which is what an interrupted download or copy leaves behind. A file that is complete but carries a wrong header is never flagged. A file is cut short when:
 
-- an MP3 or MP2 decodes more than 2 seconds and more than 2% shorter than the length in its Xing/Info/VBRI header, and stops partway through its last frame
+- an MP3 decodes more than 2 seconds and more than 2% shorter than the length in its Xing/Info/VBRI header, and stops partway through its last frame
 - an Ogg or Opus file stops partway through a page, and the last complete page has no end-of-stream flag
 - a WMA file is smaller than the file size its header records, stops partway through a packet, and is missing more than 2 seconds and more than 2% of the length its header records
 
-Decoding can't catch everything: an MP3 or MP2 with no usable length header, damage inside a WAV or AIFF file (they carry no checksums) and flipped bits in an MP3 all play through without an error. Files already listed in `processed.txt` get the length check on the next full rescan (`rescan --fresh`).
+Some damage still plays through without an error: an MP2, or an MP3 with no usable length header, that was cut short; damage inside a WAV or AIFF file (they carry no checksums); and flipped bits in an MP3. Files already listed in `processed.txt` get the length check on the next full rescan (`rescan --fresh`).
 
 ## Modes
 
@@ -134,7 +134,7 @@ docker exec beatscheck rescan report
 - **Graceful shutdown** — responds to SIGTERM/SIGINT, finishes in-progress files then exits cleanly
 - **Resume support** — tracks already-checked files in `processed.txt` across runs (essential for multi-hour scans)
 - **CPU throttled** — `nice(10)` + configurable `--cpus` to avoid impacting other services
-- **10 min per-file timeout** — prevents hangs on severely corrupt files
+- **10 min per-file timeout** — prevents hangs on severely corrupt files; a file that times out is logged as a warning and checked again next scan
 - **Docker HEALTHCHECK** — verifies process is running and heartbeat is fresh
 - **Hardlink aware** — logs link count when corrupt files have multiple hard links
 - **Atomic JSON writes** — crash-safe output files (no corruption on power loss)
@@ -155,7 +155,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | `delete_after` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |
 | `max_auto_delete` | `50` | Safety threshold — abort auto-delete if more than this many files would be removed. `0` = no limit |
 | `min_file_age` | `30` | Skip files modified within this many minutes. Prevents flagging active downloads |
-| `length_check` | `true` | Flag MP3, MP2, Ogg, Opus and WMA files whose audio stops partway through (an interrupted download or copy). See [How It Works](#how-it-works) |
+| `length_check` | `true` | Flag MP3, Ogg, Opus and WMA files whose audio stops partway through (an interrupted download or copy). See [How It Works](#how-it-works) |
 | `log_level` | `INFO` | Logging verbosity: `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `max_log_mb` | `50` | Rotate log and do fresh full scan when log exceeds this size. `0` = never rotate |
 | `lidarr_url` | *(empty)* | Lidarr instance URL (e.g. `http://lidarr:8686`). Enables Lidarr API integration |

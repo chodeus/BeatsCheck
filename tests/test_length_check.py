@@ -88,7 +88,7 @@ def test_mp3_is_cut_short_only_past_both_floors(ffmpeg_says, tmp_path, decoded, 
 
 def test_mp3_reason_names_both_lengths(ffmpeg_says, tmp_path):
     ffmpeg_says(_dump("00:04:05.00"))
-    reason = length_check.cut_short_reason(_mp3(tmp_path, ext=".mp2"), 121.3)
+    reason = length_check.cut_short_reason(_mp3(tmp_path), 121.3)
     assert reason == (
         "Cut short: decodes 2:01 of the 4:05 its header declares")
 
@@ -201,9 +201,10 @@ def test_a_failed_probe_is_raised_not_read_as_clean(monkeypatch, tmp_path, retur
         length_check.cut_short_reason(path, 10.0)
 
 
-def test_other_formats_are_not_probed(ffmpeg_says):
+@pytest.mark.parametrize("ext", [".flac", ".mp2"])
+def test_other_formats_are_not_probed(ffmpeg_says, tmp_path, ext):
     calls = ffmpeg_says(_dump("00:04:05.00"))
-    reason = length_check.cut_short_reason("/music/a.flac", 1.0)
+    reason = length_check.cut_short_reason(_mp3(tmp_path, ext=ext), 1.0)
     assert reason is None
     assert calls == []
 

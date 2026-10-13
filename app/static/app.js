@@ -35,7 +35,7 @@ const CONFIG_SCHEMA = [
   { key: 'min_file_age',     label: 'Min File Age',     type: 'number', default: '30',
     desc: 'Skip files modified in the last N minutes (avoids flagging active downloads)' },
   { key: 'length_check',     label: 'Cut-Short Check',  type: 'select', options: ['false','true'], default: 'true',
-    desc: 'Flag MP3, MP2, Ogg, Opus and WMA files whose audio stops partway through (an interrupted download or copy)' },
+    desc: 'Flag MP3, Ogg, Opus and WMA files whose audio stops partway through (an interrupted download or copy)' },
 
   { section: 'When Corrupt Files Are Found',
     help: 'What happens after a scan finds corrupt files. By default, corrupt files are only logged — nothing is deleted unless you configure it here or use the Corrupt Files page.' },

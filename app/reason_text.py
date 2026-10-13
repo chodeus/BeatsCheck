@@ -12,6 +12,7 @@ _REASON_TEXT = (
      "The file is almost empty, so the download or copy most likely failed."),
     # Matroska reports a truncated file as an I/O error after this line.
     (("File ended prematurely",), _ENDS_EARLY),
+    # Read failures, timeouts and stopped runs are now warnings; older corrupt lists hold them.
     (("File not accessible", "Permission denied", "Input/output error",
       "No such file or directory"),
      "BeatsCheck could not read the file (a permissions or disk problem). "
