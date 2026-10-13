@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0](https://github.com/chodeus/BeatsCheck/compare/v1.4.2...v1.5.0) (2026-10-13)
+
+
+### Features
+
+* explain corrupt reasons in plain English and flag cut-short files ([de75fd9](https://github.com/chodeus/BeatsCheck/commit/de75fd988950d91638ce0279ade63d7f00c2e9fd))
+
+
+### Bug Fixes
+
+* warn and retry when a check cannot finish, and drop MP2 from the length check ([37491dd](https://github.com/chodeus/BeatsCheck/commit/37491dde66d919f9bd98659615f960662061d150))
+
 ## [1.4.2](https://github.com/chodeus/BeatsCheck/compare/v1.4.1...v1.4.2) (2026-10-09)
 
 
