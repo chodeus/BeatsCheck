@@ -207,7 +207,8 @@ reviews:
     - path: "compose.yaml"
       instructions: |
         - Keep PUID/PGID/UMASK and the volume layout consistent with the Dockerfile
-          and README; a drift here silently breaks the privilege drop for users.
+          and docs/configuration.md; a drift here silently breaks the privilege
+          drop for users.
         - No secrets inline — reference an env file or an existing environment
           variable, never a literal token.
         - Don't add privileged, host network mode, or a docker-socket mount.
@@ -234,7 +235,7 @@ reviews:
           change to rw or a new host path that widens what the container can
           delete.
         - Every <Config> (PUID/PGID/UMASK/TZ, /config, port 8484) must match the
-          Dockerfile, compose.yaml and README; a renamed env var here without
+          Dockerfile, compose.yaml and docs/configuration.md; a renamed env var here without
           the matching entrypoint change breaks fresh installs silently.
     - path: "**"
       instructions: |-
