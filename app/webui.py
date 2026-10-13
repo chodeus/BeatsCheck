@@ -375,6 +375,7 @@ from main import (  # noqa: E402
     _parse_config_lines, _release_scan_lock, write_json_atomic,
     write_text_atomic,
 )
+import reason_text  # noqa: E402
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
 
 _config_write_lock = threading.Lock()
@@ -495,7 +496,9 @@ def _read_corrupt_list(config_dir):
     result = []
     for p in paths:
         info = details.get(p, {})
-        entry = {"path": p, "reason": info.get("reason", "")}
+        reason = info.get("reason", "")
+        entry = {"path": p, "reason": reason,
+                 "explanation": reason_text.describe(reason)}
         if "trackfileId" in info:
             entry["has_lidarr_id"] = True
         try:

@@ -34,6 +34,8 @@ const CONFIG_SCHEMA = [
     desc: 'Hours between automatic scans. 0 = scan once then wait. 24 = daily. 168 = weekly' },
   { key: 'min_file_age',     label: 'Min File Age',     type: 'number', default: '30',
     desc: 'Skip files modified in the last N minutes (avoids flagging active downloads)' },
+  { key: 'length_check',     label: 'Cut-Short Check',  type: 'select', options: ['false','true'], default: 'true',
+    desc: 'Flag MP3, Ogg, Opus and WMA files whose audio stops partway through (an interrupted download or copy)' },
 
   { section: 'When Corrupt Files Are Found',
     help: 'What happens after a scan finds corrupt files. By default, corrupt files are only logged — nothing is deleted unless you configure it here or use the Corrupt Files page.' },
@@ -672,7 +674,7 @@ async function loadRecentFlagged() {
       <div class="recent-dot"></div>
       <div class="recent-main">
         <div class="recent-name">${escHtml(name)}</div>
-        <div class="recent-error">${escHtml(f.reason || 'Corrupt')}</div>
+        <div class="recent-error" title="${escHtml(f.reason || '')}">${escHtml(f.explanation || f.reason || 'Corrupt')}</div>
       </div>
       <div class="recent-size">${f.missing ? 'N/A' : formatSize(f.size)}</div>
     </div>`;
@@ -782,6 +784,7 @@ function applyCorruptFilters() {
   if (q) {
     filtered = filtered.filter(f =>
       f.path.toLowerCase().includes(q) || (f.reason || '').toLowerCase().includes(q)
+        || (f.explanation || '').toLowerCase().includes(q)
     );
   }
   if (corruptView === 'albums') {
@@ -848,7 +851,7 @@ function renderCorruptAlbums(files) {
       html += `<tr class="album-file ${cls}" data-album="${safeDir}" style="display:none">
         <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
         <td><span style="padding-left:1.5rem;color:var(--text-dim);font-size:.82rem">${escHtml(name)}</span>
-          <span style="font-size:.78rem;color:var(--text-muted);margin-left:.5rem">${escHtml(f.reason || '')}</span></td>
+          <span style="font-size:.78rem;color:var(--text-muted);margin-left:.5rem" title="${escHtml(f.reason || '')}">${escHtml(f.explanation || f.reason || '')}</span></td>
         <td class="col-size">${f.missing ? 'N/A' : formatSize(f.size)}</td>
         <td class="col-actions"><button class="btn btn-danger btn-sm" onclick="deleteSingle(this)" data-path="${safePath}" ${f.missing ? 'disabled' : ''}>Delete</button></td>
       </tr>`;
@@ -1163,7 +1166,8 @@ function renderCorruptTable(files) {
     const name = f.path.split('/').pop();
     const dir = f.path.split('/').slice(0, -1).join('/');
     const safePath = escHtml(f.path);
-    const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--dg)">${escHtml(f.reason)}</span>` : '';
+    const reason = f.reason ? `<br><span style="font-size:.78rem;color:var(--dg)">${escHtml(f.explanation || f.reason)}</span>`
+      + `<br><span class="mono" style="font-size:.7rem;color:var(--txd)">${escHtml(f.reason)}</span>` : '';
     return `<tr class="${cls}">
       <td class="col-check"><input type="checkbox" class="file-check" data-path="${safePath}" ${f.has_lidarr_id ? 'data-lidarr="1"' : ''} onchange="updateDeleteBtn()" aria-label="Select ${escHtml(name)}"></td>
       <td><div class="file-path" title="${safePath}"><strong>${escHtml(name)}</strong>${reason}<br><span style="color:var(--txd);font-size:.75rem">${escHtml(dir)}</span></div></td>
