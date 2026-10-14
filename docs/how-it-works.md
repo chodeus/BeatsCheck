@@ -30,7 +30,7 @@ Some damage still plays through without an error: an MP2, or an MP3 with no usab
 - **Symlink boundary check** — won't traverse symlinks that point outside the music directory
 - **Graceful shutdown** — responds to SIGTERM/SIGINT, finishes in-progress files then exits cleanly
 - **Resume support** — tracks already-checked files in `processed.txt` across runs (essential for multi-hour scans)
-- **CPU throttled** — `nice(10)` + configurable `--cpus` to avoid impacting other services
+- **CPU throttled** — `nice(10)` + configurable `--cpus` to keep its CPU use down (disk reads aren't throttled)
 - **10 min per-file timeout** — prevents hangs on severely corrupt files; a file that times out is logged as a warning and checked again next scan
 - **Docker HEALTHCHECK** — verifies process is running and heartbeat is fresh
 - **Hardlink aware** — logs link count when corrupt files have multiple hard links
