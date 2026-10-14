@@ -2719,7 +2719,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                            log_dir=None, blocklist=False, search=True,
                            progress_cb=None, cancel_cb=None,
                            search_wait_seconds=30):
-    """Delete corrupt files through Lidarr one album at a time; returns (deleted_count, affected_album_ids)."""
+    """Delete Lidarr-matched files via the API per album, the rest directly; returns (deleted_count, affected_album_ids)."""
     corrupt_details = _load_corrupt_details(
         log_dir or os.path.dirname(log_file))
 
