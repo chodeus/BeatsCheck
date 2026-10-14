@@ -13,8 +13,8 @@ lidarr_blocklist = true
 ## How it works
 
 1. **Scan** — corrupt files are detected and matched to Lidarr trackfile IDs via path suffix matching. IDs are stored in `corrupt_details.json` so delete operations don't need to re-resolve them.
-2. **Blocklist** (`LIDARR_BLOCKLIST=true`) — before deletion, the most recent grab for each affected album is marked as failed. Lidarr auto-creates a blocklist entry so the same corrupt release is not re-downloaded. **If blocklist fails, deletion is aborted.**
-3. **Delete** — track files are removed via Lidarr's bulk delete API. Albums stay monitored and show as "missing". **If the API call fails, deletion is aborted** (no silent fallback to filesystem delete).
+2. **Blocklist** (`LIDARR_BLOCKLIST=true`) — before deletion, the most recent grab for each affected album is marked as failed. Lidarr auto-creates a blocklist entry so the same corrupt release is not re-downloaded. **If marking the grab as failed fails, that album is skipped.** An album with no grab history (for example, one imported by hand) is deleted without a blocklist entry. So is an album whose history lookup fails, because BeatsCheck cannot tell that apart from no history.
+3. **Delete** — track files are removed via Lidarr's bulk delete API. Albums stay monitored and show as "missing". If the bulk call fails, an album with more than one track file has each one retried on its own. **If nothing is deleted, the album is skipped** (no fallback to filesystem delete). If only some retries succeed, the log counts all of the album's files as deleted, but files still on disk stay in `corrupt.txt`.
 4. **Re-download** — monitored albums are automatically re-searched by Lidarr after the trackfiles are deleted. No manual intervention needed.
 
 ## Unmonitored albums
@@ -33,9 +33,10 @@ BeatsCheck runs in a container where music is mounted at `/data`, while Lidarr s
 
 ## Error handling
 
-All Lidarr API operations are fail-safe:
-- If blocklist fails → delete is aborted, error shown
-- If bulk delete API fails → delete is aborted, error shown
+When a Lidarr API call fails:
+- Marking the grab as failed fails → that album is skipped, error shown
+- The grab history lookup fails → the album is deleted without a blocklist entry
+- Bulk delete fails → each track file is retried on its own (albums with more than one); if none succeed, the album is skipped and listed for manual deletion
 - If Lidarr is unreachable when a scan ends → the files it flagged get no Lidarr ID yet, and each later scan tries again; a file that still has no ID when it is deleted is deleted directly
 - Files not tracked by Lidarr (cover art, .nfo, etc.) are deleted directly via `os.remove`
 

@@ -2878,8 +2878,8 @@ def _lidarr_mark_history_failed(base_url, api_key, history_id):
 
 def _lidarr_blocklist_albums(base_url, api_key, album_ids):
     """Blocklist the most recent grab for each album by marking it as failed.
-    Returns (blocklisted_count, failed_count). A failed_count > 0 means
-    some albums could not be blocklisted (API error, not missing history)."""
+    Returns (blocklisted_count, failed_count); a failed history lookup
+    counts as no history, not as a failure."""
     blocklisted = 0
     failed = 0
     for album_id in album_ids:
