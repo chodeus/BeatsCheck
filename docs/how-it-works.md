@@ -26,7 +26,7 @@ Some damage still plays through without an error: an MP2, or an MP3 with no usab
 
 - **Setup mode by default** — container starts idle, nothing happens until you choose a mode
 - **Read-only music mount** — kernel-enforced via Docker `:ro` flag (change to `rw` only for `delete`/`move` modes)
-- **`-xerror` flag** — fail-fast on decode errors, no false positives from partial decodes
+- **Strict decode checks** — `-err_detect explode` and `-xerror` stop ffmpeg at the first decode error. A run that exits cleanly but still prints an error (other than harmless tag warnings) is flagged too, so a skipped bad frame isn't missed
 - **Symlink boundary check** — won't traverse symlinks that point outside the music directory
 - **Graceful shutdown** — responds to SIGTERM/SIGINT, finishes in-progress files then exits cleanly
 - **Resume support** — tracks already-checked files in `processed.txt` across runs (essential for multi-hour scans)
