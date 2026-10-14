@@ -2827,15 +2827,14 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
 
 
 def _lidarr_get_album_history(base_url, api_key, album_id):
-    """Fetch the most recent grabbed history record for an album.
-    Returns list of history records (at most 1)."""
+    """Fetch an album's most recent grab record: a list of at most one, or None if the request fails."""
     url = (f"{base_url}/api/v1/history"
            f"?albumId={album_id}&eventType=1"
            f"&sortKey=date&sortDirection=descending"
            f"&pageSize=1&page=1")
     result = _lidarr_request(url, api_key)
     if result is None:
-        return []
+        return None
     return result.get("records", [])
 
 
@@ -2847,11 +2846,16 @@ def _lidarr_mark_history_failed(base_url, api_key, history_id):
 
 
 def _lidarr_blocklist_albums(base_url, api_key, album_ids):
-    """Mark each album's latest grab failed; returns (blocklisted, failed), a failed history lookup counting as no history."""
+    """Mark each album's latest grab failed; returns (blocklisted, failed), counting a failed history lookup as failed."""
     blocklisted = 0
     failed = 0
     for album_id in album_ids:
         history = _lidarr_get_album_history(base_url, api_key, album_id)
+        if history is None:
+            failed += 1
+            logger.error("  Blocklist: could not read grab history for "
+                         "album %d", album_id)
+            continue
         if not history:
             logger.debug("  Blocklist: no grab history for album %d "
                          "— may have been imported manually", album_id)
