@@ -2719,15 +2719,7 @@ def _lidarr_delete_corrupt(base_url, api_key, corrupt_paths, log_file,
                            log_dir=None, blocklist=False, search=True,
                            progress_cb=None, cancel_cb=None,
                            search_wait_seconds=30):
-    """Delete corrupt files via Lidarr API, one album at a time.
-    Reads IDs from corrupt_details.json (resolved at scan time).
-    Re-resolves IDs before each delete to handle stale entries.
-    Falls back to direct filesystem delete when Lidarr API fails.
-    Sequential processing prevents flooding indexers with searches.
-    The per-album search wait (capped at *search_wait_seconds*) both
-    paces indexer requests and gives Lidarr time to log whether it
-    grabbed a replacement release.
-    Returns (deleted_count, affected_album_ids)."""
+    """Delete Lidarr-matched files via the API per album, the rest directly; returns (deleted_count, affected_album_ids)."""
     corrupt_details = _load_corrupt_details(
         log_dir or os.path.dirname(log_file))
 
@@ -2877,9 +2869,7 @@ def _lidarr_mark_history_failed(base_url, api_key, history_id):
 
 
 def _lidarr_blocklist_albums(base_url, api_key, album_ids):
-    """Blocklist the most recent grab for each album by marking it as failed.
-    Returns (blocklisted_count, failed_count). A failed_count > 0 means
-    some albums could not be blocklisted (API error, not missing history)."""
+    """Mark each album's latest grab failed; returns (blocklisted, failed), a failed history lookup counting as no history."""
     blocklisted = 0
     failed = 0
     for album_id in album_ids:
