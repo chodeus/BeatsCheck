@@ -14,7 +14,7 @@ The log, the WebUI and the delete review explain each corrupt file in plain Engl
 
 ## Cut-short files
 
-Some files decode without an error even though their end is missing. With `length_check` on (the default), BeatsCheck also flags a file as cut short, but only when the file itself shows the cut: it stops partway through an audio frame, page or packet, which is what an interrupted download or copy leaves behind. A file that is complete but carries a wrong header is never flagged. A file is cut short when:
+Some files decode without an error even though their end is missing. With `length_check` on (the default), BeatsCheck also flags a file as cut short, but only when the file itself shows the cut: it stops partway through an audio frame, page or packet, which is what an interrupted download or copy leaves behind. A wrong length in the header does not flag a file on its own. A file is cut short when:
 
 - an MP3 decodes more than 2 seconds and more than 2% shorter than the length in its Xing/Info/VBRI header, and stops partway through its last frame
 - an Ogg or Opus file stops partway through a page, and the last complete page has no end-of-stream flag
@@ -44,4 +44,4 @@ Some damage still plays through without an error: an MP2, or an MP3 with no usab
 | **CPU** | 10-20% total with 6 workers (audio decode is light) |
 | **RAM** | Under 500MB |
 | **Disk I/O** | The bottleneck — expect 6-15 hours depending on array speed |
-| **Other services** | Unaffected (low priority + CPU cap) |
+| **Other services** | Low CPU priority (`nice` 10), plus a `--cpus` cap if you set one; disk reads still compete with anything else on the same disks |
