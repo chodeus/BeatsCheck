@@ -16,7 +16,7 @@ docker compose up -d
 ## Docker run
 
 ```bash
-# Scan (report mode, run once)
+# Scan once in report mode; the container then stays idle (Ctrl+C stops and removes it)
 docker run --rm \
   -v /path/to/music:/data:ro \
   -v /path/to/config:/config \
@@ -62,7 +62,7 @@ wget -O /boot/config/plugins/dockerMan/templates-user/my-BeatsCheck.xml \
 4. Verify paths match your setup:
    - **Data**: `/mnt/user/data` (or your music directory)
    - **Config**: `/mnt/user/appdata/beatscheck`
-5. Configure your settings (paths, workers, Lidarr if needed)
+5. Check the paths, and PUID, PGID, UMASK and timezone under the advanced view. Set workers, Lidarr and the other options in `/config/beatscheck.conf` or the WebUI after the first start
 6. Click **Apply** — the container starts idle in setup mode
 7. Open the container console and type `rescan report` to start scanning
 

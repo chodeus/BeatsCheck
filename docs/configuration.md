@@ -23,7 +23,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | `webui` | `false` | Enable the built-in [web interface](webui.md). Requires a published port |
 | `webui_port` | `8484` | Port for the web interface |
 
-Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set.
+Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set. A value saved in the WebUI overrides the environment variable until the container restarts.
 
 ## Container environment variables
 
@@ -37,7 +37,7 @@ These Docker-level settings are configured as environment variables:
 | `UMASK` | `002` | File creation mask |
 | `WEBUI_TRUSTED_PROXIES` | *(empty)* | Your reverse proxy's IP, e.g. `172.18.0.10` (give the proxy a fixed IP); several IPs or CIDRs are comma-separated. The login lockout honors `X-Forwarded-For` only from these addresses, to tell clients apart, so any host listed can pick its own lockout key: don't list a subnet that other containers share. The proxy must write the client's address into the header itself (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`); a proxy that passes the client's own header through lets clients dodge the lockout. Empty = every client behind the proxy shares one lockout. |
 
-Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/data/corrupted`, `/config` and are set via Docker volume mounts.
+`MUSIC_DIR`, `OUTPUT_DIR` and `CONFIG_DIR` default to `/data`, `/data/corrupted` and `/config`. `music_dir` and `output_dir` can also be set in `beatscheck.conf`. Each path must be inside a mounted volume.
 
 ## Output files (in /config)
 
@@ -59,4 +59,4 @@ Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/dat
 
 When the log exceeds 50 MB (`MAX_LOG_MB=50`), it's rotated to `beats_check.log.1` (keeping up to 3 old copies). The resume cache (`processed.txt`) is rotated alongside it, so the next scan does a fresh full re-check. Set `MAX_LOG_MB=0` to disable rotation.
 
-For a 100K file library, expect ~10 MB per full scan. With daemon mode, subsequent scans only log corrupt files so growth is slow.
+A scan logs a progress line every 100 files plus a few lines per corrupt file, so the log grows slowly.

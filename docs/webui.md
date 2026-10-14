@@ -53,7 +53,7 @@ On the Configuration page, **Access → Turn off login** asks for your current p
 - **Cross-site POSTs refused** — the API accepts only JSON POSTs, which a browser sends from another site only after a CORS check the WebUI never passes. This holds with the login off too
 - **Config allowlist** — only known configuration keys are accepted (arbitrary key injection blocked)
 - **Thread-safe config writes** — concurrent requests cannot corrupt the config file
-- **Delete validation** — files must be in `corrupt.txt` and inside the music directory; symlinks rejected
+- **Delete validation** — a file delete accepts only files in `corrupt.txt`; an album delete needs at least one of them in that folder, then removes the whole folder. Both must be inside the music directory; symlinks rejected
 - **Path traversal protection** — static file serving validates all paths against the static directory
 - **API key masking** — Lidarr API key shown as `********` in the UI
 - **No third-party Python packages** — the WebUI uses only the standard library

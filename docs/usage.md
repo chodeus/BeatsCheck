@@ -5,12 +5,9 @@
 Start a scan in report mode with `rescan report` from the container console (or set `mode = report`). BeatsCheck scans your library, writes its results and waits for the next interval:
 
 ```
-BeatsCheck v1.0.0 starting
-2026-01-15 10:00:00 | INFO     | BeatsCheck v1.0.0
-2026-01-15 10:00:00 | INFO     |   Mode:    report
-2026-01-15 10:00:00 | INFO     |   Workers: 6
-2026-01-15 10:00:00 | INFO     |   Library: 98432 files (2.8 TB)
-2026-01-15 10:00:00 | INFO     |   To scan: 98432 files (0 already processed)
+2026-01-15 10:00:00 | INFO     | BeatsCheck v1.0.0 — report mode, 6 workers
+2026-01-15 10:00:00 | INFO     |   Library: 98432 files (2.8 TB), 98432 to scan (0 already processed)
+2026-01-15 10:00:00 | INFO     |   (report mode - no files will be moved)
 2026-01-15 10:05:00 | INFO     | [5%] 5000/98432 checked, 2 corrupt, ETA 3h42m
 ```
 
@@ -38,7 +35,7 @@ Three options — pick what suits your workflow.
 
 ### Auto-delete after X days
 
-Set `delete_after = 7` (or `DELETE_AFTER=7`). Corrupt files are deleted automatically 7 days after they were first detected, which gives you time to review `corrupt.txt` before anything is removed. `max_auto_delete` aborts the run if too many files would go.
+Set `delete_after = 7` (or `DELETE_AFTER=7`). Auto-delete runs at the end of each scan and deletes corrupt files BeatsCheck first saw 7 or more days earlier, which gives you time to review `corrupt.txt` before anything is removed. With `run_interval = 0`, that happens only when you start a scan. `max_auto_delete` aborts the run if too many files would go.
 
 ### Interactive delete
 

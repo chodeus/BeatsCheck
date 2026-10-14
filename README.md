@@ -19,7 +19,7 @@ Supported formats: FLAC, MP3, M4A, OGG, Opus, WAV, WMA, AAC, AIFF, APE, WavPack,
 | Mode | What it does | Music mount | Safe? |
 |------|-------------|-------------|-------|
 | `setup` | Container starts idle, no scanning (default) | `ro` | Yes |
-| `report` | Scan and log only, writes `corrupt.txt` | `ro` | Yes |
+| `report` | Scan and log, writes `corrupt.txt`; auto-deletes too if `delete_after` is set | `ro` | Yes, while `delete_after = 0` |
 | `delete` | Interactive — prompts per album folder to delete | **`rw`** | You choose |
 | `move` | Auto-move corrupt files to quarantine folder | **`rw`** | Destructive |
 
