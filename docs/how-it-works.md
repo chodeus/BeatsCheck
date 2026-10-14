@@ -34,7 +34,7 @@ Some damage still plays through without an error: an MP2, or an MP3 with no usab
 - **10 min per-file timeout** — prevents hangs on severely corrupt files; a file that times out is logged as a warning and checked again next scan
 - **Docker HEALTHCHECK** — verifies process is running and heartbeat is fresh
 - **Hardlink aware** — logs link count when corrupt files have multiple hard links
-- **Atomic JSON writes** — crash-safe output files (no corruption on power loss)
+- **Atomic JSON writes** — output files are written to a temp file and renamed into place, so readers never see a half-written file
 - **Auto-delete safety threshold** — aborts if too many files flagged (prevents catastrophic deletion)
 
 ## Performance (3 TB library)

@@ -35,7 +35,8 @@ docker run -d --restart unless-stopped \
   -e WORKERS=6 \
   ghcr.io/chodeus/beatscheck:latest
 
-# Interactive delete (requires rw music mount)
+# Interactive delete needs the music mounted read-write: recreate the
+# daemon above with -v /path/to/music:/data (no :ro), then run
 docker exec -it beatscheck delete
 
 # Trigger a rescan
