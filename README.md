@@ -2,7 +2,7 @@
 
 > **This project is in active development.** Features may change between releases. Please report issues on [GitHub](https://github.com/chodeus/BeatsCheck/issues).
 
-BeatsCheck finds damaged music files. It decodes every file in your library with ffmpeg, flags the ones that fail or stop short, and explains in plain English what is wrong. You can then review them, delete them, or move them to a quarantine folder.
+BeatsCheck finds damaged music files. It decodes every file in your library with ffmpeg, flags the ones that fail or stop short, and explains in plain English what is wrong. You can then review them, delete them, or move them to a quarantine folder. Later scans check only new files; `rescan --fresh` checks everything again, including files replaced under the same name.
 
 **It starts in setup mode: nothing is scanned, moved or deleted until you choose to.**
 

@@ -6,7 +6,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `output_dir` | `/corrupted` | Quarantine destination for move mode. Must match a mounted volume |
+| `output_dir` | `/data/corrupted` | Quarantine destination for move mode. Must match a mounted volume |
 | `mode` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
 | `workers` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
 | `run_interval` | `0` | Hours between scans. `0` = scan once, then stay idle until `rescan`. `168` = weekly. `24` = daily |
@@ -37,7 +37,7 @@ These Docker-level settings are configured as environment variables:
 | `UMASK` | `002` | File creation mask |
 | `WEBUI_TRUSTED_PROXIES` | *(empty)* | Your reverse proxy's IP, e.g. `172.18.0.10` (give the proxy a fixed IP); several IPs or CIDRs are comma-separated. The login lockout honors `X-Forwarded-For` only from these addresses, to tell clients apart, so any host listed can pick its own lockout key: don't list a subnet that other containers share. The proxy must write the client's address into the header itself (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`); a proxy that passes the client's own header through lets clients dodge the lockout. Empty = every client behind the proxy shares one lockout. |
 
-Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/corrupted`, `/config` and are set via Docker volume mounts.
+Volume paths (`MUSIC_DIR`, `OUTPUT_DIR`, `CONFIG_DIR`) default to `/data`, `/data/corrupted`, `/config` and are set via Docker volume mounts.
 
 ## Output files (in /config)
 
