@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.5.4](https://github.com/chodeus/BeatsCheck/compare/v1.5.3...v1.5.4) (2026-10-14)
+
+
+### Bug Fixes
+
+* go idle when setup is saved while running, and let a rescan win over an earlier mode save ([da7ca00](https://github.com/chodeus/BeatsCheck/commit/da7ca00b31720eb82f91a44d875a4042bcff0135))
+* keep a rescan's mode through the config reload ([277f61d](https://github.com/chodeus/BeatsCheck/commit/277f61dfd507e2d2d480680df1e875553479dc5d))
+* re-read the config when a rescan arrives, so a save made just after it still applies ([29db41b](https://github.com/chodeus/BeatsCheck/commit/29db41b61ef2ee5169e4aded6af108ec3bd9ac51))
+
 ## [1.5.3](https://github.com/chodeus/BeatsCheck/compare/v1.5.2...v1.5.3) (2026-10-14)
 
 
