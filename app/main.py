@@ -901,8 +901,9 @@ def _apply_rescan_trigger(trigger, cfg):
         cfg.fresh_rescan = True
         trigger = trigger[len("fresh:"):]
     if trigger in ("report", "move"):
+        # Reload first so a save made before this rescan can't cancel it; only a later save does.
+        _reload_config(cfg)
         cfg.mode = cfg.rescan_mode = trigger
-        cfg.rescan_pending = True
         return True
     return False
 
@@ -3306,7 +3307,6 @@ def _load_config():
         mode=mode,
         saved_mode=mode,
         rescan_mode=None,
-        rescan_pending=False,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         workers=workers,
         run_interval=_env("RUN_INTERVAL", 0.0, float, strict=True, label="hours"),
@@ -3353,9 +3353,8 @@ def _reload_config(cfg):
         "OUTPUT_DIR", cfg.output_folder).rstrip("/")
     saved_mode = (os.environ.get("MODE") or cfg.saved_mode).lower()
     # A rescan's mode holds until the saved mode changes after it.
-    if saved_mode != cfg.saved_mode and not cfg.rescan_pending:
+    if saved_mode != cfg.saved_mode:
         cfg.rescan_mode = None
-    cfg.rescan_pending = False
     cfg.saved_mode = saved_mode
     cfg.mode = cfg.rescan_mode or saved_mode
     cfg.workers = max(1, _env("WORKERS", cfg.workers, int))

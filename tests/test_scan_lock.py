@@ -162,6 +162,7 @@ def test_the_redownload_check_holds_the_lock(tmp_path, monkeypatch):
 ])
 def test_setup_idle_keeps_the_fresh_request(monkeypatch, trigger, mode, fresh):
     monkeypatch.setattr(main, "_idle_wait", lambda *a: trigger)
+    monkeypatch.setattr(main, "_reload_config", lambda cfg: None)
     cfg = types.SimpleNamespace(log_dir="/x", lidarr_url=None,
                                 lidarr_api_key=None, mode="setup",
                                 fresh_rescan=False)

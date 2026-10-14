@@ -86,6 +86,14 @@ def test_a_mode_saved_just_before_a_rescan_does_not_cancel_it(tmp_path, monkeypa
     assert cfg.mode == "move"
 
 
+def test_a_mode_saved_just_after_a_rescan_replaces_it(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch, "report")
+    main._apply_rescan_trigger("move", cfg)
+    _save(tmp_path, "mode", "setup")
+    main._reload_config(cfg)
+    assert cfg.mode == "setup"
+
+
 def test_saving_setup_while_running_stops_the_scheduled_scans(tmp_path, monkeypatch):
     music = tmp_path / "music"
     music.mkdir()
