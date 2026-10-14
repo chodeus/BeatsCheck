@@ -14,14 +14,14 @@ KEY = "not-a-key"
 LIDARR_TRACK = "/music/Artist/Album/01.flac"
 
 
-def _lidarr(monkeypatch, up=True, tracks=(LIDARR_TRACK,)):
-    """Stub Lidarr: *up* False fails every request. Returns the requests made."""
+def _lidarr(monkeypatch, up=True, tracks=(LIDARR_TRACK,), album_up=True):
+    """Stub Lidarr: *up* False fails every request, *album_up* False only per-album ones. Returns the requests made."""
     calls = []
 
     def fake(url, api_key, method="GET", data=None, timeout=30):
         path = url.split("/api/v1/", 1)[1]
         calls.append(f"{method} {path.split('?', 1)[0]}")
-        if not up:
+        if not up or (not album_up and path.startswith("trackfile?albumId")):
             return None
         if path == "artist":
             return [{"id": 1, "path": "/music/Artist"}]
@@ -48,6 +48,13 @@ def _library(tmp_path):
     (cfg / "corrupt_details.json").write_text(json.dumps({str(track): {"reason": "damaged"}}))
     (cfg / "corrupt_tracking.json").write_text(json.dumps({str(track): "2020-01-01T00:00:00"}))
     return cfg, track
+
+
+def _folder_with_healthy_track(tmp_path):
+    cfg, track = _library(tmp_path)
+    healthy = track.parent / "02.flac"
+    healthy.write_bytes(b"x")
+    return cfg, track, healthy
 
 
 def _auto_delete(cfg, monkeypatch):
@@ -102,6 +109,26 @@ def test_webui_folder_delete_keeps_the_folder_when_lidarr_cannot_be_read(tmp_pat
         [str(track.parent)], str(cfg), music_dir=str(tmp_path / "data"), mode="whole")
     assert track.exists()
     assert result["count"] == 0 and result["errors"]
+
+
+def test_webui_folder_delete_keeps_the_folder_when_the_album_lookup_fails(tmp_path, monkeypatch):
+    cfg, track, healthy = _folder_with_healthy_track(tmp_path)
+    _lidarr(monkeypatch, album_up=False)
+    _webui_env(monkeypatch)
+    result = main.delete_album_folders(
+        [str(track.parent)], str(cfg), music_dir=str(tmp_path / "data"), mode="whole")
+    assert healthy.exists() and track.exists()
+    assert result["count"] == 0 and result["errors"]
+
+
+def test_interactive_folder_delete_keeps_the_folder_when_the_album_lookup_fails(tmp_path, monkeypatch):
+    cfg, track, healthy = _folder_with_healthy_track(tmp_path)
+    _lidarr(monkeypatch, album_up=False)
+    answers = iter(["i", "y"])
+    monkeypatch.setattr(builtins, "input", lambda *a: next(answers))
+    main._run_delete_mode_locked(str(cfg / "corrupt.txt"), str(cfg / "log.txt"), str(cfg),
+                                 str(tmp_path / "data"), URL, KEY, False)
+    assert healthy.exists() and track.exists()
 
 
 def test_interactive_delete_stops_when_lidarr_cannot_be_read(tmp_path, monkeypatch):

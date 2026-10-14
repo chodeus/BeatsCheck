@@ -477,8 +477,7 @@ def _list_folder_files(real):
 
 def _build_file_to_tfid(all_files, album_ids, corrupt_details,
                         lidarr_url, lidarr_key):
-    """Map folder files to Lidarr trackfile IDs via corrupt_details +
-    suffix-match fallback. Mutates *album_ids* with any new matches."""
+    """Map folder files to Lidarr trackfile IDs, adding new matches to *album_ids*; None if Lidarr can't be read."""
     file_to_tfid = {
         fp: corrupt_details[fp]["trackfileId"]
         for fp in all_files
@@ -489,8 +488,10 @@ def _build_file_to_tfid(all_files, album_ids, corrupt_details,
         return file_to_tfid
     album_tfs = []
     for aid in album_ids:
-        album_tfs.extend(_lidarr_get_trackfiles_by_album(
-            lidarr_url, lidarr_key, aid))
+        tfs = _lidarr_get_trackfiles_by_album(lidarr_url, lidarr_key, aid)
+        if tfs is None:
+            return None
+        album_tfs.extend(tfs)
     for fp in unmatched:
         match = _best_suffix_match(fp, album_tfs, min_score=1)
         if match:
@@ -643,6 +644,8 @@ def _delete_one_folder(folder, real, existing_corrupt, corrupt_details,
         file_to_tfid = _build_file_to_tfid(
             all_files, album_ids, corrupt_details,
             lidarr_url, lidarr_key)
+        if file_to_tfid is None:
+            return ([], [], "Lidarr lookup failed, nothing deleted")
         file_to_album = {
             fp: corrupt_details[fp]["albumId"]
             for fp in file_to_tfid
@@ -1763,7 +1766,7 @@ def _resolve_folder_trackfiles(folder, existing, corrupt_details,
                                album_ids, lidarr_url, lidarr_api_key):
     """Build trackfile ID map for all files in a folder.
     Uses stored IDs from corrupt_details, fetches remaining from Lidarr.
-    Returns (all_files, file_to_tfid, unmatched) or None on error."""
+    Returns (all_files, file_to_tfid, unmatched), or None if the folder or Lidarr can't be read."""
     all_files = []
     try:
         for entry in os.listdir(folder):
@@ -1773,27 +1776,11 @@ def _resolve_folder_trackfiles(folder, existing, corrupt_details,
     except OSError:
         return None
 
-    file_to_tfid = {
-        fp: corrupt_details[fp]["trackfileId"]
-        for fp in all_files
-        if "trackfileId" in corrupt_details.get(fp, {})
-    }
-
-    unmatched = [fp for fp in all_files if fp not in file_to_tfid]
-    if unmatched and album_ids:
-        album_tfs = []
-        for aid in album_ids:
-            album_tfs.extend(_lidarr_get_trackfiles_by_album(
-                lidarr_url, lidarr_api_key, aid))
-        for fp in unmatched:
-            match = _best_suffix_match(fp, album_tfs, min_score=1)
-            if match:
-                file_to_tfid[fp] = match["id"]
-                if match.get("albumId"):
-                    album_ids.add(match["albumId"])
-        unmatched = [fp for fp in all_files if fp not in file_to_tfid]
-
-    return all_files, file_to_tfid, unmatched
+    file_to_tfid = _build_file_to_tfid(
+        all_files, album_ids, corrupt_details, lidarr_url, lidarr_api_key)
+    if file_to_tfid is None:
+        return None
+    return all_files, file_to_tfid, [fp for fp in all_files if fp not in file_to_tfid]
 
 
 def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
@@ -1811,9 +1798,9 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
         folder, existing, corrupt_details, album_ids,
         lidarr_url, lidarr_api_key)
     if resolved is None:
-        print("           ERROR listing folder\n")
-        log.write(f"ERROR listing {folder}\n")
-        return (0, 0, 0, album_ids)
+        print("           ERROR: could not list the folder or read Lidarr. Nothing deleted.\n")
+        log.write(f"ERROR listing {folder} or reading Lidarr — nothing deleted\n")
+        return (0, 0, 0, set())
 
     all_files, file_to_tfid, direct_paths = resolved
     tf_ids = list(file_to_tfid.values())
@@ -2565,11 +2552,11 @@ def _lidarr_get_trackfiles(base_url, api_key, artist_id):
 
 
 def _lidarr_get_trackfiles_by_album(base_url, api_key, album_id):
-    """Fetch all track files for an album."""
+    """Fetch all track files for an album; None if the request fails."""
     url = f"{base_url}/api/v1/trackfile?albumId={album_id}"
     result = _lidarr_request(url, api_key)
     if result is None:
-        return []
+        return None
     return [{"id": tf["id"], "path": tf["path"],
              "albumId": tf.get("albumId", 0)} for tf in result]
 
