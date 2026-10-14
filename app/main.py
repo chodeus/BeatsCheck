@@ -902,6 +902,7 @@ def _apply_rescan_trigger(trigger, cfg):
         trigger = trigger[len("fresh:"):]
     if trigger in ("report", "move"):
         cfg.mode = cfg.rescan_mode = trigger
+        cfg.rescan_pending = True
         return True
     return False
 
@@ -3305,6 +3306,7 @@ def _load_config():
         mode=mode,
         saved_mode=mode,
         rescan_mode=None,
+        rescan_pending=False,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         workers=workers,
         run_interval=_env("RUN_INTERVAL", 0.0, float, strict=True, label="hours"),
@@ -3350,9 +3352,10 @@ def _reload_config(cfg):
     cfg.output_folder = os.environ.get(
         "OUTPUT_DIR", cfg.output_folder).rstrip("/")
     saved_mode = (os.environ.get("MODE") or cfg.saved_mode).lower()
-    # A rescan's mode holds until the saved mode itself changes.
-    if saved_mode != cfg.saved_mode:
+    # A rescan's mode holds until the saved mode changes after it.
+    if saved_mode != cfg.saved_mode and not cfg.rescan_pending:
         cfg.rescan_mode = None
+    cfg.rescan_pending = False
     cfg.saved_mode = saved_mode
     cfg.mode = cfg.rescan_mode or saved_mode
     cfg.workers = max(1, _env("WORKERS", cfg.workers, int))
@@ -3539,15 +3542,6 @@ def main():
     if isinstance(queue, list) and queue:
         logger.info("  Search queue: %d albums pending", len(queue))
 
-    if cfg.mode == "setup":
-        _webui_app_state.update(status="setup", mode="setup")
-        new_mode = _run_setup_idle(cfg)
-        if new_mode:
-            cfg.mode = new_mode
-            logger.info("Mode changed to: %s", cfg.mode)
-        else:
-            return
-
     if cfg.mode == "delete":
         corrupt_list_path = os.path.join(cfg.log_dir, "corrupt.txt")
         run_delete_mode(corrupt_list_path, cfg.log_file, cfg.log_dir,
@@ -3566,6 +3560,13 @@ def main():
         _reload_config(cfg)
         _maybe_rotate_logs(cfg)
         _poll_pending_redownloads(cfg)
+
+        if cfg.mode == "setup":
+            _webui_app_state.update(status="setup", mode="setup")
+            if not _run_setup_idle(cfg):
+                break
+            logger.info("Mode changed to: %s", cfg.mode)
+            continue
 
         if not os.path.isdir(cfg.input_folder):
             logger.error("Music directory not found: %s",

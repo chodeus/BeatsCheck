@@ -1,4 +1,4 @@
-"""A rescan's mode survives the config reload until the saved mode changes."""
+"""A rescan's mode survives the config reload until the saved mode changes after it; a saved setup goes idle."""
 
 import os
 import re
@@ -59,6 +59,7 @@ def test_a_saved_mode_change_replaces_the_rescan_mode(tmp_path, monkeypatch):
     assert cfg.mode == "setup"
     main._apply_rescan_trigger("report", cfg)
     main._reload_config(cfg)
+    main._reload_config(cfg)
     assert cfg.mode == "report"
 
 
@@ -75,3 +76,35 @@ def test_rescan_move_beats_a_docker_mode(tmp_path, monkeypatch):
     main._apply_rescan_trigger("move", cfg)
     main._reload_config(cfg)
     assert cfg.mode == "move"
+
+
+def test_a_mode_saved_just_before_a_rescan_does_not_cancel_it(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path, monkeypatch, "report")
+    _save(tmp_path, "mode", "setup")
+    main._apply_rescan_trigger("move", cfg)
+    main._reload_config(cfg)
+    assert cfg.mode == "move"
+
+
+def test_saving_setup_while_running_stops_the_scheduled_scans(tmp_path, monkeypatch):
+    music = tmp_path / "music"
+    music.mkdir()
+    cfg = _cfg(tmp_path, monkeypatch, "report", env={"MUSIC_DIR": str(music)})
+    _save(tmp_path, "run_interval", "24")
+    modes = []
+
+    def scan(*args, **kwargs):
+        modes.append(args[4])
+        _save(tmp_path, "mode", "setup")
+        if len(modes) > 1:
+            monkeypatch.setattr(main, "shutdown_requested", True)
+
+    monkeypatch.setattr(main, "_load_config", lambda: cfg)
+    monkeypatch.setattr(main.signal, "signal", lambda *a: None)
+    monkeypatch.setattr(os, "nice", lambda n: 0)
+    monkeypatch.setattr(main, "setup_logging", lambda *a, **k: None)
+    monkeypatch.setattr(main, "shutdown_requested", False)
+    monkeypatch.setattr(main, "run_scan", scan)
+    monkeypatch.setattr(main, "_idle_wait", lambda *a: None)
+    main.main()
+    assert modes == ["report"]
