@@ -901,7 +901,7 @@ def _apply_rescan_trigger(trigger, cfg):
         cfg.fresh_rescan = True
         trigger = trigger[len("fresh:"):]
     if trigger in ("report", "move"):
-        cfg.mode = trigger
+        cfg.mode = cfg.rescan_mode = trigger
         return True
     return False
 
@@ -3303,6 +3303,8 @@ def _load_config():
         log_dir=log_dir,
         log_file=log_file,
         mode=mode,
+        saved_mode=mode,
+        rescan_mode=None,
         log_level=os.environ.get("LOG_LEVEL", "INFO"),
         workers=workers,
         run_interval=_env("RUN_INTERVAL", 0.0, float, strict=True, label="hours"),
@@ -3347,7 +3349,12 @@ def _reload_config(cfg):
         "MUSIC_DIR", cfg.input_folder).rstrip("/")
     cfg.output_folder = os.environ.get(
         "OUTPUT_DIR", cfg.output_folder).rstrip("/")
-    cfg.mode = (os.environ.get("MODE") or cfg.mode).lower()
+    saved_mode = (os.environ.get("MODE") or cfg.saved_mode).lower()
+    # A rescan's mode holds until the saved mode itself changes.
+    if saved_mode != cfg.saved_mode:
+        cfg.rescan_mode = None
+    cfg.saved_mode = saved_mode
+    cfg.mode = cfg.rescan_mode or saved_mode
     cfg.workers = max(1, _env("WORKERS", cfg.workers, int))
     cfg.run_interval = _env("RUN_INTERVAL", cfg.run_interval, float)
     cfg.delete_after = _env("DELETE_AFTER", cfg.delete_after, float)
@@ -3372,7 +3379,9 @@ def _run_setup_idle(cfg):
     trigger = _idle_wait(cfg.log_dir, None, cfg.lidarr_url, cfg.lidarr_api_key)
     if trigger is None:
         return None
-    return cfg.mode if _apply_rescan_trigger(trigger, cfg) else "report"
+    if not _apply_rescan_trigger(trigger, cfg):
+        _apply_rescan_trigger("report", cfg)
+    return cfg.mode
 
 
 class _NullAppState:
