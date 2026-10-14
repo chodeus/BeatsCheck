@@ -154,6 +154,12 @@ def write_text_atomic(path, text):
     os.rename(tmp_path, path)
 
 
+def write_corrupt_list(path, paths):
+    """Write corrupt.txt atomically: one path per line, deduplicated, in path order."""
+    ordered = sorted(set(paths), key=lambda p: (p.casefold(), p))
+    write_text_atomic(path, "".join(p + "\n" for p in ordered))
+
+
 def _migrate_corrupt_details(details):
     """Normalize legacy string values to {'reason': str}. Mutates in place."""
     for k, v in list(details.items()):
@@ -299,15 +305,8 @@ def delete_corrupt_files(paths, config_dir, music_dir=None,
             if details.get(fp, {}).get("albumId")
         }
 
-        deleted_set = set(deleted)
-        remaining = sorted(allowed - deleted_set)
-        # Rewrite corrupt.txt atomically
-        tmp = corrupt_path + ".tmp"
         try:
-            with open(tmp, 'w', encoding='utf-8') as f:
-                for p in remaining:
-                    f.write(p + '\n')
-            os.rename(tmp, corrupt_path)
+            write_corrupt_list(corrupt_path, allowed - set(deleted))
         except OSError:
             pass
 
@@ -716,14 +715,8 @@ def _finalize_delete_state(config_dir, deleted_files,
     details_path = os.path.join(config_dir, "corrupt_details.json")
     tracking_path = os.path.join(config_dir, "corrupt_tracking.json")
     allowed_corrupt = _load_lines_as_set(corrupt_path)
-    deleted_set = set(deleted_files)
-    remaining = sorted(allowed_corrupt - deleted_set)
-    tmp = corrupt_path + ".tmp"
     try:
-        with open(tmp, 'w', encoding='utf-8') as f:
-            for p in remaining:
-                f.write(p + '\n')
-        os.rename(tmp, corrupt_path)
+        write_corrupt_list(corrupt_path, allowed_corrupt - set(deleted_files))
     except OSError:
         pass
     for fp in deleted_files:
@@ -1321,11 +1314,7 @@ def _finalize_scan(log_dir, corrupt_list_path, corrupt_details,
     current_corrupt = _load_lines_as_set(corrupt_list_path)
     live_corrupt = [p for p in current_corrupt
                     if os.path.exists(p) and p not in healed]
-    tmp_corrupt = corrupt_list_path + ".tmp"
-    with open(tmp_corrupt, 'w', encoding='utf-8') as f:
-        for p in live_corrupt:
-            f.write(p + "\n")
-    os.rename(tmp_corrupt, corrupt_list_path)
+    write_corrupt_list(corrupt_list_path, live_corrupt)
 
     if lidarr_url and lidarr_api_key and corrupt_details:
         _resolve_lidarr_ids(corrupt_details, lidarr_url, lidarr_api_key)
@@ -1992,9 +1981,7 @@ def _run_interactive_delete(folders, total_folders, corrupt_details,
         log.write(summary)
 
     remaining = [f for f in files if os.path.exists(f)]
-    with open(corrupt_list_path, 'w', encoding='utf-8') as f:
-        for fp in remaining:
-            f.write(fp + "\n")
+    write_corrupt_list(corrupt_list_path, remaining)
     if remaining:
         print(f"Updated {corrupt_list_path} ({len(remaining)} files remaining)")
     else:
@@ -2013,8 +2000,7 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
 
     if not existing:
         print("All files already deleted.")
-        with open(corrupt_list_path, 'w') as f:
-            pass
+        write_corrupt_list(corrupt_list_path, [])
         return
 
     total_size = 0
@@ -2047,9 +2033,7 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
             deleted, album_ids = result
             print(f"\n{deleted}/{len(existing)} files deleted")
             remaining = [f for f in files if os.path.exists(f)]
-            with open(corrupt_list_path, 'w', encoding='utf-8') as f:
-                for fp in remaining:
-                    f.write(fp + "\n")
+            write_corrupt_list(corrupt_list_path, remaining)
             if not remaining:
                 print("corrupt.txt cleared.")
             return album_ids
@@ -2081,9 +2065,7 @@ def run_mass_delete(files, log_file, log_dir, corrupt_details=None,
     print(f"\n{deleted}/{len(existing)} files deleted")
 
     remaining = [f for f in files if os.path.exists(f)]
-    with open(corrupt_list_path, 'w', encoding='utf-8') as f:
-        for fp in remaining:
-            f.write(fp + "\n")
+    write_corrupt_list(corrupt_list_path, remaining)
     if not remaining:
         print("corrupt.txt cleared.")
     return None
@@ -2296,9 +2278,7 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
 
     if not to_delete:
         write_json_atomic(tracking_path, tracking)
-        with open(corrupt_list_path, 'w', encoding='utf-8') as f:
-            for path in tracking:
-                f.write(path + "\n")
+        write_corrupt_list(corrupt_list_path, tracking)
         return
 
     logger.info("Auto-deleting %d corrupt files (older than %d days):",
@@ -2348,9 +2328,7 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
         logger.info("  %d files still within review window", len(to_keep))
 
     write_json_atomic(tracking_path, tracking)
-    with open(corrupt_list_path, 'w', encoding='utf-8') as f:
-        for path in tracking:
-            f.write(path + "\n")
+    write_corrupt_list(corrupt_list_path, tracking)
 
 
 def _auto_delete_after_scan(cfg):

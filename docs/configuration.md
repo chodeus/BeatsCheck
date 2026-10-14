@@ -46,7 +46,7 @@ These Docker-level settings are configured as environment variables:
 | `beats_check.log` | Full scan log — errors, moves, deletes, and scan summaries |
 | `beats_check.log.1` `.2` `.3` | Previous logs after rotation (last 3 kept) |
 | `processed.txt` | Resume cache — one checked file path per line. Rotated alongside the log |
-| `corrupt.txt` | One corrupt file path per line (deduplicated) — for scripting or delete mode |
+| `corrupt.txt` | One corrupt file path per line, deduplicated and sorted by path (a scan in progress appends new finds at the end until it finishes) — for scripting or delete mode |
 | `corrupt_details.json` | Path-to-error mapping with Lidarr trackfile/album IDs (when configured) |
 | `corrupt_tracking.json` | Path-to-first-seen timestamps — used by `DELETE_AFTER` auto-delete |
 | `summary.json` | Machine-readable scan results for notification scripts |

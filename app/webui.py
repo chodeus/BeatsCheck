@@ -372,8 +372,8 @@ _API_KEY_MASK = "********"
 # allowed-keys list and parser stay in sync without duplication.
 from main import (  # noqa: E402
     _CONFIG_KEY_MAP, _acquire_scan_lock, _load_corrupt_details,
-    _parse_config_lines, _release_scan_lock, write_json_atomic,
-    write_text_atomic,
+    _parse_config_lines, _release_scan_lock, write_corrupt_list,
+    write_json_atomic, write_text_atomic,
 )
 import reason_text  # noqa: E402
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
@@ -582,8 +582,7 @@ def _ignore_corrupt_files(config_dir, files):
         with open(corrupt_path, 'r', encoding='utf-8') as f:
             remaining = [line.strip() for line in f
                          if line.strip() and line.strip() not in ignore_set]
-        write_text_atomic(corrupt_path,
-                          ''.join(p + '\n' for p in remaining))
+        write_corrupt_list(corrupt_path, remaining)
 
     _prune_json(os.path.join(config_dir, "corrupt_details.json"), files)
     _prune_json(os.path.join(config_dir, "corrupt_tracking.json"), files)
