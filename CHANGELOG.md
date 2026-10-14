@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.3](https://github.com/chodeus/BeatsCheck/compare/v1.5.2...v1.5.3) (2026-10-14)
+
+
+### Bug Fixes
+
+* skip an album's delete when its Lidarr grab history can't be read ([1927039](https://github.com/chodeus/BeatsCheck/commit/19270398aa012ad29eb5d4c42aa53f44d164045d))
+
 ## [1.5.2](https://github.com/chodeus/BeatsCheck/compare/v1.5.1...v1.5.2) (2026-10-14)
 
 
