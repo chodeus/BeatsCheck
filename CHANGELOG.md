@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.5.1](https://github.com/chodeus/BeatsCheck/compare/v1.5.0...v1.5.1) (2026-10-14)
+
+
+### Documentation
+
+* correct the Lidarr delete docstring: a failed API delete is skipped, not done directly ([a760a59](https://github.com/chodeus/BeatsCheck/commit/a760a59695cec55668ee5cce559d0ad4fff97084))
+* correct the OUTPUT_DIR default, say later scans check only new files, and keep two docstrings to one line ([ac6408a](https://github.com/chodeus/BeatsCheck/commit/ac6408aecc5ae1aaef375c40e4671ce7c4bbbf87))
+* credit the stderr check alongside -xerror, and drop the partial-decode false-positive claim ([7156fd3](https://github.com/chodeus/BeatsCheck/commit/7156fd33ac2f0f3b18ee9e203f0fbdf3e04bf5eb))
+* drop the power-loss claim for atomic writes and mount music read-write before deleting ([98c8691](https://github.com/chodeus/BeatsCheck/commit/98c8691630c2c6c6c8985dcaea184c60f2019f71))
+* list auto-delete and WebUI deletes among the uses that need a read-write mount ([0344d41](https://github.com/chodeus/BeatsCheck/commit/0344d417617afc5ddab8d0defab72389b593b7b9))
+* match the code on auto-delete timing, the log sample, the Unraid template, WebUI album deletes and Lidarr ID matching ([624d334](https://github.com/chodeus/BeatsCheck/commit/624d3340dc481c55ea1611abf4ca8f2511a2e02b))
+* qualify the wrong-header and other-services claims, and say auto-delete needs a writable mount ([22edaad](https://github.com/chodeus/BeatsCheck/commit/22edaad201219fab0ba125d9b5763e7e8da6129e))
+* rescan switches only to report or move, and Lidarr searches for a replacement rather than always finding one ([c02c895](https://github.com/chodeus/BeatsCheck/commit/c02c895b399ca1c245c3473708695befe9468f3a))
+* say suffix matching needs one track file to win, and a tie leaves the file unmatched ([3f1b917](https://github.com/chodeus/BeatsCheck/commit/3f1b91797a17f19aa3976c3364c0232f470c9ccd))
+* say the CPU throttle doesn't cover disk reads ([7232ad9](https://github.com/chodeus/BeatsCheck/commit/7232ad90c2132303b80cb189c97843ac6fb3a085))
+* say the Lidarr delete removes unmatched files directly ([33313eb](https://github.com/chodeus/BeatsCheck/commit/33313eb6f10567cb029d14b7059f91251729f47d))
+* say when a Lidarr delete goes ahead without a blocklist entry or deletes only part of an album ([aa0e990](https://github.com/chodeus/BeatsCheck/commit/aa0e99084813c6fe57ef72e6d47bf492b49d5d0d))
+* say which files go through Lidarr, how to update, and which ffmpeg runs warn ([5ca427b](https://github.com/chodeus/BeatsCheck/commit/5ca427bbdc0d88aaab4b37952af331e084feba3f))
+
 ## [1.5.0](https://github.com/chodeus/BeatsCheck/compare/v1.4.2...v1.5.0) (2026-10-13)
 
 
