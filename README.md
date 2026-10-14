@@ -39,7 +39,7 @@ docker exec beatscheck reset-webui-password   # forgot the WebUI password
 - [Configuration](docs/configuration.md) — every setting, environment variables, output files
 - [How it works](docs/how-it-works.md) — the decode test, cut-short files, safety features, performance
 - [Web UI](docs/webui.md) — setup, login and security
-- [Lidarr integration](docs/lidarr.md) — blocklist, delete and re-download through Lidarr
+- [Lidarr integration](docs/lidarr.md) — blocklist, delete and search for replacements through Lidarr
 
 ## Security
 

@@ -7,7 +7,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `output_dir` | `/data/corrupted` | Quarantine destination for move mode. Must match a mounted volume |
-| `mode` | `setup` | `setup` (idle), `report`, `delete`, or `move`. Can be changed at runtime via `rescan` |
+| `mode` | `setup` | `setup` (idle), `report`, `delete`, or `move`. `rescan report` or `rescan move` switches to that mode at runtime |
 | `workers` | `4` | Parallel ffmpeg decode workers. 2 = conservative, 4 = balanced, 8+ = fast |
 | `run_interval` | `0` | Hours between scans. `0` = scan once, then stay idle until `rescan`. `168` = weekly. `24` = daily |
 | `delete_after` | `0` | Days before corrupt files are auto-deleted. `0` = never (manual only). `7` = 7 day review window |

@@ -1,6 +1,6 @@
 # Lidarr integration
 
-When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck deletes the files it has matched to Lidarr track files through the Lidarr API. Track file records are removed via the API while albums stay monitored — Lidarr automatically re-downloads monitored albums after deletion. Files with no Lidarr match are deleted directly (see [Error handling](#error-handling)).
+When `LIDARR_URL` and `LIDARR_API_KEY` are set, BeatsCheck deletes the files it has matched to Lidarr track files through the Lidarr API. Track file records are removed via the API while albums stay monitored, so Lidarr searches for a replacement. Files with no Lidarr match are deleted directly (see [Error handling](#error-handling)).
 
 ```conf
 ## /config/beatscheck.conf — API key stays off the command line
@@ -15,7 +15,7 @@ lidarr_blocklist = true
 1. **Scan** — corrupt files are detected and matched to Lidarr trackfile IDs via path suffix matching. IDs are stored in `corrupt_details.json` so delete operations don't need to re-resolve them.
 2. **Blocklist** (`LIDARR_BLOCKLIST=true`) — before deletion, the most recent grab for each affected album is marked as failed. Lidarr auto-creates a blocklist entry so the same corrupt release is not re-downloaded. **If marking the grab as failed fails, that album is skipped.** An album with no grab history (for example, one imported by hand) is deleted without a blocklist entry. So is an album whose history lookup fails, because BeatsCheck cannot tell that apart from no history.
 3. **Delete** — track files are removed via Lidarr's bulk delete API. Albums stay monitored and show as "missing". If the bulk call fails, an album with more than one track file has each one retried on its own. **If nothing is deleted, the album is skipped** (no fallback to filesystem delete). If only some retries succeed, the log counts all of the album's files as deleted, but files still on disk stay in `corrupt.txt`.
-4. **Re-download** — monitored albums are automatically re-searched by Lidarr after the trackfiles are deleted. No manual intervention needed.
+4. **Re-download** — Lidarr searches for each monitored album after its track files are deleted, and grabs a replacement if it finds one.
 
 ## Unmonitored albums
 
