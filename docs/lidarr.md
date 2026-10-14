@@ -25,7 +25,7 @@ With `LIDARR_SEARCH=true` and auto-delete, unmonitored album IDs are written to 
 
 ## Path handling
 
-BeatsCheck runs in a container where music is mounted at `/data`, while Lidarr sees the same files at the same or different mount path. When both containers mount the same host path to `/data`, the paths match exactly. At scan time, corrupt files are matched to Lidarr trackfiles by comparing path components from the right (suffix matching). This works regardless of how the music directory is mounted in each container.
+BeatsCheck runs in a container where music is mounted at `/data`, while Lidarr sees the same files at the same or different mount path. When both containers mount the same host path to `/data`, the paths match exactly. At scan time, corrupt files are matched to Lidarr trackfiles by comparing path components from the right (suffix matching). Different mount paths work as long as the path ending points to one Lidarr track file. If two or more track files tie for the best match, the file stays unmatched.
 
 ## Error handling
 
