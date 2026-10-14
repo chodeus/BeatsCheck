@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/chodeus/BeatsCheck/compare/v1.5.1...v1.5.2) (2026-10-14)
+
+
+### Bug Fixes
+
+* keep corrupt.txt sorted by path ([86fb5f9](https://github.com/chodeus/BeatsCheck/commit/86fb5f9d4a65f4bc19dce0dd9362f52da7a8a1db))
+
 ## [1.5.1](https://github.com/chodeus/BeatsCheck/compare/v1.5.0...v1.5.1) (2026-10-14)
 
 
