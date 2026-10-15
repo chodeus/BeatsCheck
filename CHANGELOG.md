@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.5.7](https://github.com/chodeus/BeatsCheck/compare/v1.5.6...v1.5.7) (2026-10-15)
+
+
+### Bug Fixes
+
+* apply beatscheck.conf read-backs one at a time, so an older read can't land after a newer save ([a031c04](https://github.com/chodeus/BeatsCheck/commit/a031c043951c2198f60bc63a2c04d828e5fa53f1))
+* keep Docker-set variables when the WebUI saves settings, and name the ones it can't apply ([56ac620](https://github.com/chodeus/BeatsCheck/commit/56ac6204b0966d09279099346d28873fa4507cba))
+* keep variables set at a path-argument start, and name only the overrides a save posted ([c6a96c6](https://github.com/chodeus/BeatsCheck/commit/c6a96c60bec0ce54c96372fe4755bb8c6493ab94))
+* reply with an error when a WebUI save can't read beatscheck.conf back ([51c38be](https://github.com/chodeus/BeatsCheck/commit/51c38bea819614480ab9fa3e741b523e6618d06f))
+
 ## [1.5.6](https://github.com/chodeus/BeatsCheck/compare/v1.5.5...v1.5.6) (2026-10-15)
 
 
