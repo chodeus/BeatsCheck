@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.6](https://github.com/chodeus/BeatsCheck/compare/v1.5.5...v1.5.6) (2026-10-15)
+
+
+### Bug Fixes
+
+* send a folder delete's tracked files through Lidarr when Lidarr doesn't track the flagged file ([4867d48](https://github.com/chodeus/BeatsCheck/commit/4867d48e3b3bc8f0aba66675d774189d6ba1fb1c))
+* skip a folder-delete match when another copy of the file exists, and count a folder only when it is gone ([6871d91](https://github.com/chodeus/BeatsCheck/commit/6871d910e79df824712d6b8e017c95add041c8cc))
+
 ## [1.5.5](https://github.com/chodeus/BeatsCheck/compare/v1.5.4...v1.5.5) (2026-10-15)
 
 
