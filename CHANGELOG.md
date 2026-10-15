@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.5.5](https://github.com/chodeus/BeatsCheck/compare/v1.5.4...v1.5.5) (2026-10-15)
+
+
+### Bug Fixes
+
+* keep the whole folder when Lidarr can't list an album's track files ([8c7a4a4](https://github.com/chodeus/BeatsCheck/commit/8c7a4a4e4456938ca017a1d8d013bc5ae38d9b14))
+* log a failed Lidarr lookup apart from a failed delete request in auto-delete ([babb368](https://github.com/chodeus/BeatsCheck/commit/babb3680da7b8e8528fd9d018284e7e2bbbcf207))
+* look up a file's Lidarr ID again before deleting it, and keep it if Lidarr can't be read ([00e6e66](https://github.com/chodeus/BeatsCheck/commit/00e6e66c9fe4296f35c01cb38289119dbe498a86))
+* look up a listed file with no saved details before deleting it ([1265662](https://github.com/chodeus/BeatsCheck/commit/12656623aaa03ccf494d5a2a3ffdf18cb14dc4ee))
+* take a folder delete's files from corrupt.txt only ([7cb6ebc](https://github.com/chodeus/BeatsCheck/commit/7cb6ebc934fbe471f1cee8e008f984f27bcdaa9b))
+
 ## [1.5.4](https://github.com/chodeus/BeatsCheck/compare/v1.5.3...v1.5.4) (2026-10-14)
 
 
