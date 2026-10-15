@@ -142,6 +142,27 @@ def test_webui_folder_delete_looks_up_a_listed_file_with_no_saved_details(tmp_pa
     assert result["count"] == 0 and result["errors"]
 
 
+def test_corrupt_only_folder_delete_skips_a_file_missing_from_corrupt_txt(tmp_path, monkeypatch):
+    cfg, track, unlisted = _folder_with_healthy_track(tmp_path)
+    details = json.loads((cfg / "corrupt_details.json").read_text())
+    details[str(unlisted)] = {"reason": "damaged"}
+    (cfg / "corrupt_details.json").write_text(json.dumps(details))
+    _lidarr(monkeypatch, tracks=())
+    _webui_env(monkeypatch)
+    main.delete_album_folders([str(track.parent)], str(cfg), music_dir=str(tmp_path / "data"), mode="corrupt")
+    assert unlisted.exists()
+    assert not track.exists()
+
+
+def test_corrupt_only_folder_delete_removes_a_listed_file_lidarr_does_not_track(tmp_path, monkeypatch):
+    cfg, track = _library(tmp_path)
+    (cfg / "corrupt_details.json").write_text("{}")
+    _lidarr(monkeypatch, tracks=())
+    _webui_env(monkeypatch)
+    main.delete_album_folders([str(track.parent)], str(cfg), music_dir=str(tmp_path / "data"), mode="corrupt")
+    assert not track.exists()
+
+
 def test_interactive_delete_stops_when_lidarr_cannot_be_read(tmp_path, monkeypatch):
     cfg, track = _library(tmp_path)
     _lidarr(monkeypatch, up=False)

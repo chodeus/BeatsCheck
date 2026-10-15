@@ -783,7 +783,7 @@ def delete_album_folders(folders, config_dir, music_dir=None,
     folder_set = {folder for folder, _ in validated}
     if (lidarr_url and lidarr_key and not _lidarr_ids_before_delete(
             corrupt_details,
-            [cf for cf in corrupt_listed.union(corrupt_details) if os.path.dirname(cf) in folder_set],
+            [cf for cf in corrupt_listed if os.path.dirname(cf) in folder_set],
             lidarr_url, lidarr_key, config_dir)):
         errors.append({"folder": "", "error": "Lidarr lookup failed, nothing deleted"})
         return {"deleted": [], "errors": errors, "count": 0,
@@ -827,7 +827,7 @@ def delete_album_folders(folders, config_dir, music_dir=None,
                 progress_cb(i, total, folder, "deleting")
 
             existing_corrupt = [
-                cf for cf in corrupt_details
+                cf for cf in corrupt_listed
                 if os.path.dirname(cf) == folder
                 and os.path.exists(cf)
             ]
