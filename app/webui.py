@@ -371,7 +371,7 @@ _API_KEY_MASK = "********"
 # The canonical config-key map lives in main.py; import it so the WebUI's
 # allowed-keys list and parser stay in sync without duplication.
 from main import (  # noqa: E402
-    _CONFIG_KEY_MAP, _acquire_scan_lock, _load_corrupt_details,
+    _CONFIG_KEY_MAP, _RUNTIME_MODES, _acquire_scan_lock, _load_corrupt_details,
     _parse_config_lines, _release_scan_lock, _sync_env_from_config_file,
     write_corrupt_list, write_json_atomic, write_text_atomic,
 )
@@ -1217,6 +1217,10 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 self._json_response(
                     {"error": "unknown keys: "
                      + ", ".join(sorted(rejected))}, 400)
+                return
+            if 'mode' in updates and str(updates['mode']).lower() not in _RUNTIME_MODES:
+                self._json_response(
+                    {"error": "mode must be setup, report or move"}, 400)
                 return
             # Don't overwrite real key with the mask sentinel
             if updates.get('lidarr_api_key') == _API_KEY_MASK:
