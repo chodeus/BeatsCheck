@@ -531,12 +531,25 @@ def _match_artist_trackfiles(files, lidarr_url, lidarr_key):
             return None
         for fp in anchored:
             parts = fp.split(os.sep)
+            anchor = parts.index(name)
             # A looser match could pick a same-named track from another album and delete it.
-            match = _best_suffix_match(fp, tfs, min_score=len(parts) - parts.index(name))
-            if match:
+            match = _best_suffix_match(fp, tfs, min_score=len(parts) - anchor)
+            if match and not _another_copy_exists(fp, match["path"], anchor):
                 found.setdefault(fp, []).append(match)
     # Artists sharing a folder name in two root folders can both match: keep neither.
     return {fp: ms[0] for fp, ms in found.items() if len(ms) == 1}
+
+
+def _another_copy_exists(fp, lidarr_path, anchor):
+    """True if *lidarr_path* is a different file on this disk, or fp's path from the artist folder also exists higher up."""
+    try:
+        if os.path.exists(lidarr_path):
+            return not os.path.samefile(lidarr_path, fp)
+    except OSError:
+        return True
+    parts = fp.split(os.sep)
+    return any(os.path.exists(os.path.join(os.sep.join(parts[:i]) or os.sep, *parts[anchor:]))
+               for i in range(1, anchor))
 
 
 def _lidarr_delete_folder_api(folder, file_to_tfid, album_ids,
@@ -1890,12 +1903,14 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
             return (0, 0, 0, set())
 
     # Direct delete for non-Lidarr files (non-audio, etc.)
+    failed = False
     for fp in direct_paths:
         try:
             os.remove(fp)
             deleted += 1
             log.write(f"DIRECT DELETE (not in Lidarr): {fp}\n")
         except OSError as e:
+            failed = True
             print(f"           ERROR: {os.path.basename(fp)}: {e}")
             log.write(f"ERROR deleting {fp}: {e}\n")
 
@@ -1909,8 +1924,12 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
         except OSError:
             pass
 
+    kept = folder != input_folder and os.path.lexists(folder)
+    if kept:
+        print("           -> Folder kept: it still holds files or subfolders")
+        log.write(f"KEPT FOLDER (not empty): {folder}\n")
     print(f"           -> {deleted} files deleted\n")
-    return (1, deleted, 0, album_ids)
+    return (0 if failed or kept else 1, deleted, 0, album_ids)
 
 
 def _load_corrupt_file_list(corrupt_list_path, log_dir):

@@ -34,7 +34,7 @@ When a Lidarr API call fails:
 - The grab history lookup fails → that album is skipped, error shown
 - Bulk delete fails → each track file is retried on its own (albums with more than one); if none succeed, the album is skipped and listed for manual deletion
 - If Lidarr is unreachable when a scan ends → the files it flagged get no Lidarr ID yet. Each later scan that checks at least one file tries again, and so does every delete. If that lookup fails at delete time, nothing is deleted: auto-delete tries again next run, and the WebUI and interactive delete show an error. A file Lidarr still doesn't match after a good lookup is deleted directly
-- A folder delete reads each album's track files to match the rest of the folder. If Lidarr doesn't track the flagged file, it reads the track files of the artist whose folder is in the path instead, and matches each file only by its whole path under that folder. If either read fails → nothing in that folder is deleted, error shown
+- A folder delete reads each album's track files to match the rest of the folder. If Lidarr doesn't track the flagged file, it reads the track files of the artist whose folder is in the path instead, and matches each file only by its whole path under that folder. A file isn't matched when Lidarr's track file is a different file on this disk, or when the same path under the artist folder also exists higher in the library (a second copy of the album). If either read fails → nothing in that folder is deleted, error shown
 - Files not tracked by Lidarr (cover art, .nfo, etc.) are deleted directly, not through Lidarr
 
 ## Security
