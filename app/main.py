@@ -779,10 +779,11 @@ def delete_album_folders(folders, config_dir, music_dir=None,
     lidarr_key = _load_lidarr_api_key()
     lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
     corrupt_details = _load_corrupt_details(config_dir)
+    corrupt_listed = _load_lines_as_set(os.path.join(config_dir, "corrupt.txt"))
     folder_set = {folder for folder, _ in validated}
     if (lidarr_url and lidarr_key and not _lidarr_ids_before_delete(
             corrupt_details,
-            [cf for cf in corrupt_details if os.path.dirname(cf) in folder_set],
+            [cf for cf in corrupt_listed.union(corrupt_details) if os.path.dirname(cf) in folder_set],
             lidarr_url, lidarr_key, config_dir)):
         errors.append({"folder": "", "error": "Lidarr lookup failed, nothing deleted"})
         return {"deleted": [], "errors": errors, "count": 0,
@@ -792,11 +793,7 @@ def delete_album_folders(folders, config_dir, music_dir=None,
     # actually contain a file flagged in corrupt.txt (the canonical delete
     # allowlist). Without this a mis-driven UI / authenticated request could
     # rmtree any album folder under the rw-mounted MUSIC_DIR.
-    corrupt_dirs = {
-        os.path.dirname(cf)
-        for cf in _load_lines_as_set(
-            os.path.join(config_dir, "corrupt.txt"))
-    }
+    corrupt_dirs = {os.path.dirname(cf) for cf in corrupt_listed}
 
     deleted_files = []
     affected_albums = []
@@ -2493,7 +2490,7 @@ def _best_suffix_match(container_path, candidates, min_score=1):
 def _resolve_lidarr_ids(corrupt_details, base_url, api_key, paths=None):
     """Add Lidarr IDs to *paths* (default: all) that lack one; returns how many matched, or None if Lidarr can't be read."""
     unresolved = [p for p in (corrupt_details if paths is None else paths)
-                  if p in corrupt_details and "trackfileId" not in corrupt_details[p]]
+                  if "trackfileId" not in corrupt_details.get(p, {})]
     if not unresolved:
         return 0
 
@@ -2510,7 +2507,7 @@ def _resolve_lidarr_ids(corrupt_details, base_url, api_key, paths=None):
             candidates = index.get(os.path.basename(path)) or []
             match = _best_suffix_match(path, candidates, min_score=min_score)
             if match:
-                _apply_lidarr_match(corrupt_details[path], match)
+                _apply_lidarr_match(corrupt_details.setdefault(path, {}), match)
                 unresolved.remove(path)
                 matched += 1
 

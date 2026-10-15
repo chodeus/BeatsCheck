@@ -131,6 +131,17 @@ def test_interactive_folder_delete_keeps_the_folder_when_the_album_lookup_fails(
     assert healthy.exists() and track.exists()
 
 
+def test_webui_folder_delete_looks_up_a_listed_file_with_no_saved_details(tmp_path, monkeypatch):
+    cfg, track = _library(tmp_path)
+    (cfg / "corrupt_details.json").write_text("{}")
+    _lidarr(monkeypatch, up=False)
+    _webui_env(monkeypatch)
+    result = main.delete_album_folders(
+        [str(track.parent)], str(cfg), music_dir=str(tmp_path / "data"), mode="whole")
+    assert track.exists()
+    assert result["count"] == 0 and result["errors"]
+
+
 def test_interactive_delete_stops_when_lidarr_cannot_be_read(tmp_path, monkeypatch):
     cfg, track = _library(tmp_path)
     _lidarr(monkeypatch, up=False)
@@ -150,6 +161,20 @@ def test_one_failed_artist_request_fails_the_whole_index(monkeypatch):
     monkeypatch.setattr(main, "_lidarr_request", fake)
     index = main._build_lidarr_index(URL, KEY)
     assert index is None
+
+
+def test_a_file_with_no_saved_details_is_looked_up_too(tmp_path, monkeypatch):
+    _lidarr(monkeypatch, up=False)
+    ready = main._lidarr_ids_before_delete({}, ["/data/b.flac"], URL, KEY, str(tmp_path))
+    assert ready is False
+
+
+def test_a_file_with_no_saved_details_gets_its_lidarr_id(tmp_path, monkeypatch):
+    _lidarr(monkeypatch)
+    details = {}
+    ready = main._lidarr_ids_before_delete(details, ["/data/Artist/Album/01.flac"], URL, KEY, str(tmp_path))
+    assert ready is True
+    assert details["/data/Artist/Album/01.flac"]["trackfileId"] == 5
 
 
 def test_only_the_files_being_deleted_are_looked_up(tmp_path, monkeypatch):
