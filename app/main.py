@@ -3404,8 +3404,10 @@ def _load_config():
 
 
 def _sync_env_from_config_file(config_dir):
-    """Copy beatscheck.conf into os.environ except Docker-set vars; returns the keys Docker overrides, None if unreadable."""
+    """Copy beatscheck.conf into os.environ except Docker-set vars; returns keys Docker overrides, None if no readable file."""
     path = os.path.join(config_dir, "beatscheck.conf")
+    if not os.path.isfile(path):
+        return None
     try:
         file_vals = _parse_config_lines(path)
     except OSError:

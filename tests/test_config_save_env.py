@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 import pytest
@@ -25,7 +26,7 @@ def save(webui_server, tmp_path, monkeypatch):
         req = urllib.request.Request(
             webui_server + "/api/config", data=json.dumps({"config": config}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 - the fixture's http://127.0.0.1 URL
             return json.loads(resp.read())
     return post
 
@@ -44,6 +45,30 @@ def test_a_save_applies_a_setting_no_docker_variable_sets(save):
 def test_a_docker_set_variable_the_save_agrees_with_is_not_named(save):
     reply = save({"mode": "report"})
     assert reply["docker_set"] == []
+
+
+def test_a_save_it_cannot_read_back_replies_with_an_error(save, monkeypatch):
+    def unreadable(path):
+        raise OSError("unreadable")
+    monkeypatch.setattr(main, "_parse_config_lines", unreadable)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        save({"lidarr_url": "http://lidarr:8686"})
+    assert err.value.code == 500
+    assert "LIDARR_URL" not in os.environ
+
+
+def test_a_save_whose_file_is_gone_before_it_applies_replies_with_an_error(save, monkeypatch):
+    write = webui._write_config_file
+
+    def write_then_remove(config_dir, updates):
+        ok = write(config_dir, updates)
+        os.remove(os.path.join(config_dir, "beatscheck.conf"))
+        return ok
+    monkeypatch.setattr(webui, "_write_config_file", write_then_remove)
+    with pytest.raises(urllib.error.HTTPError) as err:
+        save({"lidarr_url": "http://lidarr:8686"})
+    assert err.value.code == 500
+    assert "LIDARR_URL" not in os.environ
 
 
 def test_the_config_reload_keeps_a_docker_set_variable(tmp_path, monkeypatch):

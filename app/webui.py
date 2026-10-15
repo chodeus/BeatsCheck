@@ -1224,8 +1224,12 @@ class WebUIHandler(SimpleHTTPRequestHandler):
             ok = _write_config_file(config_dir, updates)
             if ok:
                 # Deletes read os.environ, so apply the save now; Docker-set vars still win.
-                overridden = _sync_env_from_config_file(config_dir) or []
-                self._json_response({"ok": True, "docker_set": overridden})
+                overridden = _sync_env_from_config_file(config_dir)
+                if overridden is None:
+                    self._json_response(
+                        {"error": "config saved, but it could not be read back to apply"}, 500)
+                else:
+                    self._json_response({"ok": True, "docker_set": overridden})
             else:
                 self._json_response(
                     {"error": "config file not found"}, 500)
