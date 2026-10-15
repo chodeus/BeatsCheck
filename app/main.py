@@ -196,6 +196,28 @@ def _load_lines_as_set(path):
         return {line.strip() for line in f if line.strip()}
 
 
+def _validate_delete_paths(paths, allowed, music_real):
+    """Return (validated={original: realpath}, errors=[...]) for the files that pass the delete safety checks."""
+    validated = {}
+    errors = []
+    for fp in paths:
+        if fp not in allowed:
+            errors.append({"path": fp, "error": "not in corrupt list"})
+            continue
+        if os.path.islink(fp):
+            errors.append({"path": fp, "error": "symlink rejected"})
+            continue
+        real = os.path.realpath(fp)
+        if music_real and not real.startswith(music_real + os.sep):
+            errors.append({"path": fp, "error": "outside music directory"})
+            continue
+        if not os.path.isfile(real):
+            errors.append({"path": fp, "error": "not found"})
+            continue
+        validated[fp] = real
+    return validated, errors
+
+
 def delete_corrupt_files(paths, config_dir, music_dir=None,
                          progress_cb=None, cancel_cb=None):
     """Delete corrupt files with Lidarr support and full state cleanup.
@@ -225,25 +247,7 @@ def delete_corrupt_files(paths, config_dir, music_dir=None,
     # Resolve music_dir realpath once for containment checks
     music_real = os.path.realpath(music_dir) if music_dir else None
 
-    # Validate all paths first — store {original: realpath} for safe ops
-    validated = {}
-    errors = []
-    for fp in paths:
-        if fp not in allowed:
-            errors.append({"path": fp, "error": "not in corrupt list"})
-            continue
-        if os.path.islink(fp):
-            errors.append({"path": fp, "error": "symlink rejected"})
-            continue
-        real = os.path.realpath(fp)
-        if music_real and not real.startswith(music_real + os.sep):
-            errors.append({"path": fp, "error": "outside music directory"})
-            continue
-        if not os.path.isfile(real):
-            errors.append({"path": fp, "error": "not found"})
-            continue
-        validated[fp] = real
-
+    validated, errors = _validate_delete_paths(paths, allowed, music_real)
     if not validated:
         return {"deleted": [], "errors": errors, "count": 0}
 
@@ -251,6 +255,11 @@ def delete_corrupt_files(paths, config_dir, music_dir=None,
     lidarr_key = _load_lidarr_api_key()
     lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
     details = _load_corrupt_details(config_dir)
+    if (lidarr_url and lidarr_key and not _lidarr_ids_before_delete(
+            details, list(validated), lidarr_url, lidarr_key, config_dir)):
+        errors.extend({"path": fp, "error": "Lidarr lookup failed, not deleted"}
+                      for fp in validated)
+        return {"deleted": [], "errors": errors, "count": 0}
 
     lidarr_paths = []
     direct_paths = []
@@ -468,8 +477,7 @@ def _list_folder_files(real):
 
 def _build_file_to_tfid(all_files, album_ids, corrupt_details,
                         lidarr_url, lidarr_key):
-    """Map folder files to Lidarr trackfile IDs via corrupt_details +
-    suffix-match fallback. Mutates *album_ids* with any new matches."""
+    """Map folder files to Lidarr trackfile IDs, adding new matches to *album_ids*; None if Lidarr can't be read."""
     file_to_tfid = {
         fp: corrupt_details[fp]["trackfileId"]
         for fp in all_files
@@ -480,8 +488,10 @@ def _build_file_to_tfid(all_files, album_ids, corrupt_details,
         return file_to_tfid
     album_tfs = []
     for aid in album_ids:
-        album_tfs.extend(_lidarr_get_trackfiles_by_album(
-            lidarr_url, lidarr_key, aid))
+        tfs = _lidarr_get_trackfiles_by_album(lidarr_url, lidarr_key, aid)
+        if tfs is None:
+            return None
+        album_tfs.extend(tfs)
     for fp in unmatched:
         match = _best_suffix_match(fp, album_tfs, min_score=1)
         if match:
@@ -634,6 +644,8 @@ def _delete_one_folder(folder, real, existing_corrupt, corrupt_details,
         file_to_tfid = _build_file_to_tfid(
             all_files, album_ids, corrupt_details,
             lidarr_url, lidarr_key)
+        if file_to_tfid is None:
+            return ([], [], "Lidarr lookup failed, nothing deleted")
         file_to_album = {
             fp: corrupt_details[fp]["albumId"]
             for fp in file_to_tfid
@@ -767,16 +779,21 @@ def delete_album_folders(folders, config_dir, music_dir=None,
     lidarr_key = _load_lidarr_api_key()
     lidarr_blocklist = _parse_env_bool("LIDARR_BLOCKLIST", False)
     corrupt_details = _load_corrupt_details(config_dir)
+    corrupt_listed = _load_lines_as_set(os.path.join(config_dir, "corrupt.txt"))
+    folder_set = {folder for folder, _ in validated}
+    if (lidarr_url and lidarr_key and not _lidarr_ids_before_delete(
+            corrupt_details,
+            [cf for cf in corrupt_listed if os.path.dirname(cf) in folder_set],
+            lidarr_url, lidarr_key, config_dir)):
+        errors.append({"folder": "", "error": "Lidarr lookup failed, nothing deleted"})
+        return {"deleted": [], "errors": errors, "count": 0,
+                "albums": [], "cancelled": False}
 
     # mode='whole' wipes the entire folder, so restrict it to folders that
     # actually contain a file flagged in corrupt.txt (the canonical delete
     # allowlist). Without this a mis-driven UI / authenticated request could
     # rmtree any album folder under the rw-mounted MUSIC_DIR.
-    corrupt_dirs = {
-        os.path.dirname(cf)
-        for cf in _load_lines_as_set(
-            os.path.join(config_dir, "corrupt.txt"))
-    }
+    corrupt_dirs = {os.path.dirname(cf) for cf in corrupt_listed}
 
     deleted_files = []
     affected_albums = []
@@ -810,7 +827,7 @@ def delete_album_folders(folders, config_dir, music_dir=None,
                 progress_cb(i, total, folder, "deleting")
 
             existing_corrupt = [
-                cf for cf in corrupt_details
+                cf for cf in corrupt_listed
                 if os.path.dirname(cf) == folder
                 and os.path.exists(cf)
             ]
@@ -1746,7 +1763,7 @@ def _resolve_folder_trackfiles(folder, existing, corrupt_details,
                                album_ids, lidarr_url, lidarr_api_key):
     """Build trackfile ID map for all files in a folder.
     Uses stored IDs from corrupt_details, fetches remaining from Lidarr.
-    Returns (all_files, file_to_tfid, unmatched) or None on error."""
+    Returns (all_files, file_to_tfid, unmatched), or None if the folder or Lidarr can't be read."""
     all_files = []
     try:
         for entry in os.listdir(folder):
@@ -1756,27 +1773,11 @@ def _resolve_folder_trackfiles(folder, existing, corrupt_details,
     except OSError:
         return None
 
-    file_to_tfid = {
-        fp: corrupt_details[fp]["trackfileId"]
-        for fp in all_files
-        if "trackfileId" in corrupt_details.get(fp, {})
-    }
-
-    unmatched = [fp for fp in all_files if fp not in file_to_tfid]
-    if unmatched and album_ids:
-        album_tfs = []
-        for aid in album_ids:
-            album_tfs.extend(_lidarr_get_trackfiles_by_album(
-                lidarr_url, lidarr_api_key, aid))
-        for fp in unmatched:
-            match = _best_suffix_match(fp, album_tfs, min_score=1)
-            if match:
-                file_to_tfid[fp] = match["id"]
-                if match.get("albumId"):
-                    album_ids.add(match["albumId"])
-        unmatched = [fp for fp in all_files if fp not in file_to_tfid]
-
-    return all_files, file_to_tfid, unmatched
+    file_to_tfid = _build_file_to_tfid(
+        all_files, album_ids, corrupt_details, lidarr_url, lidarr_api_key)
+    if file_to_tfid is None:
+        return None
+    return all_files, file_to_tfid, [fp for fp in all_files if fp not in file_to_tfid]
 
 
 def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
@@ -1794,9 +1795,9 @@ def _handle_folder_delete_lidarr(folder, existing, log, input_folder,
         folder, existing, corrupt_details, album_ids,
         lidarr_url, lidarr_api_key)
     if resolved is None:
-        print("           ERROR listing folder\n")
-        log.write(f"ERROR listing {folder}\n")
-        return (0, 0, 0, album_ids)
+        print("           ERROR: could not list the folder or read Lidarr. Nothing deleted.\n")
+        log.write(f"ERROR listing {folder} or reading Lidarr — nothing deleted\n")
+        return (0, 0, 0, set())
 
     all_files, file_to_tfid, direct_paths = resolved
     tf_ids = list(file_to_tfid.values())
@@ -2139,12 +2140,17 @@ def _run_delete_mode_locked(corrupt_list_path, log_file, log_dir,
 
     if action == 'q':
         return
+    if action not in ('a', 'i'):
+        print("Invalid choice.")
+        return
+    if (lidarr_url and lidarr_api_key and not _lidarr_ids_before_delete(
+            corrupt_details, files, lidarr_url, lidarr_api_key, log_dir)):
+        print("\nLidarr could not be read to match the corrupt files. "
+              "Nothing was deleted; try again when Lidarr is reachable.")
+        return
     if action == 'a':
         run_mass_delete(files, log_file, log_dir, corrupt_details,
                         lidarr_url, lidarr_api_key, lidarr_blocklist)
-        return
-    if action != 'i':
-        print("Invalid choice.")
         return
 
     _run_interactive_delete(
@@ -2290,9 +2296,11 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
 
     if lidarr_url and lidarr_api_key:
         logger.info("  Using Lidarr API for deletion")
+        lookup_ok = _lidarr_ids_before_delete(_load_corrupt_details(log_dir), to_delete,
+                                              lidarr_url, lidarr_api_key, log_dir)
         result = _lidarr_delete_corrupt(
             lidarr_url, lidarr_api_key, to_delete, log_file,
-            log_dir=log_dir, blocklist=lidarr_blocklist)
+            log_dir=log_dir, blocklist=lidarr_blocklist) if lookup_ok else None
         if result is not None:
             deleted, album_ids = result
             for path in to_delete:
@@ -2301,6 +2309,9 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
             _post_auto_delete_lidarr(
                 log_dir, album_ids, lidarr_url, lidarr_api_key,
                 lidarr_search)
+        elif not lookup_ok:
+            logger.error("  Lidarr lookup failed — auto-delete aborted. "
+                         "Files will be retried next run.")
         else:
             logger.error("  Lidarr API failed — auto-delete aborted. "
                          "Files will be retried next run.")
@@ -2401,16 +2412,18 @@ def _build_lidarr_index(base_url, api_key):
     Returns ``{basename: [{id, albumId, artistId, path}, ...]}``.
     Queries per-artist — Lidarr's trackfile endpoint requires a filter
     (artistId/albumId) and rejects unfiltered requests with HTTP 400.
-    Returns ``None`` if the artist list cannot be fetched.
+    Returns ``None`` if the artist list or any artist's track files cannot be fetched.
     """
     try:
         artists = _lidarr_get_artists(base_url, api_key)
-        if not artists:
+        if artists is None:
             return None
         index = {}
         for artist in artists:
-            for tf in _lidarr_get_trackfiles(
-                    base_url, api_key, artist["id"]):
+            tfs = _lidarr_get_trackfiles(base_url, api_key, artist["id"])
+            if tfs is None:
+                return None
+            for tf in tfs:
                 index.setdefault(
                     os.path.basename(tf["path"]), []).append({
                         "id": tf["id"],
@@ -2422,8 +2435,7 @@ def _build_lidarr_index(base_url, api_key):
                     sum(len(v) for v in index.values()), len(artists))
         return index
     except Exception:
-        logger.warning("Lidarr index build failed — "
-                       "IDs will be resolved at scan end")
+        logger.warning("Lidarr index build failed")
         return None
 
 
@@ -2477,19 +2489,17 @@ def _best_suffix_match(container_path, candidates, min_score=1):
     return None
 
 
-def _resolve_lidarr_ids(corrupt_details, base_url, api_key):
-    """Post-scan: enrich corrupt_details with Lidarr trackfileId and albumId.
-    Tries a strict filename+folder match first, then a looser filename-only
-    match. Handles different container mount paths via suffix matching."""
-    unresolved = [p for p, v in corrupt_details.items()
-                  if "trackfileId" not in v]
+def _resolve_lidarr_ids(corrupt_details, base_url, api_key, paths=None):
+    """Add Lidarr IDs to *paths* (default: all) that lack one; returns how many matched, or None if Lidarr can't be read."""
+    unresolved = [p for p in (corrupt_details if paths is None else paths)
+                  if "trackfileId" not in corrupt_details.get(p, {})]
     if not unresolved:
-        return
+        return 0
 
     index = _build_lidarr_index(base_url, api_key)
     if index is None:
         logger.warning("Lidarr: could not fetch trackfiles for ID resolution")
-        return
+        return None
 
     # Two passes: strict (>=2 components) then loose (>=1 unambiguous).
     # Strict avoids wrong matches when many files share a filename.
@@ -2499,7 +2509,7 @@ def _resolve_lidarr_ids(corrupt_details, base_url, api_key):
             candidates = index.get(os.path.basename(path)) or []
             match = _best_suffix_match(path, candidates, min_score=min_score)
             if match:
-                _apply_lidarr_match(corrupt_details[path], match)
+                _apply_lidarr_match(corrupt_details.setdefault(path, {}), match)
                 unresolved.remove(path)
                 matched += 1
 
@@ -2509,32 +2519,43 @@ def _resolve_lidarr_ids(corrupt_details, base_url, api_key):
     if unresolved:
         logger.info("  Lidarr: %d corrupt files could not be matched",
                     len(unresolved))
+    return matched
+
+
+def _lidarr_ids_before_delete(corrupt_details, paths, base_url, api_key, log_dir):
+    """Retry the Lidarr ID lookup for *paths*; False if Lidarr couldn't be read, so the caller must not delete."""
+    matched = _resolve_lidarr_ids(corrupt_details, base_url, api_key, paths)
+    if matched is None:
+        return False
+    if matched:
+        write_json_atomic(os.path.join(log_dir, "corrupt_details.json"), corrupt_details)
+    return True
 
 
 def _lidarr_get_artists(base_url, api_key):
-    """Fetch all artists. Returns list of {id, path} dicts."""
+    """Fetch all artists as {id, path} dicts; None if the request fails."""
     result = _lidarr_request(f"{base_url}/api/v1/artist", api_key)
     if result is None:
-        return []
+        return None
     return [{"id": a["id"], "path": a["path"]} for a in result]
 
 
 def _lidarr_get_trackfiles(base_url, api_key, artist_id):
-    """Fetch all track files for an artist."""
+    """Fetch all track files for an artist; None if the request fails."""
     url = f"{base_url}/api/v1/trackfile?artistId={artist_id}"
     result = _lidarr_request(url, api_key)
     if result is None:
-        return []
+        return None
     return [{"id": tf["id"], "path": tf["path"],
              "albumId": tf.get("albumId", 0)} for tf in result]
 
 
 def _lidarr_get_trackfiles_by_album(base_url, api_key, album_id):
-    """Fetch all track files for an album."""
+    """Fetch all track files for an album; None if the request fails."""
     url = f"{base_url}/api/v1/trackfile?albumId={album_id}"
     result = _lidarr_request(url, api_key)
     if result is None:
-        return []
+        return None
     return [{"id": tf["id"], "path": tf["path"],
              "albumId": tf.get("albumId", 0)} for tf in result]
 
