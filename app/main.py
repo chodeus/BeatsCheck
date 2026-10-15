@@ -3238,6 +3238,9 @@ webui = false
 webui_port = 8484
 """
 
+# Modes a running container can switch to; delete runs only at startup.
+_RUNTIME_MODES = ("setup", "report", "move")
+
 # Maps config-file keys (lowercase) to environment variable names.
 _CONFIG_KEY_MAP = {
     'music_dir': 'MUSIC_DIR',
@@ -3434,6 +3437,19 @@ def _copy_config_file_to_env(path):
     return overridden
 
 
+def _usable_saved_mode(raw, current):
+    """The saved mode for the next pass; *current* when *raw* is delete or unknown, as only startup can act on those."""
+    mode = (raw or current).lower()
+    if mode in _RUNTIME_MODES:
+        return mode
+    if mode == "delete":
+        logger.warning("mode = delete only runs at startup. For an interactive delete, run "
+                       "'docker exec -it beatscheck delete'. Keeping mode %s.", current)
+    else:
+        logger.warning("Unknown mode '%s' in beatscheck.conf. Keeping mode %s.", mode, current)
+    return current
+
+
 def _reload_config(cfg):
     """Re-read beatscheck.conf and update cfg for the next scan.
 
@@ -3449,7 +3465,7 @@ def _reload_config(cfg):
         "MUSIC_DIR", cfg.input_folder).rstrip("/")
     cfg.output_folder = os.environ.get(
         "OUTPUT_DIR", cfg.output_folder).rstrip("/")
-    saved_mode = (os.environ.get("MODE") or cfg.saved_mode).lower()
+    saved_mode = _usable_saved_mode(os.environ.get("MODE"), cfg.saved_mode)
     # A rescan's mode holds until the saved mode changes after it.
     if saved_mode != cfg.saved_mode:
         cfg.rescan_mode = None
