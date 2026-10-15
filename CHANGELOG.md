@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.8](https://github.com/chodeus/BeatsCheck/compare/v1.5.7...v1.5.8) (2026-10-15)
+
+
+### Bug Fixes
+
+* keep the current mode when delete or an unknown mode is saved while the container runs ([35899a6](https://github.com/chodeus/BeatsCheck/commit/35899a6a7f6e914d4e833e011f261b675d586e3a))
+
 ## [1.5.7](https://github.com/chodeus/BeatsCheck/compare/v1.5.6...v1.5.7) (2026-10-15)
 
 
