@@ -484,21 +484,59 @@ def _build_file_to_tfid(all_files, album_ids, corrupt_details,
         if "trackfileId" in corrupt_details.get(fp, {})
     }
     unmatched = [fp for fp in all_files if fp not in file_to_tfid]
-    if not unmatched or not album_ids:
+    if not unmatched:
         return file_to_tfid
+    if album_ids:
+        matches = _match_album_trackfiles(unmatched, album_ids, lidarr_url, lidarr_key)
+    else:
+        matches = _match_artist_trackfiles(unmatched, lidarr_url, lidarr_key)
+    if matches is None:
+        return None
+    for fp, match in matches.items():
+        file_to_tfid[fp] = match["id"]
+        if match.get("albumId"):
+            album_ids.add(match["albumId"])
+    return file_to_tfid
+
+
+def _match_album_trackfiles(files, album_ids, lidarr_url, lidarr_key):
+    """Match *files* to the track files of *album_ids*; None if Lidarr can't be read."""
     album_tfs = []
     for aid in album_ids:
         tfs = _lidarr_get_trackfiles_by_album(lidarr_url, lidarr_key, aid)
         if tfs is None:
             return None
         album_tfs.extend(tfs)
-    for fp in unmatched:
+    matches = {}
+    for fp in files:
         match = _best_suffix_match(fp, album_tfs, min_score=1)
         if match:
-            file_to_tfid[fp] = match["id"]
-            if match.get("albumId"):
-                album_ids.add(match["albumId"])
-    return file_to_tfid
+            matches[fp] = match
+    return matches
+
+
+def _match_artist_trackfiles(files, lidarr_url, lidarr_key):
+    """Match *files* to their artist's track files by the whole path under the artist folder; None if Lidarr can't be read."""
+    artists = _lidarr_get_artists(lidarr_url, lidarr_key)
+    if artists is None:
+        return None
+    found = {}
+    for artist in artists:
+        name = os.path.basename(artist["path"].replace("\\", "/").rstrip("/"))
+        anchored = [fp for fp in files if name and name in fp.split(os.sep)]
+        if not anchored:
+            continue
+        tfs = _lidarr_get_trackfiles(lidarr_url, lidarr_key, artist["id"])
+        if tfs is None:
+            return None
+        for fp in anchored:
+            parts = fp.split(os.sep)
+            # A looser match could pick a same-named track from another album and delete it.
+            match = _best_suffix_match(fp, tfs, min_score=len(parts) - parts.index(name))
+            if match:
+                found.setdefault(fp, []).append(match)
+    # Artists sharing a folder name in two root folders can both match: keep neither.
+    return {fp: ms[0] for fp, ms in found.items() if len(ms) == 1}
 
 
 def _lidarr_delete_folder_api(folder, file_to_tfid, album_ids,
@@ -1632,9 +1670,10 @@ def _handle_folder_action(choice, folder, existing, log,
     album_ids = set()
 
     if choice == 'y' and os.path.isdir(folder):
-        if lidarr_url and lidarr_api_key and corrupt_details:
+        # Even with no saved details, Lidarr may track the folder's other files.
+        if lidarr_url and lidarr_api_key:
             return _handle_folder_delete_lidarr(
-                folder, existing, log, input_folder, corrupt_details,
+                folder, existing, log, input_folder, corrupt_details or {},
                 lidarr_url, lidarr_api_key, lidarr_blocklist)
 
         # No Lidarr — direct filesystem delete
