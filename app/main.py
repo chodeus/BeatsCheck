@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import types
 import urllib.error
@@ -3352,6 +3353,7 @@ def _load_config():
 
     Priority: env vars > beatscheck.conf > defaults.
     """
+    _snapshot_docker_env()
     if len(sys.argv) == 4:
         input_folder = sys.argv[1].rstrip("/")
         output_folder = sys.argv[2].rstrip("/")
@@ -3362,7 +3364,6 @@ def _load_config():
         # Write default config template on first run, then load values.
         # Config file values fill in for any env vars not already set.
         _write_default_config(log_dir)
-        _snapshot_docker_env()
         _apply_config_file(log_dir)
         input_folder = os.environ.get("MUSIC_DIR", "/data").rstrip("/")
         output_folder = os.environ.get("OUTPUT_DIR", "/data/corrupted").rstrip("/")
@@ -3403,6 +3404,36 @@ def _load_config():
     )
 
 
+_config_sync_lock = threading.Lock()
+
+
+def _sync_env_from_config_file(config_dir):
+    """Copy beatscheck.conf into os.environ except Docker-set vars; returns keys Docker overrides, None if no readable file."""
+    # One at a time, or an older read of the file can be applied after a newer one.
+    with _config_sync_lock:
+        return _copy_config_file_to_env(os.path.join(config_dir, "beatscheck.conf"))
+
+
+def _copy_config_file_to_env(path):
+    """_sync_env_from_config_file's work, run under _config_sync_lock."""
+    if not os.path.isfile(path):
+        return None
+    try:
+        file_vals = _parse_config_lines(path)
+    except OSError:
+        return None
+    overridden = []
+    for key, value in file_vals.items():
+        env_name = _CONFIG_KEY_MAP.get(key)
+        if not env_name:
+            continue
+        if env_name not in _docker_env_vars:
+            os.environ[env_name] = value
+        elif os.environ.get(env_name) != value:
+            overridden.append(key)
+    return overridden
+
+
 def _reload_config(cfg):
     """Re-read beatscheck.conf and update cfg for the next scan.
 
@@ -3410,20 +3441,8 @@ def _reload_config(cfg):
     update the os.environ entries that _apply_config_file originally set,
     then we refresh the cfg namespace from os.environ.
     """
-    path = os.path.join(cfg.log_dir, "beatscheck.conf")
-    try:
-        file_vals = {}
-        for key, value in _parse_config_lines(path).items():
-            env_name = _CONFIG_KEY_MAP.get(key)
-            if env_name:
-                file_vals[env_name] = value
-    except OSError:
+    if _sync_env_from_config_file(cfg.log_dir) is None:
         return
-
-    # Update env vars from config file (skip Docker-set vars)
-    for env_name, value in file_vals.items():
-        if env_name not in _docker_env_vars:
-            os.environ[env_name] = value
 
     # Refresh cfg attributes from env vars
     cfg.input_folder = os.environ.get(
