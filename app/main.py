@@ -479,6 +479,8 @@ def _list_folder_files(real):
 def _build_file_to_tfid(all_files, album_ids, corrupt_details,
                         lidarr_url, lidarr_key):
     """Map folder files to Lidarr trackfile IDs, adding new matches to *album_ids*; None if Lidarr can't be read."""
+    if _drop_wrong_lidarr_matches(corrupt_details, all_files, lidarr_url, lidarr_key) is None:
+        return None
     file_to_tfid = {
         fp: corrupt_details[fp]["trackfileId"]
         for fp in all_files
@@ -530,15 +532,31 @@ def _match_artist_trackfiles(files, lidarr_url, lidarr_key):
         tfs = _lidarr_get_trackfiles(lidarr_url, lidarr_key, artist["id"])
         if tfs is None:
             return None
+        tfs = [dict(tf, artistPath=artist["path"]) for tf in tfs]
         for fp in anchored:
-            parts = fp.split(os.sep)
-            anchor = parts.index(name)
-            # A looser match could pick a same-named track from another album and delete it.
-            match = _best_suffix_match(fp, tfs, min_score=len(parts) - anchor)
-            if match and not _another_copy_exists(fp, match["path"], anchor):
+            match = _pick_lidarr_copy(fp, tfs)
+            if match:
                 found.setdefault(fp, []).append(match)
     # Artists sharing a folder name in two root folders can both match: keep neither.
     return {fp: ms[0] for fp, ms in found.items() if len(ms) == 1}
+
+
+def _pick_lidarr_copy(fp, candidates):
+    """The candidate (with "path" and "artistPath") that is the file at *fp*; None if none is, or two tie."""
+    return _best_suffix_match(fp, [c for c in candidates if _is_lidarr_copy(fp, c["path"], c["artistPath"])])
+
+
+def _is_lidarr_copy(fp, lidarr_path, artist_path):
+    """True if Lidarr's *lidarr_path* is the file at *fp*: the same path from the artist folder down, and no other copy."""
+    artist = artist_path.replace("\\", "/").rstrip("/")
+    lidarr = lidarr_path.replace("\\", "/")
+    if not lidarr.startswith(artist + "/"):
+        return False
+    # A shorter match could pick a same-named track from another album or edition, and Lidarr would delete that one.
+    depth = lidarr[len(artist):].count("/") + 1
+    if _suffix_match_path(fp, lidarr_path) < depth:
+        return False
+    return not _another_copy_exists(fp, lidarr_path, len(fp.split(os.sep)) - depth)
 
 
 def _another_copy_exists(fp, lidarr_path, anchor):
@@ -2468,7 +2486,7 @@ def _load_lidarr_api_key():
 def _build_lidarr_index(base_url, api_key):
     """Pre-fetch all Lidarr trackfiles into a basename-keyed index.
 
-    Returns ``{basename: [{id, albumId, artistId, path}, ...]}``.
+    Returns ``{basename: [{id, albumId, artistId, artistPath, path}, ...]}``.
     Queries per-artist — Lidarr's trackfile endpoint requires a filter
     (artistId/albumId) and rejects unfiltered requests with HTTP 400.
     Returns ``None`` if the artist list or any artist's track files cannot be fetched.
@@ -2488,6 +2506,7 @@ def _build_lidarr_index(base_url, api_key):
                         "id": tf["id"],
                         "albumId": tf["albumId"],
                         "artistId": artist["id"],
+                        "artistPath": artist["path"],
                         "path": tf["path"],
                     })
         logger.info("  Lidarr: indexed %d trackfiles from %d artists",
@@ -2496,6 +2515,9 @@ def _build_lidarr_index(base_url, api_key):
     except Exception:
         logger.warning("Lidarr index build failed")
         return None
+
+
+_LIDARR_MATCH_KEYS = ("trackfileId", "albumId", "artistId", "lidarrPath")
 
 
 def _apply_lidarr_match(detail, match):
@@ -2509,7 +2531,7 @@ def _apply_lidarr_match(detail, match):
 def _resolve_single_lidarr_id(file_path, corrupt_details, lidarr_index):
     """Resolve Lidarr IDs for one corrupt file using the pre-built index."""
     candidates = lidarr_index.get(os.path.basename(file_path)) or []
-    match = _best_suffix_match(file_path, candidates, min_score=1)
+    match = _pick_lidarr_copy(file_path, candidates)
     if match and file_path in corrupt_details:
         _apply_lidarr_match(corrupt_details[file_path], match)
 
@@ -2560,33 +2582,55 @@ def _resolve_lidarr_ids(corrupt_details, base_url, api_key, paths=None):
         logger.warning("Lidarr: could not fetch trackfiles for ID resolution")
         return None
 
-    # Two passes: strict (>=2 components) then loose (>=1 unambiguous).
-    # Strict avoids wrong matches when many files share a filename.
     matched = 0
-    for min_score in (2, 1):
-        for path in list(unresolved):
-            candidates = index.get(os.path.basename(path)) or []
-            match = _best_suffix_match(path, candidates, min_score=min_score)
-            if match:
-                _apply_lidarr_match(corrupt_details.setdefault(path, {}), match)
-                unresolved.remove(path)
-                matched += 1
+    for path in unresolved:
+        match = _pick_lidarr_copy(path, index.get(os.path.basename(path)) or [])
+        if match:
+            _apply_lidarr_match(corrupt_details.setdefault(path, {}), match)
+            matched += 1
 
     if matched:
         logger.info("  Lidarr: resolved %d corrupt files to trackfile IDs",
                     matched)
-    if unresolved:
+    if len(unresolved) > matched:
         logger.info("  Lidarr: %d corrupt files could not be matched",
-                    len(unresolved))
+                    len(unresolved) - matched)
     return matched
 
 
+def _drop_wrong_lidarr_matches(corrupt_details, paths, base_url, api_key):
+    """Clear saved Lidarr matches in *paths* that aren't the file itself; returns how many, or None if Lidarr can't be read."""
+    saved = [p for p in paths if "trackfileId" in corrupt_details.get(p, {})]
+    if not saved:
+        return 0
+    artists = _lidarr_get_artists(base_url, api_key)
+    if artists is None:
+        logger.warning("Lidarr: could not fetch artists to re-check saved matches")
+        return None
+    artist_paths = {a["id"]: a["path"] for a in artists}
+    dropped = 0
+    for path in saved:
+        detail = corrupt_details[path]
+        artist_path = artist_paths.get(detail.get("artistId"))
+        if artist_path and detail.get("lidarrPath") and _is_lidarr_copy(path, detail["lidarrPath"], artist_path):
+            continue
+        for key in _LIDARR_MATCH_KEYS:
+            detail.pop(key, None)
+        dropped += 1
+    if dropped:
+        logger.info("  Lidarr: %d saved matches are not the flagged file; looking them up again", dropped)
+    return dropped
+
+
 def _lidarr_ids_before_delete(corrupt_details, paths, base_url, api_key, log_dir):
-    """Retry the Lidarr ID lookup for *paths*; False if Lidarr couldn't be read, so the caller must not delete."""
+    """Re-check saved Lidarr matches for *paths* and look up the rest; False if Lidarr couldn't be read, so don't delete."""
+    dropped = _drop_wrong_lidarr_matches(corrupt_details, paths, base_url, api_key)
+    if dropped is None:
+        return False
     matched = _resolve_lidarr_ids(corrupt_details, base_url, api_key, paths)
     if matched is None:
         return False
-    if matched:
+    if matched or dropped:
         write_json_atomic(os.path.join(log_dir, "corrupt_details.json"), corrupt_details)
     return True
 

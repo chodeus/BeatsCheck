@@ -211,9 +211,9 @@ def test_a_file_with_no_saved_details_gets_its_lidarr_id(tmp_path, monkeypatch):
 
 
 def test_only_the_files_being_deleted_are_looked_up(tmp_path, monkeypatch):
-    calls = _lidarr(monkeypatch, up=False)
-    details = {"/data/a.flac": {"reason": "damaged", "trackfileId": 5},
-               "/data/b.flac": {"reason": "damaged"}}
-    ready = main._lidarr_ids_before_delete(details, ["/data/a.flac"], URL, KEY, str(tmp_path))
+    calls = _lidarr(monkeypatch)
+    saved = {"reason": "damaged", "trackfileId": 5, "albumId": 7, "artistId": 1, "lidarrPath": LIDARR_TRACK}
+    details = {"/data/Artist/Album/01.flac": saved, "/data/b.flac": {"reason": "damaged"}}
+    ready = main._lidarr_ids_before_delete(details, ["/data/Artist/Album/01.flac"], URL, KEY, str(tmp_path))
     assert ready is True
-    assert calls == []
+    assert calls == ["GET artist"]
