@@ -68,12 +68,24 @@ def _webui_env(monkeypatch):
     monkeypatch.setattr(main, "_load_lidarr_api_key", lambda: KEY)
 
 
-def test_auto_delete_keeps_an_unmatched_file_when_lidarr_cannot_be_read(tmp_path, monkeypatch):
+def test_auto_delete_keeps_an_unmatched_file_when_lidarr_cannot_be_read(tmp_path, monkeypatch, caplog):
     cfg, track = _library(tmp_path)
     _lidarr(monkeypatch, up=False)
     _auto_delete(cfg, monkeypatch)
     assert track.exists()
     assert str(track) in (cfg / "corrupt.txt").read_text()
+    assert "Lidarr lookup failed" in caplog.text
+    assert "Lidarr API failed" not in caplog.text
+
+
+def test_auto_delete_reports_a_failed_lidarr_delete_as_an_api_failure(tmp_path, monkeypatch, caplog):
+    cfg, track = _library(tmp_path)
+    _lidarr(monkeypatch)
+    monkeypatch.setattr(main, "_lidarr_delete_corrupt", lambda *a, **k: None)
+    _auto_delete(cfg, monkeypatch)
+    assert track.exists()
+    assert "Lidarr API failed" in caplog.text
+    assert "Lidarr lookup failed" not in caplog.text
 
 
 def test_auto_delete_sends_a_late_match_through_lidarr(tmp_path, monkeypatch):

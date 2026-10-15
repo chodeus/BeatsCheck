@@ -2296,12 +2296,11 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
 
     if lidarr_url and lidarr_api_key:
         logger.info("  Using Lidarr API for deletion")
-        result = None
-        if _lidarr_ids_before_delete(_load_corrupt_details(log_dir), to_delete,
-                                     lidarr_url, lidarr_api_key, log_dir):
-            result = _lidarr_delete_corrupt(
-                lidarr_url, lidarr_api_key, to_delete, log_file,
-                log_dir=log_dir, blocklist=lidarr_blocklist)
+        lookup_ok = _lidarr_ids_before_delete(_load_corrupt_details(log_dir), to_delete,
+                                              lidarr_url, lidarr_api_key, log_dir)
+        result = _lidarr_delete_corrupt(
+            lidarr_url, lidarr_api_key, to_delete, log_file,
+            log_dir=log_dir, blocklist=lidarr_blocklist) if lookup_ok else None
         if result is not None:
             deleted, album_ids = result
             for path in to_delete:
@@ -2310,6 +2309,9 @@ def run_auto_delete(log_dir, log_file, delete_after_days, max_deletes=50,
             _post_auto_delete_lidarr(
                 log_dir, album_ids, lidarr_url, lidarr_api_key,
                 lidarr_search)
+        elif not lookup_ok:
+            logger.error("  Lidarr lookup failed — auto-delete aborted. "
+                         "Files will be retried next run.")
         else:
             logger.error("  Lidarr API failed — auto-delete aborted. "
                          "Files will be retried next run.")
