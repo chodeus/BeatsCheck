@@ -26,7 +26,7 @@ def save(webui_server, tmp_path, monkeypatch):
         req = urllib.request.Request(
             webui_server + "/api/config", data=json.dumps({"config": config}).encode(),
             headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310 - the fixture's http://127.0.0.1 URL
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  # the fixture's http://127.0.0.1 URL
             return json.loads(resp.read())
     return post
 
@@ -44,6 +44,12 @@ def test_a_save_applies_a_setting_no_docker_variable_sets(save):
 
 def test_a_docker_set_variable_the_save_agrees_with_is_not_named(save):
     reply = save({"mode": "report"})
+    assert reply["docker_set"] == []
+
+
+def test_a_save_names_only_the_docker_set_keys_it_saved(save, tmp_path):
+    (tmp_path / "beatscheck.conf").write_text('mode = setup\nlidarr_url = ""\n')
+    reply = save({"lidarr_url": "http://lidarr:8686"})
     assert reply["docker_set"] == []
 
 
@@ -71,10 +77,11 @@ def test_a_save_whose_file_is_gone_before_it_applies_replies_with_an_error(save,
     assert "LIDARR_URL" not in os.environ
 
 
-def test_the_config_reload_keeps_a_docker_set_variable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("paths", [[], ["music", "out", "beats_check.log"]], ids=["docker", "path-arguments"])
+def test_the_config_reload_keeps_a_docker_set_variable(tmp_path, monkeypatch, paths):
     monkeypatch.setattr(os, "environ", {"CONFIG_DIR": str(tmp_path), "MODE": "report"})
     monkeypatch.setattr(main, "_docker_env_vars", set())
-    monkeypatch.setattr(sys, "argv", ["main.py"])
+    monkeypatch.setattr(sys, "argv", ["main.py"] + [str(tmp_path / p) for p in paths])
     cfg = main._load_config()
     (tmp_path / "beatscheck.conf").write_text("mode = move\n")
     main._reload_config(cfg)

@@ -3352,6 +3352,7 @@ def _load_config():
 
     Priority: env vars > beatscheck.conf > defaults.
     """
+    _snapshot_docker_env()
     if len(sys.argv) == 4:
         input_folder = sys.argv[1].rstrip("/")
         output_folder = sys.argv[2].rstrip("/")
@@ -3362,7 +3363,6 @@ def _load_config():
         # Write default config template on first run, then load values.
         # Config file values fill in for any env vars not already set.
         _write_default_config(log_dir)
-        _snapshot_docker_env()
         _apply_config_file(log_dir)
         input_folder = os.environ.get("MUSIC_DIR", "/data").rstrip("/")
         output_folder = os.environ.get("OUTPUT_DIR", "/data/corrupted").rstrip("/")

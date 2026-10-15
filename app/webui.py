@@ -1229,7 +1229,7 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                     self._json_response(
                         {"error": "config saved, but it could not be read back to apply"}, 500)
                 else:
-                    self._json_response({"ok": True, "docker_set": overridden})
+                    self._json_response({"ok": True, "docker_set": [k for k in overridden if k in updates]})
             else:
                 self._json_response(
                     {"error": "config file not found"}, 500)
