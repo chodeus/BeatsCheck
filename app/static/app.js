@@ -1520,7 +1520,12 @@ async function saveConfig(e) {
   if (res && res.ok) {
     status.textContent = 'Saved!';
     status.className = 'form-status';
-    showToast('Configuration saved', 'success');
+    const dockerSet = Array.isArray(res.docker_set) ? res.docker_set : [];
+    if (dockerSet.length) {
+      showToast('Configuration saved. Set by a Docker variable, so not applied: ' + dockerSet.join(', '), 'warning');
+    } else {
+      showToast('Configuration saved', 'success');
+    }
     configSnapshot = buildConfigSnapshot();
     updateUnsavedIndicator();
   } else {

@@ -23,7 +23,7 @@ On first run, BeatsCheck creates `/config/beatscheck.conf` with all options and 
 | `webui` | `false` | Enable the built-in [web interface](webui.md). Requires a published port |
 | `webui_port` | `8484` | Port for the web interface |
 
-Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set. A value saved in the WebUI overrides the environment variable until the container restarts.
+Environment variables (uppercase, e.g. `MODE`, `WORKERS`) override the config file if set, including values saved in the WebUI. A WebUI save that a variable overrides says so, and the saved value applies once the variable is removed.
 
 ## Container environment variables
 

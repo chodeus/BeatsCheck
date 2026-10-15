@@ -372,8 +372,8 @@ _API_KEY_MASK = "********"
 # allowed-keys list and parser stay in sync without duplication.
 from main import (  # noqa: E402
     _CONFIG_KEY_MAP, _acquire_scan_lock, _load_corrupt_details,
-    _parse_config_lines, _release_scan_lock, write_corrupt_list,
-    write_json_atomic, write_text_atomic,
+    _parse_config_lines, _release_scan_lock, _sync_env_from_config_file,
+    write_corrupt_list, write_json_atomic, write_text_atomic,
 )
 import reason_text  # noqa: E402
 _ALLOWED_CONFIG_KEYS = frozenset(_CONFIG_KEY_MAP)
@@ -1223,12 +1223,9 @@ class WebUIHandler(SimpleHTTPRequestHandler):
                 del updates['lidarr_api_key']
             ok = _write_config_file(config_dir, updates)
             if ok:
-                # Sync updated values to os.environ so other
-                # operations (e.g. delete) see them immediately.
-                for key, val in updates.items():
-                    env_name = key.upper()
-                    os.environ[env_name] = str(val)
-                self._json_response({"ok": True})
+                # Deletes read os.environ, so apply the save now; Docker-set vars still win.
+                overridden = _sync_env_from_config_file(config_dir) or []
+                self._json_response({"ok": True, "docker_set": overridden})
             else:
                 self._json_response(
                     {"error": "config file not found"}, 500)

@@ -3403,6 +3403,25 @@ def _load_config():
     )
 
 
+def _sync_env_from_config_file(config_dir):
+    """Copy beatscheck.conf into os.environ except Docker-set vars; returns the keys Docker overrides, None if unreadable."""
+    path = os.path.join(config_dir, "beatscheck.conf")
+    try:
+        file_vals = _parse_config_lines(path)
+    except OSError:
+        return None
+    overridden = []
+    for key, value in file_vals.items():
+        env_name = _CONFIG_KEY_MAP.get(key)
+        if not env_name:
+            continue
+        if env_name not in _docker_env_vars:
+            os.environ[env_name] = value
+        elif os.environ.get(env_name) != value:
+            overridden.append(key)
+    return overridden
+
+
 def _reload_config(cfg):
     """Re-read beatscheck.conf and update cfg for the next scan.
 
@@ -3410,20 +3429,8 @@ def _reload_config(cfg):
     update the os.environ entries that _apply_config_file originally set,
     then we refresh the cfg namespace from os.environ.
     """
-    path = os.path.join(cfg.log_dir, "beatscheck.conf")
-    try:
-        file_vals = {}
-        for key, value in _parse_config_lines(path).items():
-            env_name = _CONFIG_KEY_MAP.get(key)
-            if env_name:
-                file_vals[env_name] = value
-    except OSError:
+    if _sync_env_from_config_file(cfg.log_dir) is None:
         return
-
-    # Update env vars from config file (skip Docker-set vars)
-    for env_name, value in file_vals.items():
-        if env_name not in _docker_env_vars:
-            os.environ[env_name] = value
 
     # Refresh cfg attributes from env vars
     cfg.input_folder = os.environ.get(
