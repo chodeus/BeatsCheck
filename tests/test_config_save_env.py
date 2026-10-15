@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+import threading
 import urllib.error
 import urllib.request
 
@@ -75,6 +76,33 @@ def test_a_save_whose_file_is_gone_before_it_applies_replies_with_an_error(save,
         save({"lidarr_url": "http://lidarr:8686"})
     assert err.value.code == 500
     assert "LIDARR_URL" not in os.environ
+
+
+@pytest.mark.parametrize("older", ["save", "reload"])
+def test_an_older_read_of_the_file_is_not_applied_after_a_newer_save(save, tmp_path, monkeypatch, older):
+    parse, paused, go = main._parse_config_lines, threading.Event(), threading.Event()
+
+    def pause_first_read(path):
+        vals = parse(path)
+        if not paused.is_set():
+            paused.set()
+            go.wait(5)
+        return vals
+    monkeypatch.setattr(main, "_parse_config_lines", pause_first_read)
+    if older == "save":
+        first = threading.Thread(target=save, args=({"lidarr_url": "http://old"},))
+    else:
+        first = threading.Thread(target=main._sync_env_from_config_file, args=(str(tmp_path),))
+    first.start()
+    reached = paused.wait(5)
+    second = threading.Thread(target=save, args=({"lidarr_url": "http://new"},))
+    second.start()
+    second.join(0.5)
+    go.set()
+    first.join(5)
+    second.join(5)
+    assert reached
+    assert os.environ["LIDARR_URL"] == "http://new"
 
 
 @pytest.mark.parametrize("paths", [[], ["music", "out", "beats_check.log"]], ids=["docker", "path-arguments"])

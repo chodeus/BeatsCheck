@@ -9,6 +9,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import types
 import urllib.error
@@ -3403,9 +3404,18 @@ def _load_config():
     )
 
 
+_config_sync_lock = threading.Lock()
+
+
 def _sync_env_from_config_file(config_dir):
     """Copy beatscheck.conf into os.environ except Docker-set vars; returns keys Docker overrides, None if no readable file."""
-    path = os.path.join(config_dir, "beatscheck.conf")
+    # One at a time, or an older read of the file can be applied after a newer one.
+    with _config_sync_lock:
+        return _copy_config_file_to_env(os.path.join(config_dir, "beatscheck.conf"))
+
+
+def _copy_config_file_to_env(path):
+    """_sync_env_from_config_file's work, run under _config_sync_lock."""
     if not os.path.isfile(path):
         return None
     try:
