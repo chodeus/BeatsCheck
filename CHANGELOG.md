@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.5.9](https://github.com/chodeus/BeatsCheck/compare/v1.5.8...v1.5.9) (2026-10-15)
+
+
+### Bug Fixes
+
+* match a flagged file to a Lidarr track file only when it is that file, so a delete can't remove Lidarr's good copy ([354893c](https://github.com/chodeus/BeatsCheck/commit/354893cc3c1b07e1eb72ba600447f50e3b848d3c))
+* say in the Lidarr docs when a delete keeps the stored track file ID ([6829ee0](https://github.com/chodeus/BeatsCheck/commit/6829ee0a70bb5f1163fa1d705fbfe82733deb3b1))
+
 ## [1.5.8](https://github.com/chodeus/BeatsCheck/compare/v1.5.7...v1.5.8) (2026-10-15)
 
 
