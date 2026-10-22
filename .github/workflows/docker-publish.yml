@@ -104,7 +104,7 @@ jobs:
     # notify-discord.yml declares permissions: {} — it needs no scopes.
     permissions: {}
     if: failure() && github.event_name != 'pull_request'
-    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@6e15484f5348c9862408046b962fa7083ceeffeb # main
+    uses: chodeus/chodeus-ops/.github/workflows/notify-discord.yml@cbd544d21103cfe854c8e0ec717ee2be4f097ad7 # main
     with:
       event_type: build
       status: failure
