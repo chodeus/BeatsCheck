@@ -3,7 +3,7 @@
 # linux assets are built there from pinned upstream source (LGPL-3.0), not
 # mirrored — only that repo's Windows assets are BtbN mirrors, and we take none.
 # Runs on the build host; validated against musl in the final stage below.
-FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6 AS ffmpeg-fetch
+FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS ffmpeg-fetch
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=chodeus/ffmpeg-static versioning=regex:^n?(?<major>\d+)\.(?<minor>\d+)(?:\.(?<patch>\d+))?$
 ARG FFMPEG_VERSION=n9.0.2
@@ -26,7 +26,7 @@ RUN set -eux; \
     chmod +x /out/ffmpeg
 
 # ---- final image ----
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 ARG BUILD_DATE
 ARG VCS_REF
