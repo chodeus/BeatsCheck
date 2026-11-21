@@ -6,7 +6,7 @@
 FROM --platform=$BUILDPLATFORM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf AS ffmpeg-fetch
 ARG TARGETARCH
 # renovate: datasource=github-releases depName=chodeus/ffmpeg-static versioning=regex:^n?(?<major>\d+)\.(?<minor>\d+)(?:\.(?<patch>\d+))?$
-ARG FFMPEG_VERSION=n9.0.2
+ARG FFMPEG_VERSION=n9.1
 RUN apk add --no-cache ca-certificates wget
 RUN set -eux; \
     arch="${TARGETARCH:-$(uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')}"; \
